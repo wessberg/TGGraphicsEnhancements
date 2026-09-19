@@ -11,6 +11,8 @@
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
     <ImplicitUsings>disable</ImplicitUsings>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <!-- Shipped DLLs name no local folders: build paths (including the PDB path) are mapped. -->
+    <PathMap>$(MSBuildProjectDirectory)=$(MSBuildProjectName)</PathMap>
     <GameDirMono Condition="'$(GameDirMono)' == ''">C:\Games\Tainted Grail FoA Mono</GameDirMono>
     <GameDirIl2Cpp Condition="'$(GameDirIl2Cpp)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
   </PropertyGroup>

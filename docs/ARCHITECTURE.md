@@ -4,8 +4,8 @@ This is original TGFG integration code. The Open Shaders implementation was read
 as an architectural precedent, not copied as a Skyrim backend dependency. The
 frame generation backends are the vendors' own SDKs: NVIDIA Streamline DLSS-G, the
 AMD FSR API (FidelityFX SDK 2.3) and Intel XeSS-FG (XeSS SDK 3.0). Primary
-references are listed in SOURCES.md. DLSS-G and FSR frame generation have run in FoA;
-XeSS frame generation, XeLL and Anti-Lag 2 have not yet been confirmed in game.
+references are listed in SOURCES.md. DLSS-G, FSR and XeSS frame generation (with XeLL) have run in
+FoA, with DLSS upscaling and on HDRP's own inputs; Anti-Lag 2 has not yet been confirmed in game.
 
 ## Source and output are distinct
 

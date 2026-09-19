@@ -22,6 +22,9 @@
 - Packages include NVIDIA's license notices next to the Streamline runtime
   (LICENSE-Streamline.txt, LICENSE-NVIDIA-RTX-SDKs.txt, LICENSE-NVIDIA-Reflex.txt), staged from
   the SDK release by Stage-Runtime.ps1.
+- Packaging writes zip entries with forward slashes (Compress-Archive in Windows PowerShell used
+  backslashes) and copies each package to artifacts/Nexus as "TGFrameGeneration - mono.zip" or
+  "TGFrameGeneration.zip". Build paths are mapped, so the DLLs no longer name local folders.
 - Removed leftovers of the 0.3 patch workflow: APPLY.md, integrate-autoload.patch,
   source-manifest.json, the validation logs, docs/VALIDATION.md, the retired Launch-Game.ps1 and
   the 0.3 example config.

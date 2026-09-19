@@ -240,7 +240,7 @@ class SourceConsistency(unittest.TestCase):
 
     def test_testing_limits_disclosed(self):
         readme = " ".join(self.text("README.md").replace("**", "").split())
-        for token in ["not yet been confirmed in game", "IL2CPP builds (BepInEx 6) are untested", "The HUD is interpolated with the scene",
+        for token in ["not yet been confirmed in game", "and neither has the IL2CPP build", "The HUD is interpolated with the scene",
                       "HDRP's own depth and motion vectors"]:
             self.assertIn(token, readme)
         self.assertNotIn("requires D3D12 game rendering", readme)

@@ -78,7 +78,10 @@ class AutoloadIntegration(unittest.TestCase):
         source=text('Package.ps1')
         self.assertIn("'artifacts\\Native'",source)
         self.assertIn("$nativeManifest.version -ne '0.5.0'",source)
-        self.assertIn('Compress-Archive',source)
+        # Forward-slash zip entries (not Compress-Archive) and the Nexus download copy.
+        self.assertIn("New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json','TGFG-PLAYER-INSTALL.txt')",source)
+        self.assertNotIn('Compress-Archive',source)
+        self.assertIn("'artifacts/Nexus/' + (Get-TgfgNexusName $target)",source)
 
     def test_direct_msbuild_deploy_uses_shared_flow(self):
         tree=ET.parse(ROOT/'src/TGFrameGeneration/TGFrameGeneration.csproj')

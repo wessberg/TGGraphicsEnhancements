@@ -95,9 +95,14 @@ foreach ($build in $builds) {
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'TGFG-Package-manifest.json') -Encoding UTF8
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/PLAYER-INSTALL.txt') -Destination (Join-Path $stage 'TGFG-PLAYER-INSTALL.txt')
     # Packages contain BepInEx payload, manifest and player instructions, not build tools/launchers.
-    Compress-Archive -LiteralPath @((Join-Path $stage 'BepInEx'), (Join-Path $stage 'TGFG-Package-manifest.json'), (Join-Path $stage 'TGFG-PLAYER-INSTALL.txt')) -DestinationPath ($stage + '.zip') -CompressionLevel Optimal
+    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json','TGFG-PLAYER-INSTALL.txt') ($stage + '.zip')
     $packages += @{Stage=$stage; Game=$build.Metadata.game_dir; Target=$target}
     Write-Host "Packaged: $stage.zip"
+    # The same package under the name it gets on Nexus Mods, replaced by every packaging run.
+    $nexus = Join-Path $PSScriptRoot ('artifacts/Nexus/' + (Get-TgfgNexusName $target))
+    New-Item -ItemType Directory -Path (Split-Path -Parent $nexus) -Force | Out-Null
+    Copy-Item -LiteralPath ($stage + '.zip') -Destination $nexus -Force
+    Write-Host "Nexus download: $nexus"
 }
 if ($Deploy) {
     foreach ($package in $packages) { Install-TgfgPayload $package.Stage $package.Game $package.Target }

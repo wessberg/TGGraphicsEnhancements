@@ -16,22 +16,24 @@ and generates frames there with NVIDIA Streamline for DLSS Frame Generation, AMD
 
 ## Status
 
-Version 0.5.0 (native ABI v5) for the game's Mono branch with BepInEx 5.
+Version 0.5.0 (native ABI v5), for both versions of the game: the standard version (IL2CPP) with
+BepInEx 6 and the Mono modding branch with BepInEx 5.
 
-Tested in game on an RTX 5080:
+Tested in game on an RTX 5080 with the Mono build:
 
 - DLSS Frame Generation, fixed 2x to 6x and Dynamic Multi Frame Generation, with and without
   ReShade + RenoDX HDR, and together with the RenoDX DLSS addon ("DLSS 5").
 - FSR Frame Generation with NVIDIA Reflex, and switching technology while playing.
+- XeSS Frame Generation with Intel XeLL.
+- DLSS, FSR and XeSS Frame Generation with DLSS upscaling off, on HDRP's own motion vectors.
 
-XeSS Frame Generation, Intel XeLL and AMD Anti-Lag 2 are built on Intel's and AMD's SDKs but have
-not yet been confirmed in game. IL2CPP builds (BepInEx 6) are untested.
+AMD Anti-Lag 2 (AMD GPUs) and Intel XeLL on its own (Intel GPUs) have not yet been confirmed in
+game, and neither has the IL2CPP build.
 
 When DLSS upscaling is on, frame generation takes its motion vectors and depth from the DLSS
 upscaler. With any other setting (TAA, STP or no anti-aliasing), a custom pass takes HDRP's own depth
 and motion vectors instead, so FSR and XeSS frame generation also work on AMD and Intel GPUs. The
-HDRP path gives the SDKs the same jitter and motion vector scale HDRP gives DLSS, but it has not yet
-been confirmed in game.
+HDRP path gives the SDKs the same jitter and motion vector scale HDRP gives DLSS.
 
 ## Settings
 
@@ -130,15 +132,20 @@ already installed. `docs/SOURCES.md` links every SDK release.
   -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' -Deploy
 ```
 
+For the standard version, use `-Runtime IL2CPP -GameDirIl2Cpp <game folder>`. BepInEx 6 has to have
+started the game once, so that its interop assemblies exist.
+
 `Build-Native.ps1` defaults the FSR, XeSS and Anti-Lag 2 roots to the folders above. `-Deploy`
 backs up every TGFG file it replaces under `BepInEx/TGFrameGeneration/Backups`.
 `Build.ps1 -Runtime Both -Package` builds player ZIPs for both runtimes without installing, and
-`Package.ps1 -Runtime Mono -Deploy` repackages existing artifacts. A package contains the plugin,
+`Package.ps1 -Runtime Mono -Deploy` repackages existing artifacts. Every packaging run also writes the
+Nexus Mods downloads to `artifacts/Nexus`: `TGFrameGeneration - mono.zip` for the Mono branch and
+`TGFrameGeneration.zip` for the standard version. A package contains the plugin,
 the preloader, the native backend, the vendor runtimes with their license notices and
 `TGFG-PLAYER-INSTALL.txt`. Install one runtime package per game installation, then start the game
 from Steam as usual.
 
-`Test-Setup.ps1 -GameDir <game folder> -Runtime Mono` checks an installed copy without starting
+`Test-Setup.ps1 -GameDir <game folder> -Runtime Mono` (or `IL2CPP`) checks an installed copy without starting
 the game. Native builds also run the portable ABI, policy and interop tests and compile the HLSL;
 `tests/source_checks.py`, `tests/test_autoload_integration.py` and `tests/package_tests.ps1` check
 sources and packaging. `docs/TESTING.md` has the in-game test sequence.
@@ -165,8 +172,7 @@ running.
 ## Known limits
 
 - The HDRP input path needs HDRP to render motion vectors for the gameplay camera, which it does
-  with TAA, STP and DLSS; without them the log says so and frame generation stays off. IL2CPP
-  builds take their inputs from DLSS only.
+  with TAA, STP and DLSS; without them the log says so and frame generation stays off.
 - The HUD is interpolated with the scene. `TGFG_CaptureHudlessD3D11` can take a HUD-less frame if
   something provides one, but nothing in the game does.
 - FSR and XeSS create their swapchain while the game presents. Whether every overlay (ReShade,

@@ -28,6 +28,28 @@ function Get-TgfgVendorRuntimes {
           Files=@('libxess_fg.dll','libxell.dll')}
     )
 }
+# The Nexus Mods download for each game version: the package under a stable name.
+function Get-TgfgNexusName([string]$Runtime) {
+    switch ($Runtime) { 'Mono' { 'TGFrameGeneration - mono.zip' }; 'IL2CPP' { 'TGFrameGeneration.zip' }; default { throw "Unknown runtime: $Runtime" } }
+}
+# Zip entries use forward slashes, as the zip format requires. Compress-Archive in Windows PowerShell
+# 5.1 writes backslashes, which some extractors and archive previews show as flat file names.
+function New-TgfgZip([string]$Stage, [string[]]$Items, [string]$Destination) {
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Force }
+    $root = [IO.Path]::GetFullPath($Stage).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+    $archive = [System.IO.Compression.ZipFile]::Open($Destination, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($item in $Items) {
+            $path = Join-Path $Stage $item
+            $files = if (Test-Path -LiteralPath $path -PathType Container) { @(Get-ChildItem -LiteralPath $path -Recurse -File | Sort-Object FullName) } else { @(Get-Item -LiteralPath $path) }
+            foreach ($file in $files) {
+                $name = $file.FullName.Substring($root.Length).Replace('\','/')
+                [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal)
+            }
+        }
+    } finally { $archive.Dispose() }
+}
 function Get-TgfgObsoletePaths {
     # Installed by earlier versions and superseded by a renamed file; deploy backs them up and removes them.
     @('BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll')

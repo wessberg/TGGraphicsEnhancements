@@ -47,6 +47,19 @@ try {
     $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $bad.files=@($bad.files | Where-Object { $_.path -notlike '*/TGFG.Autoload.dll' })
     Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'Missing preloader was accepted.'
+    # Zip entries use forward slashes; the Nexus downloads have fixed names per game version.
+    $zip=Join-Path $temp 'forward-slashes.zip'
+    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json') $zip
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive=[System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $names=@($archive.Entries | ForEach-Object { $_.FullName })
+        Assert-True (@($names | Where-Object { $_.Contains('\') }).Count -eq 0) 'A zip entry uses a backslash.'
+        Assert-True ($names -contains 'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll') 'The native DLL is missing from the zip or misnamed.'
+        Assert-True ($names -contains 'TGFG-Package-manifest.json') 'The manifest is missing from the zip root.'
+    } finally { $archive.Dispose() }
+    Assert-True ((Get-TgfgNexusName 'Mono') -eq 'TGFrameGeneration - mono.zip') 'Wrong Mono Nexus name.'
+    Assert-True ((Get-TgfgNexusName 'IL2CPP') -eq 'TGFrameGeneration.zip') 'Wrong IL2CPP Nexus name.'
     # NVIDIA's, AMD's and Intel's license terms require their notices next to their runtimes.
     $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $bad.files=@($bad.files | Where-Object { $_.path -notlike '*/Streamline/LICENSE-NVIDIA-RTX-SDKs.txt' })
