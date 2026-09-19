@@ -15,6 +15,19 @@ function Get-TgfgRuntimeNames {
     # TGFG.Streamline.dll is NVIDIA's sl.interposer.dll under a private name (see Stage-Runtime.ps1).
     @('TGFG.Streamline.dll','sl.common.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlssg.dll')
 }
+# NVIDIA's notices for the Streamline (MIT), DLSS Frame Generation (NVIDIA RTX SDKs) and Reflex runtimes.
+function Get-TgfgNvidiaNotices {
+    @('LICENSE-Streamline.txt','LICENSE-NVIDIA-RTX-SDKs.txt','LICENSE-NVIDIA-Reflex.txt')
+}
+# AMD FSR and Intel XeSS runtimes: signed DLLs plus the license notice their terms require alongside.
+function Get-TgfgVendorRuntimes {
+    @(
+        @{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Notice='LICENSE-FidelityFX.md';
+          Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')},
+        @{Folder='XeSS'; Signer='Intel Corporation'; Notice='LICENSE-XeSS.txt';
+          Files=@('libxess_fg.dll','libxell.dll')}
+    )
+}
 function Get-TgfgObsoletePaths {
     # Installed by earlier versions and superseded by a renamed file; deploy backs them up and removes them.
     @('BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll')
@@ -23,7 +36,10 @@ function Get-TgfgRequiredPaths {
     @('BepInEx/patchers/TGFG.Autoload.dll',
       'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll',
       'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll')
-    foreach ($name in (Get-TgfgRuntimeNames)) { "BepInEx/TGFrameGeneration/Native/Streamline/$name" }
+    foreach ($name in @(Get-TgfgRuntimeNames) + @(Get-TgfgNvidiaNotices)) { "BepInEx/TGFrameGeneration/Native/Streamline/$name" }
+    foreach ($vendor in (Get-TgfgVendorRuntimes)) {
+        foreach ($name in @($vendor.Files) + @($vendor.Notice)) { "BepInEx/TGFrameGeneration/Native/$($vendor.Folder)/$name" }
+    }
 }
 function Get-TgfgAllowedPaths {
     Get-TgfgRequiredPaths
@@ -61,14 +77,15 @@ function Assert-TgfgAmd64([string]$Path) {
         if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw "Expected AMD64 image: $Path" }
     } finally { $reader.Dispose(); $stream.Dispose() }
 }
-function Assert-TgfgNvidiaSignature([string]$Path) {
+function Assert-TgfgSignature([string]$Path, [string]$Signer) {
     Assert-TgfgAmd64 $Path
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
     if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
-        $signature.SignerCertificate.Subject -notmatch 'NVIDIA') {
-        throw "Expected a valid NVIDIA production signature: $Path ($($signature.Status))"
+        $signature.SignerCertificate.Subject -notmatch $Signer) {
+        throw "Expected a valid $Signer production signature: $Path ($($signature.Status))"
     }
 }
+function Assert-TgfgNvidiaSignature([string]$Path) { Assert-TgfgSignature $Path 'NVIDIA' }
 function Assert-TgfgGame([string]$GameDir, [string]$Runtime) {
     Assert-TgfgFile (Join-Path $GameDir 'Fall of Avalon.exe')
     Assert-TgfgFile (Join-Path $GameDir 'UnityPlayer.dll')
@@ -93,10 +110,10 @@ function Assert-TgfgGame([string]$GameDir, [string]$Runtime) {
 }
 function Test-TgfgPayload($Manifest, [string]$Root, [string]$Runtime) {
     Assert-TgfgFields $Manifest @('version','runtime','framework','native_version','native_abi','files') 'Package manifest'
-    if ($Manifest.version -ne '0.4.0' -or $Manifest.runtime -ne $Runtime -or
+    if ($Manifest.version -ne '0.5.0' -or $Manifest.runtime -ne $Runtime -or
         $Manifest.framework -ne (Get-TgfgFramework $Runtime) -or
-        $Manifest.native_version -ne '0.4.0' -or $Manifest.native_abi -ne '0x00040000') {
-        throw 'Package metadata does not match the selected integrated v0.4.0 / native ABI v4 build.'
+        $Manifest.native_version -ne '0.5.0' -or $Manifest.native_abi -ne '0x00050000') {
+        throw 'Package metadata does not match the selected integrated v0.5.0 / native ABI v5 build.'
     }
     $seen = @{}
     foreach ($entry in @($Manifest.files)) {
@@ -114,12 +131,17 @@ function Test-TgfgPayload($Manifest, [string]$Root, [string]$Runtime) {
     foreach ($required in (Get-TgfgRequiredPaths)) {
         if (-not $seen.ContainsKey($required)) { throw "Missing required payload entry: $required" }
     }
-    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll') 'TGFrameGeneration' '0.4.0.0'
-    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/patchers/TGFG.Autoload.dll') 'TGFG.Autoload' '0.4.0.0'
+    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll') 'TGFrameGeneration' '0.5.0.0'
+    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/patchers/TGFG.Autoload.dll') 'TGFG.Autoload' '0.5.0.0'
     Assert-TgfgAmd64 (Join-Path $Root 'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll')
     foreach ($entry in @($Manifest.files)) {
-        if ($entry.path.Replace('\','/') -like 'BepInEx/TGFrameGeneration/Native/Streamline/*') {
+        if ($entry.path.Replace('\','/') -like 'BepInEx/TGFrameGeneration/Native/Streamline/*.dll') {
             Assert-TgfgNvidiaSignature (Get-TgfgOwnedPath $Root $entry.path)
+        }
+    }
+    foreach ($vendor in (Get-TgfgVendorRuntimes)) {
+        foreach ($name in $vendor.Files) {
+            Assert-TgfgSignature (Get-TgfgOwnedPath $Root "BepInEx/TGFrameGeneration/Native/$($vendor.Folder)/$name") $vendor.Signer
         }
     }
 }

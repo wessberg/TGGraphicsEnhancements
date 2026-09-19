@@ -150,15 +150,16 @@ namespace TGFrameGeneration
             bool reset=!haveHistory || frameId!=previousFrameId+1 || camera.GetInstanceID()!=previousCameraId ||
                 Vector3.Distance(position,previousPosition)>5 || Quaternion.Angle(rotation,previousRotation)>45;
             Matrix4x4 clipToPrevious=reset?Matrix4x4.identity:previousViewProjection*viewProjection.inverse;
-            Matrix4x4 inverseProjection=projection.inverse, previousToClip=clipToPrevious.inverse;
+            Matrix4x4 inverseProjection=projection.inverse, previousToClip=clipToPrevious.inverse, view=camera.worldToCameraMatrix;
             NativeCamera packet=default;
-            packet.Size=352; packet.Abi=Abi.Version; packet.FrameId=frameId; packet.ResetHistory=reset?1u:0u;
+            packet.Size=(uint)Abi.CameraSize; packet.Abi=Abi.Version; packet.FrameId=frameId; packet.ResetHistory=reset?1u:0u;
             packet.Width=(uint)Screen.width; packet.Height=(uint)Screen.height;
             packet.CameraId=unchecked((uint)camera.GetInstanceID());
             for(int r=0;r<4;++r) for(int c=0;c<4;++c) {
                 int i=r*4+c;
                 packet.ViewToClip[i]=projection[c,r]; packet.ClipToView[i]=inverseProjection[c,r];
                 packet.ClipToPrev[i]=clipToPrevious[c,r]; packet.PrevToClip[i]=previousToClip[c,r];
+                packet.WorldToView[i]=view[c,r];
             }
             var up=camera.transform.up; var right=camera.transform.right; var forward=camera.transform.forward;
             packet.Position[0]=position.x; packet.Position[1]=position.y; packet.Position[2]=position.z;

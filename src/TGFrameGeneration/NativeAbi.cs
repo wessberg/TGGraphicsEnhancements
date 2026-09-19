@@ -16,17 +16,19 @@ namespace TGFrameGeneration
         MissingRenderEvent=14, NoDlssInputs=15, StaleFrame=16, MultipleDlssViews=17,
         UnsupportedQueue=18, InputContractInvalid=19, ExistingStreamline=20,
         RuntimeNotSupported=21, CameraInvalid=22, PresentFailed=23, BridgeNotCreated=24, InteropFailure=25, UnsupportedColorSpace=26,
-        SourceDeviceMismatch=27, UnsupportedSourceLayout=28, BridgeReady=29, VsyncUnsupported=30
+        SourceDeviceMismatch=27, UnsupportedSourceLayout=28, BridgeReady=29, VsyncUnsupported=30,
+        BackendUnavailable=31, BackendFailed=32
     }
     [StructLayout(LayoutKind.Sequential, Pack=4)]
     internal struct NativeRequest
     {
         internal uint Size, Abi;
         internal ulong Sequence;
-        internal uint Mode, FixedMultiplier;
-        internal float DynamicTargetFps, ReflexBaseFpsLimit;
+        internal uint Mode, FixedMultiplier; // multiplier: total, clamped natively to the backend's maximum
+        internal float DynamicTargetFps, BaseFpsLimit;
         internal uint SuspensionMask, SourceGraphicsApi;
-        internal uint ReflexMode; // 0 Off, 1 On, 2 On + Boost; native forces at least On while FG is active
+        internal uint LatencyMode; // LowLatencySetting; native enforces the pairing each technology requires
+        internal uint Backend; // FrameGenerationSetting: 0 Off, 1 DLSS, 2 FSR, 3 XeSS
     }
     [StructLayout(LayoutKind.Sequential, Pack=4)]
     internal struct NativeStatus
@@ -41,21 +43,39 @@ namespace TGFrameGeneration
         internal int LastInteropHresult;
         internal ulong SourcePresents, OutputFramesReported, CopiedFrames, CapturedNgxCalls;
         internal uint SourceFormat, OutputColorSpace, NativeLoadPid, CompletionFenceUsed;
+        internal uint BackendsAvailable, FsrMaxGenerated, XessMaxGenerated; // bit 1<<backend; maxima reported by each runtime
+        internal uint LatencyAvailable; // bit 1<<LowLatencySetting usable on its own
+        internal uint ActiveBackend, ActiveLatency, GpuVendor, BackendFailedMask;
+        internal int BackendResult;
         internal Reason Reason => (Reason)ReasonValue;
+        internal bool Has(FrameGenerationSetting backend) => backend != FrameGenerationSetting.Off && (BackendsAvailable & (1u << (int)backend)) != 0;
+        // Generated frames per rendered frame the runtime reports for a backend (0 when unavailable).
+        internal uint MaxGenerated(FrameGenerationSetting backend) =>
+            !Has(backend) ? 0 : backend == FrameGenerationSetting.DLSS ? MaxGeneratedFrames :
+            backend == FrameGenerationSetting.FSR ? FsrMaxGenerated : XessMaxGenerated;
+        internal bool Supports(LowLatencySetting latency) => (LatencyAvailable & (1u << (int)latency)) != 0;
+        private static readonly string[] OutputNames = { "standard", "?", "FSR", "XeSS" };
+        private string Output => ActiveBackend < OutputNames.Length ? OutputNames[ActiveBackend] : "?";
         internal bool CapsKnown => (Flags & 4) != 0;
         internal bool RuntimeQueried => (Flags & 8) != 0;
         internal string DescribeBrief()
         {
             string cap = CapsKnown ? "max " + (MaxGeneratedFrames + 1) + "x; Dynamic " + (DynamicSupported != 0 ? "yes" : "no") : "caps unknown";
             return Reason + " | requested/accepted " + (GenerationMode)RequestedMode + "/" + (GenerationMode)LastAcceptedMode +
+                " | output " + Output + ", latency " + (LowLatencySetting)ActiveLatency +
                 "\nSource DX" + SourceApi + " -> output DX" + PresentationApi + " | " + cap +
                 "\nCopies " + CopiedFrames + " | input pairs " + SuccessfulInputDispatches +
                 " | interop 0x" + LastInteropHresult.ToString("X8") + " | DLSS-G 0x" + DlssgStatus.ToString("X");
         }
         internal string Describe()
         {
-            string cap = CapsKnown ? "max " + (MaxGeneratedFrames + 1) + "x; Dynamic " + (DynamicSupported != 0 ? "yes" : "no") : "caps unknown";
+            string cap = CapsKnown ? "DLSS " + (Has(FrameGenerationSetting.DLSS) ? "max " + (MaxGeneratedFrames + 1) + "x, Dynamic " + (DynamicSupported != 0 ? "yes" : "no") : "no") +
+                "; FSR " + (Has(FrameGenerationSetting.FSR) ? "max " + (FsrMaxGenerated + 1) + "x" : "no") +
+                "; XeSS " + (Has(FrameGenerationSetting.XeSS) ? "max " + (XessMaxGenerated + 1) + "x" : "no") +
+                "; latency mask 0x" + LatencyAvailable.ToString("X") + "; GPU vendor 0x" + GpuVendor.ToString("X4") : "caps unknown";
             return Reason + " | mode " + ((GenerationMode)RequestedMode) + "/" + ((GenerationMode)LastAcceptedMode) + " | requested/accepted " + RequestedSequence + "/" + AppliedSequence +
+                " | output " + Output + ", latency " + (LowLatencySetting)ActiveLatency +
+                (BackendFailedMask != 0 ? " | failed backends 0x" + BackendFailedMask.ToString("X") + " (last error " + BackendResult + ")" : "") +
                 " | " + cap + " | native errors " + LastSetOptionsResult + "/" + LastGetStateResult +
                 " | DLSS-G status 0x" + DlssgStatus.ToString("X") + " | format " + SwapchainFormat +
                 " | captured input pairs " + SuccessfulInputDispatches +
@@ -81,14 +101,15 @@ namespace TGFrameGeneration
         internal fixed float Right[3];
         internal fixed float Forward[3];
         internal float Near, Far, FovRadians, Aspect;
+        internal fixed float WorldToView[16];
     }
     internal static class Abi
     {
-        internal const uint Version = 0x00040000;
-        internal const int RequestSize = 44;
+        internal const uint Version = 0x00050000;
+        internal const int RequestSize = 48, StatusSize = 188, CameraSize = 416;
         internal static void Validate()
         {
-            if (Marshal.SizeOf(typeof(NativeRequest)) != RequestSize || Marshal.SizeOf(typeof(NativeStatus)) != 152 || Marshal.SizeOf(typeof(NativeCamera)) != 352)
+            if (Marshal.SizeOf(typeof(NativeRequest)) != RequestSize || Marshal.SizeOf(typeof(NativeStatus)) != StatusSize || Marshal.SizeOf(typeof(NativeCamera)) != CameraSize)
                 throw new InvalidOperationException("Native ABI packing mismatch.");
         }
     }

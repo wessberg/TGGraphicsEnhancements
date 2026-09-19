@@ -61,6 +61,7 @@ Capture capture(size_t provider,ID3D11DeviceContext* context,const NVSDK_NGX_Han
     if(frame->evalCount!=1){++s.diag.ngxMulti;frame->inputs=false;capture_problem(Reason::MultipleDlssViews,"Multiple DLSS evaluations in one camera interval; refusing ambiguous input selection");return {};}
     const auto& f=found->second;const auto& camera=frame->camera;
     if(f.outWidth!=camera.width || f.outHeight!=camera.height){++s.diag.ngxDims;capture_problem(Reason::CameraInvalid,"DLSS output dimensions differ from the managed camera output");return {};}
+    s.ngxFlags=f.flags; // FSR/XeSS describe depth and motion vectors from the gameplay camera's DLSS feature
     ID3D11Resource *depth=nullptr,*motion=nullptr;
     if(!read(p,NVSDK_NGX_Parameter_Depth,depth)||!read(p,NVSDK_NGX_Parameter_MotionVectors,motion)||!depth||!motion){++s.diag.ngxParams;capture_problem(Reason::InputContractInvalid,"D3D11 DLSS depth/motion pointers are missing");return {};}
     const auto rw=uint_value(p,NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width,f.width);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "sl_runtime.hpp"
+#include "fg_backends.hpp"
 #include <wintrust.h>
 #include <softpub.h>
 #include <wincrypt.h>
@@ -33,7 +34,7 @@ void failure(Reason reason,const std::string& message,bool fatal) {
     s.status.reason=static_cast<uint32_t>(reason); s.fatal|=fatal;
     log(message);
 }
-static bool trusted_nvidia(const std::wstring& path) {
+bool trusted_signer(const std::wstring& path,const wchar_t* expected) {
     WINTRUST_FILE_INFO file{}; file.cbStruct=sizeof(file); file.pcwszFilePath=path.c_str();
     WINTRUST_DATA data{}; data.cbStruct=sizeof(data); data.dwUIChoice=WTD_UI_NONE;
     data.fdwRevocationChecks=WTD_REVOKE_NONE; data.dwUnionChoice=WTD_CHOICE_FILE;
@@ -49,12 +50,20 @@ static bool trusted_nvidia(const std::wstring& path) {
             wchar_t name[512]{};
             CertGetNameStringW(signer->pasCertChain[0].pCert,CERT_NAME_SIMPLE_DISPLAY_TYPE,0,nullptr,name,512);
             std::wstring n(name); std::transform(n.begin(),n.end(),n.begin(),[](wchar_t c){return std::towupper(c);});
-            vendor=n.find(L"NVIDIA")!=std::wstring::npos;
+            vendor=n.find(expected)!=std::wstring::npos;
         }
     }
     data.dwStateAction=WTD_STATEACTION_CLOSE; WinVerifyTrust(nullptr,&policy,&data);
-    if(result!=ERROR_SUCCESS || !vendor) log("NVIDIA signature validation rejected runtime; WinVerifyTrust="+std::to_string(result));
+    if(result!=ERROR_SUCCESS || !vendor)
+        log("Signature validation rejected "+std::filesystem::path(path).filename().u8string()+" (expected signer "+
+            std::filesystem::path(expected).u8string()+"); WinVerifyTrust="+std::to_string(result));
     return result==ERROR_SUCCESS && vendor;
+}
+HMODULE load_signed(const std::wstring& path,const wchar_t* vendor) {
+    if(!trusted_signer(path,vendor)) return nullptr;
+    const HMODULE module=LoadLibraryExW(path.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if(!module) log("Could not load "+std::filesystem::path(path).filename().u8string()+": error "+std::to_string(GetLastError()));
+    return module;
 }
 std::wstring module_path(HMODULE module) {
     // Heap-grown: never place 64 KB buffers on the stack of an arbitrary caller thread.
@@ -105,7 +114,7 @@ bool load_runtime() {
     }
     s.runtimeDir=(std::filesystem::path(s.root)/L"Streamline").wstring();
     auto interposer=(std::filesystem::path(s.runtimeDir)/kInterposerFile).wstring();
-    if(!trusted_nvidia(interposer)) return false;
+    if(!trusted_signer(interposer,L"NVIDIA")) return false;
     s.signatureChecked=true;
     s.sl.module=LoadLibraryExW(interposer.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if(!s.sl.module) { log("Could not load the signed Streamline interposer (TGFG.Streamline.dll): "+std::to_string(GetLastError())); return false; }
@@ -135,7 +144,7 @@ bool load_runtime() {
     pref.flags|=sl::PreferenceFlags::eUseDXGIFactoryProxy|sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     SLGuard inside;
     auto result=s.sl.slInit(pref,sl::kSDKVersion);
-    if(result!=sl::Result::eOk) { failure(Reason::NativeError,"slInit failed: "+std::to_string(static_cast<int>(result)),true); return false; }
+    if(result!=sl::Result::eOk) { failure(Reason::NativeError,"slInit failed: "+std::to_string(static_cast<int>(result))); return false; }
     s.initialized=true;
     log("Direct Streamline initialization succeeded. Only DLSS-G, Reflex and PCL requested; no SR or neural-rendering replacement. "
         "Interposer loaded under its private name TGFG.Streamline.dll, so injectors that hook sl.interposer.dll leave it alone.");
@@ -154,7 +163,7 @@ void note_foreign_streamline() {
 }
 void on_device(IUnknown* object) {
     auto& s=state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
-    if(!s.initialized || !object || s.deviceReady) return;
+    if(!s.initialized || !object || s.device) return;
     SLGuard inside;
     ComPtr<ID3D12Device> candidate;
     if(FAILED(object->QueryInterface(IID_PPV_ARGS(&candidate)))) return;
@@ -162,26 +171,45 @@ void on_device(IUnknown* object) {
     if(s.sl.slGetNativeInterface(candidate.Get(),&unwrapped)==sl::Result::eOk && unwrapped) {
         candidate.Reset(); candidate.Attach(static_cast<ID3D12Device*>(unwrapped));
     }
+    s.device=candidate; // FSR and XeSS use the native device whether or not Streamline binds it
     LUID luid=candidate->GetAdapterLuid(); sl::AdapterInfo adapter{};
     adapter.deviceLUID=reinterpret_cast<uint8_t*>(&luid); adapter.deviceLUIDSizeInBytes=sizeof(luid);
-    auto supported=s.sl.slIsFeatureSupported(sl::kFeatureDLSS_G,adapter);
-    if(supported!=sl::Result::eOk) { log("Device does not support DLSS-G; result="+std::to_string(static_cast<int>(supported))); return; }
-    auto result=s.sl.slSetD3DDevice(candidate.Get());
-    if(result!=sl::Result::eOk) { failure(Reason::NativeError,"slSetD3DDevice failed",true); return; }
-#define FEATURE(feature,fn,member) { void* p=nullptr; auto r=s.sl.slGetFeatureFunction(feature,fn,p); if(r!=sl::Result::eOk || !p){failure(Reason::NativeError,"Missing feature function " fn,true);return;} s.sl.member=reinterpret_cast<decltype(s.sl.member)>(p); }
-    FEATURE(sl::kFeatureDLSS_G,"slDLSSGSetOptions",setOptions);
-    FEATURE(sl::kFeatureDLSS_G,"slDLSSGGetState",getState);
-    FEATURE(sl::kFeatureReflex,"slReflexSetOptions",reflexOptions);
-    FEATURE(sl::kFeatureReflex,"slReflexSleep",sleep);
-    FEATURE(sl::kFeaturePCL,"slPCLSetMarker",marker);
-#undef FEATURE
-    { void* p=nullptr; if(s.sl.slGetFeatureFunction(sl::kFeatureReflex,"slReflexGetState",p)==sl::Result::eOk && p) s.sl.reflexState=reinterpret_cast<PFun_slReflexGetState*>(p); }
-    s.device=candidate; s.deviceReady=true; s.status.flags|=1u;
-    options_off(); update_caps();
-    log("Streamline private D3D12 presentation device bound; FG remains Off until valid render inputs and a user request.");
+    const auto dlss=s.sl.slIsFeatureSupported(sl::kFeatureDLSS_G,adapter);
+    const auto reflex=s.sl.slIsFeatureSupported(sl::kFeatureReflex,adapter);
+    if(dlss!=sl::Result::eOk) log("Device does not support DLSS-G; result="+std::to_string(static_cast<int>(dlss)));
+    if(reflex!=sl::Result::eOk) log("Device does not support Reflex; result="+std::to_string(static_cast<int>(reflex)));
+    if(dlss!=sl::Result::eOk && reflex!=sl::Result::eOk) return; // nothing Streamline could do on this device
+    if(s.sl.slSetD3DDevice(candidate.Get())!=sl::Result::eOk) { log("slSetD3DDevice failed; continuing without Streamline"); return; }
+    s.slReady=true; s.status.flags|=1u;
+    auto feature=[&](sl::Feature f,const char* name)->void* {
+        void* p=nullptr; return s.sl.slGetFeatureFunction(f,name,p)==sl::Result::eOk?p:nullptr;
+    };
+    if(reflex==sl::Result::eOk) {
+        s.sl.reflexOptions=reinterpret_cast<PFun_slReflexSetOptions*>(feature(sl::kFeatureReflex,"slReflexSetOptions"));
+        s.sl.sleep=reinterpret_cast<PFun_slReflexSleep*>(feature(sl::kFeatureReflex,"slReflexSleep"));
+        s.sl.reflexState=reinterpret_cast<PFun_slReflexGetState*>(feature(sl::kFeatureReflex,"slReflexGetState"));
+        s.sl.marker=reinterpret_cast<PFun_slPCLSetMarker*>(feature(sl::kFeaturePCL,"slPCLSetMarker"));
+        s.reflexReady=s.sl.reflexOptions && s.sl.sleep && s.sl.marker;
+        if(!s.reflexReady) log("Reflex/PCL feature functions are missing; Reflex unavailable");
+    }
+    if(dlss==sl::Result::eOk) {
+        s.sl.setOptions=reinterpret_cast<PFun_slDLSSGSetOptions*>(feature(sl::kFeatureDLSS_G,"slDLSSGSetOptions"));
+        s.sl.getState=reinterpret_cast<PFun_slDLSSGGetState*>(feature(sl::kFeatureDLSS_G,"slDLSSGGetState"));
+        // DLSS Frame Generation requires Reflex; the presenting path forces it on while generating.
+        s.dlssReady=s.sl.setOptions && s.sl.getState && s.reflexReady;
+        if(!s.dlssReady) log("DLSS-G feature functions (or the Reflex it requires) are missing; DLSS-G unavailable");
+    }
+    if(s.reflexReady) s.status.latencyAvailable|=(1u<<uint32_t(Latency::Reflex))|(1u<<uint32_t(Latency::ReflexBoost));
+    if(s.dlssReady) { s.status.backendsAvailable|=1u<<uint32_t(Backend::DLSS); options_off(); update_caps(); }
+    log(std::string("Streamline bound to the private D3D12 presentation device: DLSS-G ")+(s.dlssReady?"available":"unavailable")+
+        ", Reflex "+(s.reflexReady?"available":"unavailable")+". FG remains Off until valid render inputs and a user request.");
+}
+void load_vendor_runtimes() { load_fsr_runtime(); load_xess_runtime(); }
+void probe_vendor_backends(ID3D12Device* device,uint32_t vendor) {
+    probe_fsr(device); probe_xess(device,vendor); antilag_probe(device,vendor);
 }
 void update_caps() {
-    auto& s=state(); if(!s.deviceReady) return;
+    auto& s=state(); if(!s.dlssReady) return;
     SLGuard inside;
     sl::DLSSGState g{};
     auto r=s.sl.getState(s.viewport,g,&s.applied);
@@ -202,7 +230,8 @@ void update_caps() {
     }
 }
 void options_off() {
-    auto& s=state(); if(!s.deviceReady) return;
+    // DLSS-G lives on the Streamline swapchain only; the FSR/XeSS swapchains never see it.
+    auto& s=state(); if(!s.dlssReady || s.output!=Output::Standard) return;
     sl::DLSSGOptions off=s.haveOptions?s.applied:sl::DLSSGOptions{}; off.mode=sl::DLSSGMode::eOff;
     // Streamline rejects zero here even though generation is disabled.
     off.numFramesToGenerate=1;
@@ -214,7 +243,7 @@ void options_off() {
     else { s.fatal=true; log("Cannot disable DLSS-G; slDLSSGSetOptions returned "+std::to_string(static_cast<int>(r))); }
 }
 void clear_tags(Frame* frame) {
-    auto& s=state(); if(!s.deviceReady || !frame || !frame->token) return;
+    auto& s=state(); if(!s.dlssReady || !frame || !frame->token) return;
     sl::ResourceTag tags[]={
         {nullptr,sl::kBufferTypeDepth,sl::ResourceLifecycle::eValidUntilPresent},
         {nullptr,sl::kBufferTypeMotionVectors,sl::ResourceLifecycle::eValidUntilPresent},

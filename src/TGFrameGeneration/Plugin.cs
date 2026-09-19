@@ -9,18 +9,20 @@ namespace TGFrameGeneration
 {
     [BepInPlugin(Id, Name, Version)]
     [BepInDependency("kane.tgfoa.mod-manager", BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency("com.avalonmodmanager", BepInDependency.DependencyFlags.SoftDependency)]
 #if BEPINEX_IL2CPP
     public sealed class Plugin : BasePlugin
 #else
     public sealed class Plugin : BaseUnityPlugin
 #endif
     {
-        public const string Id = "tgfoa.experimental.dlss-frame-generation";
-        public const string Name = "TG Frame Generation (Experimental)";
-        public const string Version = "0.4.0";
+        public const string Id = "com.wessberg.tgframegeneration";
+        public const string Name = "TG Frame Generation";
+        public const string Version = "0.5.0";
 #if BEPINEX_IL2CPP
         public override void Load()
         {
+            ModManagers.KeepOutOfAvalon(Id, Log);
             Session.Start(Config, Log);
             AddComponent<RuntimeBehaviour>();
         }
@@ -28,6 +30,7 @@ namespace TGFrameGeneration
 #else
         private void Awake()
         {
+            ModManagers.KeepOutOfAvalon(Id, Logger);
             Session.Start(Config, Logger);
             gameObject.AddComponent<RuntimeBehaviour>();
         }

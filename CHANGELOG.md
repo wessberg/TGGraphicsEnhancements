@@ -1,3 +1,64 @@
+# v0.5.0 - AMD FSR and Intel XeSS frame generation, one Low Latency selector
+
+- The plugin is now "TG Frame Generation" with the ID com.wessberg.tgframegeneration. Settings
+  live in BepInEx/config/com.wessberg.tgframegeneration.cfg; the old
+  tgfoa.experimental.dlss-frame-generation.cfg and BepInEx/TGFrameGeneration/VideoSettings.cfg
+  are migrated on first start and renamed to *.migrated.
+- FoA Mod Manager lists exactly the Video tab's six rows, with the same names, choices, labels,
+  order and visibility rules. Choices follow what this GPU reports, and a change made there
+  shows up in the Video tab once the Options screen is closed. The other options sit in a hidden
+  [Advanced] section.
+- Avalon Mod Manager's MODS tab no longer lists TGFG: TGFG adds itself to that manager's
+  blacklist for the session, without saving its config. Its Apply writes back the values staged
+  when the Options screen opened, which undid Video-tab changes.
+- Low Latency can be Off only while frame generation is Off; FSR now runs with Reflex or Anti-Lag
+  2. The row is greyed out when only one choice remains (XeSS with XeLL).
+- Frame Generation and its rows are greyed out unless DLSS is the selected upscaler, and follow
+  the upscaler row before Apply.
+- Packages include NVIDIA's license notices next to the Streamline runtime
+  (LICENSE-Streamline.txt, LICENSE-NVIDIA-RTX-SDKs.txt, LICENSE-NVIDIA-Reflex.txt), staged from
+  the SDK release by Stage-Runtime.ps1.
+- Removed leftovers of the 0.3 patch workflow: APPLY.md, integrate-autoload.patch,
+  source-manifest.json, the validation logs, docs/VALIDATION.md, the retired Launch-Game.ps1 and
+  the 0.3 example config.
+- Video tab: Frame Generation [Off | DLSS | FSR | XeSS]. A technology is listed only when its
+  runtime is installed and reports support on the GPU. FSR runs through AMD's FSR API (FSR SDK
+  2.3.0: FSR 4 ML frame generation on Radeon RX 9000, FSR 3.1 analytic frame generation elsewhere)
+  and AMD's frame generation swapchain. XeSS runs through Intel's XeSS-FG swapchain (XeSS SDK
+  3.0.2). All three use the same inputs, the depth and motion vectors of the game's DLSS upscaler,
+  so DLSS upscaling must be on and AMD/Intel GPUs cannot generate frames in this game.
+- Frame multipliers come from the runtimes: DLSS from Streamline's numFramesToGenerateMax, XeSS
+  from xefgSwapChainGetProperties (up to 4x on Intel Arc, 2x elsewhere). The FSR API has no
+  multi-frame control, so FSR is 2x. Frame Multiplier offers up to the highest reported maximum,
+  blocks values above the selected technology's maximum and clamps the value when switching
+  technology; the native side clamps the request as well. Neither FSR nor XeSS has dynamic frame
+  generation, so Dynamic stays DLSS-only. The 6x cap is gone (the ABI bound is 16).
+- Switching technology recreates only the private presentation swapchain, between two frames: the
+  Streamline swapchain for Off/DLSS, the SDK's own swapchain for FSR/XeSS. The game's D3D11
+  buffers are unchanged. An SDK that fails is disabled for the session and presentation falls
+  back to the standard swapchain.
+- Low Latency [Off | NVIDIA Reflex | NVIDIA Reflex + Boost | Intel XeLL | AMD Anti-Lag 2] replaces
+  the NVIDIA Reflex row and lists what the GPU supports. DLSS Frame Generation requires Reflex and
+  XeSS Frame Generation runs with XeLL only (Intel's requirement), so the row forbids the other
+  choices for those. XeLL on its own needs an Intel GPU; Anti-Lag 2 needs an AMD GPU. The 0.4.0
+  "NVIDIA Reflex" value migrates to "Low latency"; the advanced base FPS limit feeds whichever
+  technology is active.
+- The bridge no longer requires DLSS-G: Streamline binds when DLSS-G or Reflex is supported (RTX
+  20/30 get FSR/XeSS with Reflex), other GPUs get a plain D3D12 device, and a Streamline start
+  failure no longer stops the other technologies.
+- A game waiting on the swapchain's frame-latency object gets a bridge-owned semaphore that
+  survives swapchain recreation; the private swapchain no longer carries that flag. HDR metadata
+  is re-applied to a recreated swapchain.
+- Native ABI v5 (0x00050000): the request gains backend and latencyMode (was reflexMode) and
+  baseFpsLimit (was reflexBaseFpsLimit); the status reports available backends, per-backend
+  maxima, latency technologies, the active output and latency technology, the GPU vendor and
+  backend failures; the camera packet carries the world-to-view matrix XeSS needs.
+- Packages add Native/FidelityFX (AMD-signed loader and frame generation DLLs, license notice)
+  and Native/XeSS (Intel-signed libxess_fg.dll and libxell.dll, license notice).
+  Stage-Runtime.ps1 takes -FidelityFXRoot and -XeSSRoot; Build-Native.ps1 takes the FSR, XeSS and
+  Anti-Lag 2 SDK roots, defaulting to folders next to the script.
+- Managed and native versions are 0.5.0.
+
 # v0.4.0 - native Video settings rows, Reflex modes, startup crash fix
 
 - Video tab: Frame Generation [Off | DLSS], Frame Generation Mode [Fixed | Dynamic] (shown only

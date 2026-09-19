@@ -41,9 +41,11 @@ struct Streamline {
     decltype(&::CreateDXGIFactory2) createFactory2=nullptr;
 };
 struct Frame {
-    sl::FrameToken* token=nullptr;
+    sl::FrameToken* token=nullptr; // Streamline frame, only when Streamline is bound to the device
     TGFG_Camera camera{};
+    uint32_t id=0;
     bool cameraReady=false, renderBegun=false, renderEnded=false, inputContract=false, inputs=false, simEnded=false;
+    bool xell=false; // XeLL slept for this frame, so it receives this frame's markers
     uint32_t evalCount=0;
     bool inputsSubmitted=false;
     uint64_t born=0;
@@ -55,6 +57,7 @@ struct Diag {
     uint64_t ngxEvals=0, ngxNoFrameId=0, ngxNoCamera=0, ngxNotBegun=0, ngxAfterEnd=0, ngxMulti=0;
     uint64_t ngxDims=0, ngxParams=0, ngxRequestOff=0, captureFailed=0, captureOk=0, evalFailed=0;
     uint64_t presents=0, presentsWithInputs=0, tagged=0, tagFailed=0, readyPresents=0, fgPresents=0;
+    uint64_t sdkPresented=0; // frames an FSR/XeSS swapchain reported presenting (rendered + generated)
     uint32_t lastWhy=0;
     uint64_t lastSummary=0;
     bool markerFailLogged=false, tagFailLogged=false;
@@ -78,7 +81,10 @@ struct State {
     sl::ViewportHandle viewport{0};
     uint64_t heartbeat=0;
     std::atomic<long> asyncApiError{S_OK};
+    // initialized: Streamline started. deviceReady: the private D3D12 presentation device exists.
+    // slReady: Streamline is bound to that device; dlssReady/reflexReady: DLSS-G / Reflex+PCL usable.
     bool initialized=false, deviceReady=false, fatal=false, bootstrapAttempted=false;
+    bool slReady=false, dlssReady=false, reflexReady=false, bridgeAllowed=false;
     bool signatureChecked=false;
     ComPtr<ID3D12Fence> lastInputsFence;
     uint64_t lastInputsFenceValue=0;
@@ -86,6 +92,11 @@ struct State {
     sl::DLSSGOptions applied{};
     sl::ReflexOptions lastReflex{};
     bool haveOptions=false, haveReflex=false;
+    Output output=Output::Standard;  // swapchain currently presenting
+    Latency latency=Latency::Off;    // latency technology currently selected
+    // Create flags of the observed DLSS SR feature: how depth and motion vectors are encoded.
+    // Until one is seen, HDRP's defaults (inverted depth, render-resolution vectors) are assumed.
+    uint32_t ngxFlags=NVSDK_NGX_DLSS_Feature_Flags_DepthInverted|NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
 };
 State& state();
 extern thread_local bool insideSL;
@@ -97,17 +108,32 @@ void log_throttled(const std::string&);
 std::wstring module_path(HMODULE);
 std::wstring system_directory();
 void failure(Reason, const std::string&, bool fatal=false);
+// WinVerifyTrust plus the leaf signer's display name (upper case) containing vendor.
+bool trusted_signer(const std::wstring& path,const wchar_t* vendor);
+// A signed vendor DLL from TGFG's own runtime folder, loaded by full path.
+HMODULE load_signed(const std::wstring& path,const wchar_t* vendor);
 bool load_runtime();
 // Logs once if a module named sl.interposer.dll (another mod's Streamline) appears after startup.
 void note_foreign_streamline();
 bool install_graphics_hooks();
 bool install_ngx_discovery();
+// DXGI factory straight from the system dxgi.dll, never a Streamline or overlay proxy.
+HRESULT create_native_factory(REFIID,void**);
 void on_device(IUnknown*);
 void before_present(IDXGISwapChain*);
 void after_present(HRESULT);
 void clear_tags(Frame*);
 void options_off();
 void update_caps();
+// Pipeline bookkeeping shared by the Streamline (DLSS-G) and FSR/XeSS present paths.
+Readiness frame_readiness(Frame*,uint32_t format,uint32_t maxGenerated,uint32_t dynamicSupported,bool backendOk);
+void note_generation(Frame*,Reason,bool enabled);
+void present_markers(Frame*,bool start);
+void release_stale_frames(bool generating);
+void summarise(uint64_t now);
+// Latency technologies: selection (State::mutex held) and the per-present parts.
+Latency update_latency();
+void latency_marker(sl::PCLMarker,Frame*);
 // Hook registry holds actual trampolines, never a fake implementation of rendering calls.
 bool add_hook(void* target,void* detour,void** original);
 bool add_vtable_hook(void* object,size_t slot,void* detour);

@@ -23,13 +23,13 @@ class AutoloadIntegration(unittest.TestCase):
         trees = [ET.parse(ROOT/p) for p in (
             'src/TGFrameGeneration/TGFrameGeneration.csproj','src/TGFG.Autoload/TGFG.Autoload.csproj')]
         for t in trees:
-            self.assertEqual(t.find('.//Version').text, '0.4.0')
+            self.assertEqual(t.find('.//Version').text, '0.5.0')
             self.assertEqual(set(t.find('.//TargetFrameworks').text.split(';')), {'net472','net6.0'})
             self.assertEqual(t.find('Import').get('Project'), '..\\..\\Build.Local.props')
         for prop in ['GameDirMono', 'GameDirIl2Cpp']:
             self.assertEqual(trees[0].find('.//'+prop).text, trees[1].find('.//'+prop).text)
-        self.assertIn('Version = "0.4.0"', text('src/TGFrameGeneration/Plugin.cs'))
-        self.assertIn('TGFG.Autoload 0.4.0', text('src/TGFG.Autoload/Bootstrap.cs'))
+        self.assertIn('Version = "0.5.0"', text('src/TGFrameGeneration/Plugin.cs'))
+        self.assertIn('TGFG.Autoload 0.5.0', text('src/TGFG.Autoload/Bootstrap.cs'))
 
     def test_preloader_does_not_reference_gameplay_or_unity(self):
         tree = ET.parse(ROOT/'src/TGFG.Autoload/TGFG.Autoload.csproj')
@@ -48,7 +48,7 @@ class AutoloadIntegration(unittest.TestCase):
 
     def test_synchronous_same_abi(self):
         source=text('src/TGFG.Autoload/Bootstrap.cs')
-        self.assertIn('ExpectedAbi = 0x00040000',source)
+        self.assertIn('ExpectedAbi = 0x00050000',source)
         self.assertIn('Bind<NativeBootstrap>("TGFG_Bootstrap")(IntPtr.Zero)',source)
         self.assertNotIn('new Thread(',source)
         self.assertNotIn('Task.Run(',source)
@@ -77,7 +77,7 @@ class AutoloadIntegration(unittest.TestCase):
             self.assertNotIn('launcher_sha256',source,path)
         source=text('Package.ps1')
         self.assertIn("'artifacts\\Native'",source)
-        self.assertIn("$nativeManifest.version -ne '0.4.0'",source)
+        self.assertIn("$nativeManifest.version -ne '0.5.0'",source)
         self.assertIn('Compress-Archive',source)
 
     def test_direct_msbuild_deploy_uses_shared_flow(self):
@@ -116,11 +116,11 @@ class AutoloadIntegration(unittest.TestCase):
         self.assertIn('TGFrameGeneration.csproj',solution)
 
     def test_native_version_kept_separate(self):
-        self.assertIn('VERSION 0.4.0',text('CMakeLists.txt'))
-        self.assertIn("version='0.4.0'",text('Build-Native.ps1'))
-        self.assertIn("version='0.4.0'",text('Package.ps1'))
-        self.assertIn("native_version='0.4.0'",text('Package.ps1'))
-        self.assertIn('0x00040000',text('src/TGFrameGeneration/NativeAbi.cs'))
+        self.assertIn('VERSION 0.5.0',text('CMakeLists.txt'))
+        self.assertIn("version='0.5.0'",text('Build-Native.ps1'))
+        self.assertIn("version='0.5.0'",text('Package.ps1'))
+        self.assertIn("native_version='0.5.0'",text('Package.ps1'))
+        self.assertIn('0x00050000',text('src/TGFrameGeneration/NativeAbi.cs'))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

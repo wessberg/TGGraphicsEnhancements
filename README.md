@@ -1,189 +1,148 @@
-# TG Frame Generation 0.4.0 — native Video settings, Reflex modes, DX11 bridge
+# TG Frame Generation
 
-**FoA stays on Direct3D 11. TGFG supplies a separate Direct3D 12 presentation
-backend to NVIDIA Streamline. No OptiScaler or FidelityFX backend is used.**
-The existing BepInEx settings-menu adapter and the Mono/IL2CPP build split are
-retained. The native backend is v0.4.0 / ABI v4 (adds the Reflex mode). This update integrates the
-preloader, build, package and deployment into the existing repository.
+Native frame generation for Tainted Grail: The Fall of Avalon with NVIDIA DLSS, AMD FSR or Intel
+XeSS, plus NVIDIA Reflex, Intel XeLL or AMD Anti-Lag 2 for lower input latency. The settings are
+rows in the game's own Video tab.
 
-## Status — experimental source, not a verified release
+Native means the frame generation works from the game's own motion vectors and depth, the same
+inputs a game with built-in frame generation hands to these SDKs. Driver-level frame generation,
+such as AMD Fluid Motion Frames or NVIDIA Smooth Motion, only sees finished frames and estimates
+the motion from them. TGFG calls each vendor's SDK directly, with no OptiScaler or other wrapper
+in between.
 
-The Windows native DLL, launcher, HLSL shaders, Mono target and IL2CPP target have
-**not been compiled in the preparation environment**. Since then, in-game runs on an
-RTX 5080 have confirmed frame generation with and without ReShade + RenoDX HDR; the
-combination with DLSS 5 (RenoDX DLSS) is not yet confirmed. Portable C++ ABI/control/interop
-policy tests and package consistency tests were run; see `docs/VALIDATION.md`.
-The archive contains source, **not precompiled Windows binaries**.
+The game renders with Direct3D 11. TGFG copies each finished frame to a private Direct3D 12 device
+and generates frames there with NVIDIA Streamline for DLSS Frame Generation, AMD's FSR API
+(FidelityFX SDK 2.3) or Intel XeSS-FG (XeSS SDK 3.0).
 
-There is implemented bridge code, not just an interface for a future backend:
-D3D11-facing swapchain interception, shared textures, D3D11/D3D12 shared fences,
-private D3D12 device/queue/swapchain creation through Streamline, D3D11 NGX input
-capture, shader-based input copies, optional scRGB-to-HDR10 conversion, resource
-tagging, presentation, Reflex markers and fixed/Dynamic DLSS-G options.
-Windows compilation or game testing may reveal defects requiring corrections.
+## Status
 
-Your supplied diagnostics established **v0.3.0 Mono loading and UI insertion**, not
-native FG. No IL2CPP game test has been supplied. The UI is preserved structurally;
-its status area is now shorter and the full report has more native diagnostics.
+Version 0.5.0 (native ABI v5) for the game's Mono branch with BepInEx 5.
 
-## Architecture
+Tested in game on an RTX 5080:
+
+- DLSS Frame Generation, fixed 2x to 6x and Dynamic Multi Frame Generation, with and without
+  ReShade + RenoDX HDR, and together with the RenoDX DLSS addon ("DLSS 5").
+- FSR Frame Generation with NVIDIA Reflex, and switching technology while playing.
+
+XeSS Frame Generation, Intel XeLL and AMD Anti-Lag 2 are built on Intel's and AMD's SDKs but have
+not yet been confirmed in game. IL2CPP builds (BepInEx 6) are untested.
+
+All three technologies take their motion vectors and depth from the game's DLSS upscaler, so frame
+generation needs DLSS selected as the upscaler, and that needs an NVIDIA RTX GPU. RTX 20 and 30
+cards can't run DLSS Frame Generation but can use FSR or XeSS Frame Generation. On AMD and Intel
+GPUs only Anti-Lag 2 and XeLL apply for now; a fallback to HDRP's own motion vectors (TAA, STP)
+is planned.
+
+## Settings
+
+| Video tab row | Choices |
+|---|---|
+| Frame Generation | Off, plus each of DLSS, FSR and XeSS whose runtime reports support on this GPU. Greyed out unless DLSS is the selected upscaler. |
+| Frame Generation Mode | DLSS only: Fixed or Dynamic, when the runtime reports Multi Frame Generation and Dynamic support. |
+| Frame Multiplier | 2x up to the selected technology's maximum. Switching technology clamps the value. |
+| Max Frame Multiplier, Target Framerate | DLSS Dynamic only: the upper limit and the framerate to aim for. |
+| Low Latency | Off, NVIDIA Reflex, NVIDIA Reflex + Boost, Intel XeLL, AMD Anti-Lag 2, as supported. Off is blocked while frame generation is on. DLSS needs Reflex; XeSS always runs with XeLL, which greys the row out. |
+
+The maxima come from the runtimes: DLSS-G's `numFramesToGenerateMax` (up to 6x on RTX 50) and
+XeSS's `maxSupportedInterpolations` (up to 4x on Intel Arc, 2x elsewhere). The FSR API has no
+multi-frame control, so FSR is 2x, and neither FSR nor XeSS has a dynamic mode. Intel XeLL works on
+its own only on Intel GPUs; elsewhere only together with XeSS Frame Generation.
+
+The rows use the game's Apply Changes, Undo and Restore Defaults. Changing technology recreates only
+TGFG's private presentation swapchain between two frames. Frame generation pauses in menus, while
+the cursor is unlocked and while the game is paused.
+
+Values are stored in `BepInEx/config/com.wessberg.tgframegeneration.cfg`. FoA Mod Manager lists
+the same six rows with the same choices and rules, and a change in either place shows up in the
+other. Avalon Mod Manager's MODS tab leaves TGFG out: on Apply it writes back the values it read
+when the Options screen opened, which would undo what the Video tab just applied. The `[Advanced]`
+section of the config file holds options without a row: a base FPS cap through the active
+low-latency technology, the emergency off key (F8), the pause rules and a diagnostic report switch.
+Settings from 0.4.x and earlier builds of 0.5.0 are migrated on first start.
+
+## How it works
 
 ```text
-FoA + RenoDX/ReShade, rendering through D3D11
-  ├─ original DLSS SR calls are forwarded unchanged
-  ├─ depth/motion copies at the native D3D11 NGX evaluation
-  └─ final color at the D3D11-facing Present boundary
-       ↓ same-adapter shared textures + GPU fences
-TGFG private D3D12 device / DIRECT queue
-       ↓ tagged camera/depth/motion/(optional HUD-less image)
-NVIDIA Streamline DLSS-G + Reflex + private output swapchain
-       ↓ rendered and generated output frames
+FoA + ReShade/RenoDX, rendering through D3D11
+  ├─ the game's DLSS upscaler calls pass through unchanged
+  ├─ depth and motion vectors are copied at the D3D11 NGX evaluation (the frame generation inputs)
+  └─ the final image is taken at the D3D11 Present
+       ↓ shared textures and GPU fences on the same adapter
+TGFG's private D3D12 device and queue
+       ↓ depth, motion vectors, camera, jitter and motion vector scale
+Presentation swapchain of the selected technology
+  ├─ Off / DLSS: NVIDIA Streamline (DLSS-G, Reflex)
+  ├─ FSR: AMD's frame generation swapchain
+  └─ XeSS: Intel's XeSS-FG swapchain (with XeLL)
+       ↓ rendered and generated frames
 Display
 
-Steam Play → BepInEx preloader TGFG.Autoload → native bootstrap
-BepInEx gameplay plugin → native controls, camera/frame events, diagnostics
+Steam → BepInEx preloader (TGFG.Autoload) → native bootstrap
+BepInEx plugin → Video rows, camera and frame events, diagnostics
 ```
 
-The source color is taken at the wrapper's Present boundary, so it includes the work of
-outer ReShade/RenoDX wrappers. Frame generation has been confirmed in game with ReShade 6.8
-and RenoDX HDR (scRGB swapchain, presented as HDR10).
+Streamline is loaded only when the GPU supports DLSS-G or Reflex. Other GPUs get a plain D3D12
+device, and a Streamline failure doesn't stop FSR or XeSS. The Streamline interposer ships as
+`TGFG.Streamline.dll`, so the RenoDX DLSS addon, which hooks `sl.interposer.dll` by name, leaves
+TGFG's copy alone.
 
-TGFG loads NVIDIA's `sl.interposer.dll` under the private file name
-`TGFG.Streamline.dll` (same bytes, same NVIDIA signature). Streamline-aware injectors such as
-the RenoDX DLSS addon ("DLSS 5") find a game's Streamline by that module name and hook its
-exports and DXGI factories. That addon then releases any swapchain ReShade did not see being
-created, which made TGFG's private output swapchain fail with `E_UNEXPECTED`. In FoA the addon
-runs DLSS 5 Neural Rendering directly through NGX on its own D3D12 device and does not start the
-Streamline 2.13 DLLs it ships, so there is no second Streamline to share. The mod neither
-disables nor replaces DLSS 5. Its NGX hooks still see TGFG's DLSS-G evaluations; the combined
-setup still needs confirmation in game.
-
-## What is retained or added
-
-| Area | Implementation / limitation |
+| Area | Implementation and limits |
 |---|---|
-| Managed build | `net472` Mono; `net6.0` IL2CPP. One native x64 backend serves either. |
-| In-game controls | Real game settings rows in Options > Video, directly after Dynamic Resolution: Frame Generation [Off / DLSS]; when DLSS is selected and the runtime reports Multi Frame Generation: Frame Generation Mode [Fixed / Dynamic], Frame Multiplier [2x .. reported max] (Fixed), Max Frame Multiplier [Up to 2x .. Up to max] and Target Framerate [Auto / 60 .. display maximum] (Dynamic); plus NVIDIA Reflex [Off / On / On + Boost], with Off forbidden while FG is on. They use the game's Apply Changes / Undo / Restore Defaults and persist in `BepInEx/TGFrameGeneration/VideoSettings.cfg`. Mono runtime only; the IL2CPP build edits that file directly. |
-| Fixed FG/MFG | Requests 2×–6× total output; runtime caps gate activation. 4× means three generated frames. |
-| Dynamic MFG | Uses Streamline `eDynamic` and `dynamicTargetFrameRate`, not a loop switching fixed multipliers. |
-| Target framerate | Dynamic target Auto (0) asks NVIDIA to use the current display refresh; with VSync on the runtime targets the refresh rate regardless. This does not change monitor Hz. |
-| NVIDIA Reflex | Streamline Reflex low-latency (optionally Boost) with per-frame sleep and PCL markers from the plugin. The game itself has no Reflex integration. |
-| D3D11 inputs | Copies the actual SR depth/motion inputs to shareable R32_FLOAT (depth) and R16G16_FLOAT (motion, lossless for HDRP's FP16 vectors) textures; preserves jitter and scales from NGX. R32G32_FLOAT is not NT-handle shareable on NVIDIA's D3D11 driver. |
-| GPU synchronization | Producer signal/consumer wait, private queue submission, NVIDIA input-consumption fence, consumer signal/D3D11 wait. No per-frame image download to CPU. |
-| HDR | FP16 scRGB source can be converted to RGB10A2/PQ/BT.2020 for presentation. Existing SDR/HDR10 formats are copied. The HDR10 output path requires compatible HDR output. |
-| Diagnostics | Source/output APIs, source/output formats, bridge flags, interop HRESULT, source presents, copies, captured input pairs, NGX calls, NVIDIA-reported output count, native PID. |
-| Loading | Automatic BepInEx preloader; no TGFG launcher and no replacement of `winhttp.dll`, `dxgi.dll` or `version.dll`. |
+| Managed | `net472` for Mono, `net6.0` for IL2CPP. One native x64 backend serves both. |
+| DLSS | Streamline 2.14.1 DLSS-G: fixed multipliers, `eDynamic` with `dynamicTargetFrameRate`, Reflex required. |
+| FSR | AMD's signed loader and frame generation DLLs: FSR 4 ML frame generation on Radeon RX 9000, FSR 3.1 elsewhere. |
+| XeSS | Intel's signed `libxess_fg.dll` and `libxell.dll`; inputs tagged per frame, present IDs are XeLL frame IDs. |
+| Inputs | The DLSS upscaler's depth and motion vectors, copied to shareable R32_FLOAT and R16G16_FLOAT textures, with the NGX jitter, motion vector scale and feature flags. |
+| Synchronization | GPU fences between the D3D11 and D3D12 queues. The CPU never reads an image back. |
+| HDR | FP16 scRGB is encoded to RGB10A2 PQ/BT.2020; SDR and HDR10 are copied. FSR and XeSS accept HDR10. |
+| HUD | The UI is interpolated with the scene and can smear on generated frames; the game has no pre-HUD hook. |
+| Loading | BepInEx preloader. No launcher, and no replaced `winhttp.dll`, `dxgi.dll` or `version.dll`. |
 
-The DX11-facing adapter exposes **a stable logical `GetBuffer(0)`**. The private
-DX12 output has three physical buffers and uses its actual current buffer index.
-This avoids incorrectly rotating the texture behind a cached D3D11 render target.
-Indexed D3D11 clients (`GetBuffer(1+)`) are not implemented; see limitations below.
+## Building
 
-## Requirements
+Windows x64 with the Visual Studio C++ build tools, CMake 3.24 or newer, Windows SDK 10.0.22621 or
+newer, and a .NET SDK that builds `net472` and `net6.0`. The SDKs go next to this repository (they
+are git-ignored):
 
-Use Windows x64 with Visual Studio C++ build tools, CMake 3.24+, Git, Windows SDK
-10.0.22621 or newer, and a .NET SDK able to build the two target frameworks.
-Provide official **NVIDIA Streamline 2.14.1** headers/matching production runtimes,
-and the NVIDIA DLSS/NGX headers. Review NVIDIA's licenses yourself. The native
-source uses typed SDK declarations; no proprietary headers or runtime binaries
-are bundled. CMake fetches MinHook v1.3.4 unless a local `-MinHookRoot` is supplied.
+| Folder | Contents |
+|---|---|
+| `Streamline-2.14.1` | NVIDIA Streamline 2.14.1 source: headers and `external/ngx-sdk/include` |
+| `Streamline-2.14.1-bin` | `bin/x64` and `license.txt` from the `streamline-sdk-v2.14.1.zip` release |
+| `FidelityFX-SDK-2.3.0` | AMD FSR SDK 2.3.0 headers (`Kits/FidelityFX/...`) and, in `bin/`, the signed `amd_fidelityfx_loader_dx12.dll` and `amd_fidelityfx_framegeneration_dx12.dll` from the prebuilt package |
+| `XeSS-SDK-3.0.2` | Intel XeSS SDK 3.0.2 release archive |
+| `AntiLag2-SDK-2.0.0a` | AMD Anti-Lag 2 SDK 2.0.0a release archive |
 
-The game installation must already have the matching BepInEx runtime. IL2CPP
-requires generated interop assemblies from that exact game build. GPU, driver,
-OS and hardware-scheduling capability are determined by NVIDIA's runtime, not
-inferred solely from the GPU model.
-
-## 1. Build inside this repository
-
-Autoload now lives in `src/TGFG.Autoload`, beside the gameplay plugin, and is built
-by the existing `Build.ps1`. There is no second repo or `-ProjectRoot` argument.
-Both projects use this repo's existing `Build.Local.props`.
-
-For the current Steam installation running Mono:
+CMake fetches MinHook v1.3.4 unless `-MinHookRoot` is given. The game needs the matching BepInEx
+already installed. `docs/SOURCES.md` links every SDK release.
 
 ```powershell
+# Native backend (VS x64 developer shell)
+.\Build-Native.ps1 -StreamlineRoot Streamline-2.14.1 `
+  -NgxIncludeDir Streamline-2.14.1\external\ngx-sdk\include
+
+# Signed NVIDIA, AMD and Intel runtimes with their license notices
+.\Stage-Runtime.ps1 -RuntimeDirectory Streamline-2.14.1-bin\bin\x64 `
+  -FidelityFXRoot FidelityFX-SDK-2.3.0 -XeSSRoot XeSS-SDK-3.0.2
+
+# Plugin and preloader, then package and install (game closed)
 .\Build.ps1 -Runtime Mono `
-  -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' `
-  -Deploy
+  -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' -Deploy
 ```
 
-`-Deploy` builds both managed DLLs, assembles the complete package using this
-repo's existing `artifacts/Native`, backs up replaced TGFG files, and installs it.
-No process is launched. Native v0.3.0 (ABI `0x00030000`) is reused unchanged.
-The managed pair is v0.3.1. The old standalone Build-Autoload.ps1 is not needed.
+`Build-Native.ps1` defaults the FSR, XeSS and Anti-Lag 2 roots to the folders above. `-Deploy`
+backs up every TGFG file it replaces under `BepInEx/TGFrameGeneration/Backups`.
+`Build.ps1 -Runtime Both -Package` builds player ZIPs for both runtimes without installing, and
+`Package.ps1 -Runtime Mono -Deploy` repackages existing artifacts. A package contains the plugin,
+the preloader, the native backend, the vendor runtimes with their license notices and
+`TGFG-PLAYER-INSTALL.txt`. Install one runtime package per game installation, then start the game
+from Steam as usual.
 
-Without `-Deploy` or `-Package`, only the managed pair is built/staged. Use
-`-Package` to create a complete player ZIP without installing it:
+`Test-Setup.ps1 -GameDir <game folder> -Runtime Mono` checks an installed copy without starting
+the game. Native builds also run the portable ABI, policy and interop tests and compile the HLSL;
+`tests/source_checks.py`, `tests/test_autoload_integration.py` and `tests/package_tests.ps1` check
+sources and packaging. `docs/TESTING.md` has the in-game test sequence.
 
-```powershell
-# After configuring both installations in Build.Local.props:
-.\Build.ps1 -Runtime Both -Package
-
-# Repackage existing managed/native artifacts without compiling:
-.\Package.ps1 -Runtime Mono -Deploy
-```
-
-The managed artifacts are kept separate:
-
-```text
-artifacts/Mono/BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
-artifacts/Mono/BepInEx/patchers/TGFG.Autoload.dll
-artifacts/IL2CPP/BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
-artifacts/IL2CPP/BepInEx/patchers/TGFG.Autoload.dll
-```
-
-Player ZIPs are staged under `artifacts/Packages` with runtime-specific names.
-They contain the plugin, matching preloader, native backend, matching NVIDIA
-runtime and installation instructions, not a launcher or development scripts.
-Do not install both runtime packages into the same game installation.
-
-## 2. Native prerequisites (existing artifacts can be reused)
-
-This integration changes no native source and requires no native rebuild when
-`artifacts/Native/TGFG.Native.dll` matches its v0.4.0 build manifest.
-If native artifacts or runtime files are missing, use the same existing scripts:
-
-```powershell
-.\Build-Native.ps1 `
-  -StreamlineRoot C:\SDKs\Streamline-2.14.1 `
-  -NgxIncludeDir C:\SDKs\DLSS\include
-
-.\Stage-Runtime.ps1 -RuntimeDirectory C:\SDKs\Streamline-2.14.1\bin\x64
-
-.\Build.ps1 -Runtime Mono `
-  -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' `
-  -Deploy
-```
-
-Official NVIDIA DLLs are not part of the source patch. Packaging rechecks native
-hashes and NVIDIA production signatures. Review NVIDIA distribution requirements
-before publishing runtime-containing archives. No existing game/RenoDX runtime
-DLLs are overwritten: these are separate TGFG-private copies.
-
-## 3. Press Play in Steam
-
-After deployment, start the game normally. No TGFG launcher, Steam launch options,
-app-ID file or monitor script is required by this package. BepInEx's preloader
-calls the native bootstrap in that game's own process.
-
-This backend still requires Unity's **DX11** rendering path. Autoload does not
-force an API, change the player's display mode, or add launch arguments. Native
-DX12 is private to the bridge. A game running DX12 remains unsupported by it.
-
-Optional installation check (does not launch the game):
-
-```powershell
-.\Test-Setup.ps1 `
-  -GameDir 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' `
-  -Runtime Mono
-```
-
-The old Launch-Game.ps1 is retired as a launcher; it now only performs this check.
-Do not combine an externally injected native backend with automatic loading.
-
-## First test and diagnostics
-
-Leave Frame Generation **Off** (Options > Video). Check these paths inside the GAME installation:
+## Diagnostics
 
 ```text
 BepInEx/TGFrameGeneration/Autoload.log
@@ -191,57 +150,39 @@ BepInEx/TGFrameGeneration/Native/TGFG.Native.log
 BepInEx/TGFrameGeneration/diagnostics/
 ```
 
-The gameplay diagnostic includes a bounded tail of Autoload.log, with an explicit
-warning that old sessions may be present. Compare timestamps and PIDs. A loaded
-DLL and successful bootstrap return are not proof that loading occurred early
-enough or that a bridge was created. BepInEx preloader timing in this game has not
-been validated for either runtime.
+At startup the native log lists what each runtime reports: DLSS-G, the FSR providers, the XeSS
+maximum, XeLL and Anti-Lag 2. Every five seconds a `Pipeline 5s:` line counts frame events,
+captured DLSS inputs, presents with inputs and frames with generation on, and names the active
+output (`standard`, `FSR`, `XeSS`) and latency technology, with Reflex's latency report or the FSR
+and XeSS frame counts. Technology switches are logged as "Presentation switching from ... to ...".
 
-First verify source DX11, private presentation DX12, bridge flag and increasing
-copy counts. Those may advance with FG Off and do not prove interpolation. Then
-test Fixed 2x in gameplay outside Video settings, and measure presented output.
+To stop the native backend from loading, close the game and create an empty
+`BepInEx/TGFrameGeneration/disable-autoload.txt`. Setting Frame Generation to Off keeps the bridge
+running.
 
-To disable automatic native startup, close the game and place an empty
-`BepInEx/TGFrameGeneration/disable-autoload.txt`. Restart normally. Deployment
-preserves this marker and all existing settings. Remove/move the marker to resume
-autoload. Startup failure may leave partial hooks; restart after correcting it.
+## Known limits
 
-## Known limits — do not interpret the package as certified compatibility
+- Frame generation needs the game's DLSS upscaler as its input source (NVIDIA RTX, DLSS selected).
+- The HUD is interpolated with the scene. `TGFG_CaptureHudlessD3D11` can take a HUD-less frame if
+  something provides one, but nothing in the game does.
+- FSR and XeSS create their swapchain while the game presents. Whether every overlay (ReShade,
+  capture tools) handles that the way it handles the Streamline swapchain needs more testing.
+- One window, one adapter and one stable D3D11 back buffer. No stereo, MSAA swapchain, GDI
+  composition, dirty-rect or scroll Present1, non-blocking Present, several presenting windows,
+  device-loss recovery or unloading the native DLL while the game runs.
+- HDR10 output is 10-bit PQ and clips outside its range and gamut. There is no HDR-to-SDR tone
+  mapper.
+- The private swapchain and the frame copy stay active with frame generation Off.
+- A game that waits on the swapchain's frame-latency object gets a semaphore owned by the bridge,
+  and the private swapchains pace through a blocking Present. Pacing with such a game is
+  unverified.
+- The gameplay camera choice, HDRP's camera-relative matrices and the plugin-event order were
+  validated with DLSS-G.
 
-- No game-specific post-RenoDX/pre-HUD hook is installed. The native
-  `TGFG_CaptureHudlessD3D11` export can copy an explicitly provided correct frame;
-  it is not invoked by the generic managed adapter. Initial FG uses final color
-  with depth/motion and can distort HUD/crosshairs. It does not invent a clean HUD.
-- The selected gameplay camera, its matrices, HDRP camera-relative behavior,
-  motion-vector conventions and plugin-event ordering need visual validation.
-  NGX must use dynamically resolved D3D11 SuperSampling entrypoints. Static or
-  hidden providers, multiple evaluations/views, typeless motion input requiring
-  an unknown typed interpretation, or a different immediate context are rejected.
-- One primary HWND, one adapter, one stable DX11 logical buffer zero. No stereo,
-  MSAA swapchain, GDI composition, indexed source buffers, dirty/scroll Present1,
-  nonblocking Present, multiple presenting windows, device-loss recovery, or live
-  native unloading. Nonblocking requests return `WAS_STILL_DRAWING` without
-  consuming the frame; a client that only uses that mode is unsupported.
-- HDR10 conversion is not lossless FP16 presentation: it uses 10-bit PQ output and
-  clips outside its representable range/gamut. Linear scRGB input must actually
-  use the standard 80-nit unit. No arbitrary HDR format is reinterpreted as PQ,
-  no extra exposure is applied, and no automatic HDR-to-SDR tone mapper is supplied.
-- The private output swapchain remains allocated in Off mode, with bridge copies
-  still occurring. Turning FG Off is not equivalent to removing the bridge and
-  does not promise zero overhead. Mode-change swapchain teardown/recreation is
-  not implemented. NVIDIA-runtime behavior on those transitions needs testing.
-- Existing waitable-object flags are preserved. Their pacing interaction with FG
-  and your driver is unverified; they are not silently removed. Reflex timing is
-  based on Unity callbacks, not an NVIDIA-certified engine integration.
-- Some interfaces/events can be observed by multiple graphics injectors. The
-  interception order, COM wrappers, HUD ordering and resize/fullscreen behavior
-  with your actual RenoDX and ReShade versions remain unverified.
+`docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/SOURCES.md` and `docs/AUTOLOAD-INTEGRATION.md`
+cover the implementation, the test plan and the primary sources.
 
-To return to the original native path, exit and disable/remove the autoload
-preloader before launching normally through Steam. Removing only the gameplay
-plugin does not stop preloader initialization. No graphics proxy is replaced.
+## License
 
-See `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/VALIDATION.md` and
-`docs/SOURCES.md` for implementation detail, test boundaries and primary sources.
-
-Repository integration details: `docs/AUTOLOAD-INTEGRATION.md`.
+TGFG's source is MIT-licensed. The NVIDIA, AMD and Intel runtimes in a package keep their own
+licenses, which ship next to them; see `LICENSES/THIRD_PARTY.md`.

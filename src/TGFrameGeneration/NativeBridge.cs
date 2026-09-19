@@ -36,7 +36,7 @@ namespace TGFrameGeneration
                 var module=GetModuleHandleW("TGFG.Native.dll");
                 if(module==IntPtr.Zero) return false;
                 if(Bind<GetAbi>(module,"TGFG_GetAbiVersion")()!=Abi.Version)
-                { Detail="Native ABI mismatch. This managed build requires native ABI v4 (0x00040000). Rebuild/package the matching backend."; return false; }
+                { Detail="Native ABI mismatch. This managed build requires native ABI v5 (0x00050000). Rebuild/package the matching backend."; return false; }
                 var newSubmit=Bind<Submit>(module,"TGFG_Submit");
                 var newRead=Bind<Read>(module,"TGFG_ReadStatus");
                 begin=Bind<FrameCall>(module,"TGFG_BeginSimulation");
@@ -45,14 +45,14 @@ namespace TGFrameGeneration
                 RenderEvent=Bind<GetEvent>(module,"TGFG_GetRenderEvent")();
                 if(RenderEvent==IntPtr.Zero) throw new InvalidOperationException("No render event callback.");
                 submit=newSubmit; read=newRead;
-                Detail="Bound standalone TGFG.Native.dll, DX11-to-DX12 direct Streamline ABI v4. Gameplay plugin binds only; native startup belongs to the BepInEx preloader.";
+                Detail="Bound standalone TGFG.Native.dll, DX11-to-DX12 presentation bridge ABI v5. Gameplay plugin binds only; native startup belongs to the BepInEx preloader.";
                 return true;
             }
             catch(Exception ex) { Detail="Native binding failed: "+ex.Message; return false; }
         }
         internal bool Exchange(ref NativeRequest request,out NativeStatus status)
         {
-            status=new NativeStatus { Size=152, Abi=Abi.Version };
+            status=new NativeStatus { Size=(uint)Abi.StatusSize, Abi=Abi.Version };
             if(!Connected) return false;
             int result=submit(ref request);
             if(result!=0) { Detail="TGFG_Submit rejected request: "+result; return false; }

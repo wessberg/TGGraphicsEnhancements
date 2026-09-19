@@ -58,3 +58,29 @@ The upstream `main`/`dev` links are reference snapshots reviewed during this tas
 not version-pinned downloaded dependencies. Build inputs are the user's actual
 SDK checkout, MinHook v1.3.4, and Streamline 2.14.1. No hardware performance result
 from another mod is attributed to this implementation.
+
+## v0.5.0 references (AMD FSR, Intel XeSS, latency technologies)
+
+Reviewed 2026-09-19. Build inputs are the exact releases below; the runtimes are the signed
+binaries shipped in them.
+
+- AMD FSR SDK v2.3.0 (FSR API headers at the tag; signed loader and frame generation DLLs from
+  FidelityFX-Samples-v2.3.0-prebuilt.zip):
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.3.0
+- FSR API, DLL structure (the loader finds effect DLLs by module name):
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v2.3.0/Kits/FidelityFX/docs/getting-started/ffx-api.md
+- FSR frame generation API (configure, PrepareV2, callback dispatch, shutdown, thread safety):
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v2.3.0/Kits/FidelityFX/docs/techniques/frame-interpolation-api.md
+- FSR frame generation swapchain (creation for an HWND, pacing, waitable object):
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v2.3.0/Kits/FidelityFX/docs/techniques/frame-interpolation-swap-chain.md
+- FSR 4 ML frame generation requirements (RX 9000, camera data):
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v2.3.0/Kits/FidelityFX/docs/techniques/frame-interpolation-ml.md
+- Intel XeSS SDK v3.0.2 (XeSS-FG developer guide 1.3, XeLL developer guide 1.3, headers, signed DLLs):
+  https://github.com/intel/xess/releases/tag/v3.0.2
+- AMD Anti-Lag 2 SDK v2.0.0a (header, FSR frame generation private-data handshake):
+  https://github.com/GPUOpen-LibrariesAndSDKs/AntiLag2-SDK/releases/tag/v2.0.0a
+- NVIDIA Streamline SDK 2.14.1 release (streamline-sdk-v2.14.1.zip: signed production runtime in
+  bin/x64 with nvngx_dlss.license.txt and reflex.license.txt, Streamline's MIT license.txt):
+  https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1
+- NVIDIA Streamline DLSS-G guide, swapchain teardown/recreation (section 18):
+  https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/docs/ProgrammingGuideDLSS_G.md

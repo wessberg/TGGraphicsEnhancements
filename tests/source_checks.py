@@ -14,7 +14,7 @@ class SourceConsistency(unittest.TestCase):
     def test_managed_targets(self):
         tree = ET.fromstring(self.text("src/TGFrameGeneration/TGFrameGeneration.csproj"))
         self.assertEqual(tree.find(".//TargetFrameworks").text, "net6.0;net472")
-        self.assertEqual(tree.find(".//Version").text, "0.4.0")
+        self.assertEqual(tree.find(".//Version").text, "0.5.0")
         self.assertEqual(tree.find(".//PlatformTarget").text, "x64")
         self.assertIn("BEPINEX_MONO", self.text("src/TGFrameGeneration/TGFrameGeneration.csproj"))
         self.assertIn("BEPINEX_IL2CPP", self.text("src/TGFrameGeneration/TGFrameGeneration.csproj"))
@@ -22,10 +22,12 @@ class SourceConsistency(unittest.TestCase):
     def test_abi_and_exports(self):
         header = self.text("native/include/tgfg_api.h")
         managed = self.text("src/TGFrameGeneration/NativeAbi.cs")
-        self.assertIn("0x00040000", header)
-        self.assertIn("0x00040000", managed)
-        self.assertIn("sizeof(TGFG_Status)==152", header)
-        self.assertIn("typeof(NativeStatus)) != 152", managed)
+        self.assertIn("0x00050000", header)
+        self.assertIn("0x00050000", managed)
+        self.assertIn("sizeof(TGFG_Status)==188", header)
+        self.assertIn("sizeof(TGFG_Request)==48", header)
+        self.assertIn("sizeof(TGFG_Camera)==416", header)
+        self.assertIn("RequestSize = 48, StatusSize = 188, CameraSize = 416", managed)
         native = self.text("native/src/control.cpp")
         symbols = re.findall(r"TGFG_CALL\s+(TGFG_\w+)\(", header)
         self.assertEqual(len(symbols), 8)
@@ -39,17 +41,80 @@ class SourceConsistency(unittest.TestCase):
         cs_body = re.search(r"enum Reason[^\{]*\{([^}]+)", cs).group(1)
         values = lambda s: dict(re.findall(r"(\w+)\s*=\s*(\d+)", s))
         self.assertEqual(values(cpp_body), values(cs_body))
-        self.assertEqual(len(values(cpp_body)), 31)
+        self.assertEqual(len(values(cpp_body)), 33)
 
-    def test_no_alternative_fg_dependency(self):
+    def test_no_third_party_fg_wrapper(self):
+        # FSR and XeSS come from AMD's and Intel's own SDKs, never from a wrapper or patched runtime.
         paths = list((ROOT / "native").rglob("*")) + list((ROOT / "src").rglob("*.cs"))
         for path in paths:
             if not path.is_file() or path.suffix not in {".cpp", ".hpp", ".h", ".cs", ".hlsl"}:
                 continue
             text = path.read_text(encoding="utf-8").lower()
-            for forbidden in ["optiscaler", "fidelityfx", "ffx_fsr", "requires patched"]:
+            for forbidden in ["optiscaler", "requires patched"]:
                 self.assertNotIn(forbidden, text, path)
         self.assertFalse((ROOT / "tools" / "patch_optiscaler.py").exists())
+
+    def test_vendor_runtimes_are_signed_and_queried(self):
+        fsr = self.text("native/src/fsr_backend.cpp")
+        xess = self.text("native/src/xess_backend.cpp")
+        self.assertIn('L"ADVANCED MICRO DEVICES"', fsr)
+        self.assertIn('L"INTEL"', xess)
+        for token in ["FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12", "ffxDispatchDescFrameGenerationPrepareV2",
+                      "FFX_API_QUERY_DESC_TYPE_GET_VERSIONS"]:
+            self.assertIn(token, fsr)
+        # XeSS's multi-frame maximum comes from the runtime, and XeSS-FG always runs with XeLL.
+        for token in ["xefgSwapChainGetProperties", "XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES",
+                      "xefgSwapChainD3D12GetInitializationParameters", "xefgSwapChainSetLatencyReduction",
+                      "xefgSwapChainSetNumInterpolatedFrames", "XEFG_SWAPCHAIN_RV_ONLY_NOW"]:
+            self.assertIn(token, xess)
+        packaging = self.text("tools/Package.Common.ps1")
+        for token in ["'amd_fidelityfx_framegeneration_dx12.dll'", "'libxess_fg.dll'", "'libxell.dll'", "LICENSE-XeSS.txt", "LICENSE-FidelityFX.md",
+                      "'LICENSE-NVIDIA-RTX-SDKs.txt'", "'LICENSE-Streamline.txt'", "'LICENSE-NVIDIA-Reflex.txt'"]:
+            self.assertIn(token, packaging)
+
+    def test_single_latency_selector(self):
+        rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
+        caps = self.text("src/TGFrameGeneration/VideoCapabilities.cs")
+        policy = self.text("native/include/tgfg_policy.hpp")
+        self.assertIn('"Low Latency"', rows)
+        self.assertNotIn('"NVIDIA Reflex", 1, "Off", "On"', rows)
+        for label in ['"NVIDIA Reflex"', '"NVIDIA Reflex + Boost"', '"Intel XeLL"', '"AMD Anti-Lag 2"']:
+            self.assertIn(label, caps)
+        # Low latency may be Off only while frame generation is Off; a single choice greys the row out.
+        self.assertIn("if (selected == FrameGenerationSetting.Off) allowed.Add(LowLatencySetting.Off);", caps)
+        self.assertIn("latency.SetInteractabilityFunction(() => caps.AllowedLatencies(Selected).Length > 1);", rows)
+        self.assertIn("select_latency", policy)
+        self.assertIn("if(output==Output::XeSS) return c.xell?Latency::XeLL:Latency::Off;", policy)
+
+    def test_frame_generation_needs_dlss_upscaler(self):
+        rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
+        self.assertIn("upscaling.IsDLSSEnabled", rows)
+        self.assertIn("upscaling.UpscalingTypeOption.onChange += _ => RefreshInteractability();", rows)
+        self.assertIn("view.UpdateInteractability()", rows)
+
+    def test_plugin_identity(self):
+        plugin = self.text("src/TGFrameGeneration/Plugin.cs")
+        self.assertIn('Id = "com.wessberg.tgframegeneration"', plugin)
+        self.assertIn('Name = "TG Frame Generation"', plugin)
+        self.assertIn('BepInDependency("com.avalonmodmanager", BepInDependency.DependencyFlags.SoftDependency)', plugin)
+        self.assertLess(plugin.index("ModManagers.KeepOutOfAvalon(Id, Logger);"), plugin.index("Session.Start(Config, Logger);"))
+        for path in ["src/TGFrameGeneration/" + p for p in ["Plugin.cs", "Session.cs", "Diagnostics.cs", "NativeVideoSettings.cs"]]:
+            self.assertNotIn("xperimental", self.text(path), path)
+
+    def test_mod_manager_rows_match_video_tab(self):
+        # The plugin config holds exactly the Video tab's rows, under the Video tab's names; the rest is hidden.
+        settings = self.text("src/TGFrameGeneration/Settings.cs")
+        rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
+        names = re.findall(r'Row\(\w+Key, [^,]+, "([^"]+)", (\d)', settings)
+        self.assertEqual([n for n, _ in names], ["Frame Generation", "Frame Generation Mode", "Frame Multiplier",
+                                                  "Max Frame Multiplier", "Target Framerate", "Low Latency"])
+        self.assertEqual([int(o) for _, o in names], list(range(6)))
+        for name, _ in names:
+            self.assertIn('"' + name + '"', rows)
+        self.assertEqual(len(re.findall(r"file\.Bind\(AdvancedSection", settings)), 6)
+        self.assertEqual(len(re.findall(r"Hidden\(\n?\s*\"", settings)), 6)
+        self.assertNotIn("VideoSettings.cfg\")", self.text("src/TGFrameGeneration/Diagnostics.cs"))
+        self.assertIn("ModManagers.Tick();", self.text("src/TGFrameGeneration/Session.cs"))
 
     def test_private_interposer_name(self):
         # Streamline-aware injectors hook a module named sl.interposer.dll; TGFG loads its own under a private name.
@@ -66,7 +131,7 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(name, code)
         self.assertIn("sl::DLSSGMode::eDynamic", code)
         self.assertIn("dynamicTargetFrameRate", code)
-        self.assertIn("s.request.fixedMultiplier-1", code)
+        self.assertIn("generated_frames(s.request,s.status.maxGeneratedFrames)", code)
         self.assertIn("eBlockPresentingClientQueue", code)
 
     def test_api_separation(self):
@@ -138,7 +203,7 @@ class SourceConsistency(unittest.TestCase):
 
     def test_cmake_inputs_exist_and_shader_test_is_windows_only(self):
         cmake = self.text("CMakeLists.txt")
-        self.assertIn("VERSION 0.4.0", cmake)
+        self.assertIn("VERSION 0.5.0", cmake)
         for path in re.findall(r"(?:native|tests)/[\w/.-]+\.(?:cpp|hpp|hlsl|in)", cmake):
             self.assertTrue((ROOT / path).is_file(), path)
         self.assertNotIn("resource_tracker.cpp", cmake)
@@ -149,22 +214,22 @@ class SourceConsistency(unittest.TestCase):
     def test_installed_preflight(self):
         preflight = self.text("Test-Setup.ps1")
         helpers = self.text("tools/Package.Common.ps1")
-        compatibility = self.text("Launch-Game.ps1")
         self.assertIn("Get-FileHash", helpers)
         self.assertIn("Install-manifest.json", preflight)
         self.assertIn("Test-TgfgPayload", preflight)
         self.assertNotRegex(preflight, r"Join-Path[^\n]*artifacts")
         self.assertNotIn("TGFG.Launcher.exe", preflight)
-        self.assertIn("Test-Setup.ps1", compatibility)
-        self.assertNotIn("-force-d3d11", compatibility)
-        self.assertNotIn("Copy-Item", compatibility)
-        self.assertNotIn("Start-Process", compatibility)
+        # The retired launcher shim is gone; players start the game from Steam.
+        self.assertFalse((ROOT / "Launch-Game.ps1").exists())
 
     def test_testing_limits_disclosed(self):
-        readme = self.text("README.md").replace("**", "")
-        for token in ["experimental source", "not been compiled", "No FoA/GPU run", "not a verified", "HUD"]:
+        readme = " ".join(self.text("README.md").replace("**", "").split())
+        for token in ["not yet been confirmed in game", "IL2CPP builds (BepInEx 6) are untested", "The HUD is interpolated with the scene",
+                      "frame generation needs DLSS selected as the upscaler"]:
             self.assertIn(token, readme)
         self.assertNotIn("requires D3D12 game rendering", readme)
+        for path in ["README.md", "docs/PLAYER-INSTALL.txt"]:
+            self.assertNotIn("experimental", self.text(path).lower(), path)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

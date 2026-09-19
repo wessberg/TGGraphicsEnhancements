@@ -1,2 +1,0 @@
-[ 50%] Built target tgfg_policy_tests
-[100%] Built target tgfg_interop_tests

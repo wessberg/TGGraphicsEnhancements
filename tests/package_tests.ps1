@@ -10,6 +10,7 @@ Set-StrictMode -Version Latest
 function Assert-TgfgManagedVersion([string]$Path,[string]$Name,[string]$Version) { Assert-TgfgFile $Path }
 function Assert-TgfgAmd64([string]$Path) { Assert-TgfgFile $Path }
 function Assert-TgfgNvidiaSignature([string]$Path) { Assert-TgfgFile $Path }
+function Assert-TgfgSignature([string]$Path,[string]$Signer) { Assert-TgfgFile $Path }
 function Assert-TgfgGameClosed { }
 function Assert-TgfgGame([string]$GameDir,[string]$Runtime) { }
 $tests=0
@@ -32,7 +33,7 @@ try {
         Set-Content -LiteralPath $path -Value ('TEST FIXTURE - NOT A BINARY - '+$relative)
         $records += [ordered]@{path=$relative; sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
     }
-    $manifest=[ordered]@{version='0.4.0';runtime='Mono';framework='net472';native_version='0.4.0';native_abi='0x00040000';files=$records}
+    $manifest=[ordered]@{version='0.5.0';runtime='Mono';framework='net472';native_version='0.5.0';native_abi='0x00050000';files=$records}
     $manifestPath=Join-Path $stage 'TGFG-Package-manifest.json'
     $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath
     $valid=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
@@ -46,6 +47,14 @@ try {
     $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $bad.files=@($bad.files | Where-Object { $_.path -notlike '*/TGFG.Autoload.dll' })
     Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'Missing preloader was accepted.'
+    # NVIDIA's, AMD's and Intel's license terms require their notices next to their runtimes.
+    $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $bad.files=@($bad.files | Where-Object { $_.path -notlike '*/Streamline/LICENSE-NVIDIA-RTX-SDKs.txt' })
+    Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'A DLSS Frame Generation runtime without its license notice was accepted.'
+    $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $bad.files=@($bad.files | Where-Object { $_.path -notlike '*/XeSS/LICENSE-XeSS.txt' })
+    Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'A XeSS runtime without its license notice was accepted.'
+    Assert-True (@(Get-TgfgRequiredPaths) -contains 'BepInEx/TGFrameGeneration/Native/FidelityFX/amd_fidelityfx_framegeneration_dx12.dll') 'FSR runtime not packaged.'
     $file=Get-TgfgOwnedPath $stage $valid.files[0].path
     $original=[IO.File]::ReadAllBytes($file)
     Add-Content -LiteralPath $file -Value 'tampered'

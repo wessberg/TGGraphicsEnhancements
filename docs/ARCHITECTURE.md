@@ -1,10 +1,11 @@
-# Native v0.3 architecture and ownership (integrated package v0.3.1)
+# Native architecture and ownership (v0.5.0)
 
 This is original TGFG integration code. The Open Shaders implementation was read
 as an architectural precedent, not copied as a Skyrim backend dependency. The
-only external rendering backend loaded by TGFG is NVIDIA Streamline DLSS-G.
-Primary references are listed in SOURCES.md. No successful FoA rendering test is
-implied by the presence of these calls.
+frame generation backends are the vendors' own SDKs: NVIDIA Streamline DLSS-G, the
+AMD FSR API (FidelityFX SDK 2.3) and Intel XeSS-FG (XeSS SDK 3.0). Primary
+references are listed in SOURCES.md. DLSS-G and FSR frame generation have run in FoA;
+XeSS frame generation, XeLL and Anti-Lag 2 have not yet been confirmed in game.
 
 ## Source and output are distinct
 
@@ -14,10 +15,12 @@ D3D11 path. For one suitable game HWND, the returned object implements
 IDXGISwapChain through IDXGISwapChain4 but returns the **D3D11 device and a stable
 D3D11 logical buffer zero**. It never returns a D3D12 texture to Unity.
 
-The Streamline factory/device exports create a private D3D12 device on the same
-adapter LUID, a DIRECT command queue, and a three-buffer flip-discard output
-swapchain on the real game window. Streamline owns the actual output proxy.
-`insideSL` prevents these internal calls from being intercepted as game calls.
+On NVIDIA GPUs the Streamline device export creates a private D3D12 device on the
+same adapter LUID; Streamline binds to it when DLSS-G or Reflex is supported. Other
+GPUs get a plain D3D12 device. The bridge owns a DIRECT command queue and a
+three-buffer flip-discard output swapchain on the real game window, created by
+whichever frame generation technology is selected (see below). `insideSL` prevents
+these internal calls from being intercepted as game calls.
 
 The wrapper intentionally does not implement every possible DXGI client pattern:
 indexed source buffers, multiple HWNDs, arbitrary QueryInterface requests,
@@ -73,6 +76,44 @@ It has not been GPU-profiled; no speedup/latency/VRAM figure is promised. Off mo
 still uses the output bridge and copy. No mode-toggle output-swapchain recreation
 or device-loss recovery is implemented.
 
+## Frame generation technologies
+
+The presentation swapchain belongs to the selected technology:
+
+| Setting | Presentation swapchain | Generation |
+|---|---|---|
+| Off, DLSS | Streamline's proxy (native swapchain when Streamline is not bound) | DLSS-G options per frame; Off/Fixed/Dynamic |
+| FSR | FSR API frame generation swapchain (`ffxCreateContextDescFrameGenerationSwapChainForHwndDX12`) | configure + `PrepareV2` recorded on the bridge list; FSR dispatches generation in its Present callback |
+| XeSS | XeSS-FG proxy (`xefgSwapChainD3D12InitFromSwapChainDesc`) | frame constants, depth and motion tagged `RV_ONLY_NOW` on the bridge list; `SetPresentId` = XeLL frame id |
+
+A technology change recreates only this swapchain, between two frames on the presenting
+thread: generation is paused, the queue drained, the old swapchain released (SDK contexts after
+their proxy's last reference), the new one created from the stored client description, and color
+space and HDR metadata re-applied. The D3D11-facing wrapper, its buffers and the shared input
+textures are untouched. An SDK failure marks that technology failed for the session and the
+standard swapchain is recreated. The FSR/XeSS factory comes straight from the system dxgi.dll
+(hook trampoline), never from Streamline or an overlay.
+
+All technologies consume the same inputs: the DLSS SR evaluation's depth and motion vectors,
+its jitter and motion scale (NGX pixel scale), the camera packet and the observed DLSS feature
+flags (inverted depth, jittered or render-resolution vectors). XeSS additionally gets the
+world-to-view matrix from the camera packet. The SDKs copy the inputs during the bridge's own
+command list, so the consumer fence still covers their use.
+
+Maxima come from each runtime: Streamline's `numFramesToGenerateMax`, XeSS's
+`maxSupportedInterpolations` (queried before and after initialization), and one for FSR, whose
+API exposes no multi-frame control. Requests are clamped to the reported maximum.
+
+## Low latency
+
+One setting selects NVIDIA Reflex (+ Boost), Intel XeLL or AMD Anti-Lag 2. `select_latency`
+applies the pairings: DLSS-G requires Reflex; XeSS-FG runs with XeLL and nothing else, and on
+non-Intel GPUs XeLL works only together with XeSS-FG; Anti-Lag 2 needs an AMD driver. The sleep
+runs in `TGFG_BeginSimulation` (outside the state mutex), markers follow the existing PCL points
+(simulation, render submit, present), and XeLL's sleep mode changes only after a GPU drain, as
+Intel requires. With FSR on AMD GPUs the frame generation swapchain reports interpolated frames to
+Anti-Lag 2 through the documented swapchain private data.
+
 ## HDR
 
 `interop.hlsl` has four compiled entrypoints: depth copy, motion copy, fullscreen
@@ -110,6 +151,13 @@ after the selected NGX evaluation succeeded. It must use the source resolution
 and color format. The generic managed adapter does not call this export because
 no verified FoA post-RenoDX/pre-HUD stage has been identified. Default operation
 therefore has final color, depth and motion, but no promised HUD reconstruction.
+
+## Frame-latency object
+
+A client created with `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT` receives a
+bridge-owned semaphore, released once per presented frame, because a handle from the physical
+swapchain would stop being signalled when that swapchain is recreated. The physical swapchains
+are created without the flag and throttle through a blocking Present.
 
 ## Coexistence with ReShade, RenoDX and RenoDX DLSS
 

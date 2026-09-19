@@ -14,7 +14,7 @@ namespace TGFG.Autoload
 {
     internal static class Bootstrap
     {
-        private const uint ExpectedAbi = 0x00040000;
+        private const uint ExpectedAbi = 0x00050000;
         private const uint LoadLibrarySearchDllLoadDir = 0x00000100;
         private const uint LoadLibrarySearchDefaultDirs = 0x00001000;
         private static int attempted;
@@ -63,7 +63,7 @@ namespace TGFG.Autoload
                 logPath = Path.Combine(root, "Autoload.log");
                 int pid;
                 using (var process = Process.GetCurrentProcess()) pid = process.Id;
-                Write("=== TGFG.Autoload 0.4.0; PID=" + pid + "; " + runtime + " ===");
+                Write("=== TGFG.Autoload 0.5.0; PID=" + pid + "; " + runtime + " ===");
                 Write("Invoked by BepInEx preloader Initialize; no launcher, Unity call, or background worker.");
                 Write("Patcher=" + typeof(Bootstrap).Assembly.Location);
 

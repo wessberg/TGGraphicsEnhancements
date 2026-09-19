@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "dx11_bridge.hpp"
+#include "fg_backends.hpp"
 #include "interop_shader.hpp"
 #include <d3dcompiler.h>
+#include <filesystem>
 #include <array>
 #include <vector>
 #include <stdexcept>
@@ -18,6 +20,7 @@ namespace {
 struct DxError : std::runtime_error {
     HRESULT hr;
     DxError(HRESULT value,const char* what):std::runtime_error(what),hr(value){}
+    DxError(HRESULT value,const std::string& what):std::runtime_error(what),hr(value){}
 };
 void check(HRESULT hr,const char* what) { if(FAILED(hr)) throw DxError(hr,what); }
 std::string hexhr(HRESULT hr) { std::ostringstream s;s<<"0x"<<std::hex<<std::uppercase<<uint32_t(hr);return s.str(); }
@@ -85,6 +88,8 @@ struct ContextScope {
         context->SwapDeviceContextState(game.Get(),nullptr);
     }
 };
+const char* output_label(Output o) { return o==Output::FSR?"AMD FSR":o==Output::XeSS?"Intel XeSS":"standard"; }
+constexpr UINT kMaxLatency=16;
 class Dx11Swapchain;
 Dx11Swapchain* active=nullptr; // non-owning; all accesses under State::mutex
 thread_local uint32_t presentDepth=0;
@@ -103,7 +108,18 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     ComPtr<IDXGIFactory> clientFactory_;
     ComPtr<ID3D12Device> proxyDevice_;
     ComPtr<IDXGISwapChain4> output_;
-    ComPtr<ID3D12CommandQueue> queue_;
+    ComPtr<ID3D12CommandQueue> queue_, proxyQueue_; // native queue; Streamline's view of it for its swapchain
+    ComPtr<IDXGIOutput> restrictTo_;
+    std::unique_ptr<GeneratorOutput> generator_; // FSR/XeSS swapchain owner; null for the standard swapchain
+    // Replayed onto a recreated presentation swapchain.
+    DXGI_HDR_METADATA_TYPE hdrType_=DXGI_HDR_METADATA_TYPE_NONE;
+    std::vector<uint8_t> hdrMetadata_;
+    // The client's frame-latency object: a bridge-owned semaphore, independent of the presentation swapchain.
+    bool waitable_=false;
+    UINT maxLatency_=1;
+    Handle latencySemaphore_;
+    LARGE_INTEGER qpcFrequency_{}, lastPresent_{};
+    uint32_t fallbackPresentId_=0;
     ComPtr<ID3D12Fence> shared12_;
     ComPtr<ID3D11Fence> shared11_;
     Handle event_;
@@ -235,7 +251,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         }
         return colors;
     }
-    void buffers() { for(UINT i=0;i<3;++i) check(output_->GetBuffer(i,IID_PPV_ARGS(&backbuffers_[i])),"Get Streamline presentation buffer"); }
+    void buffers() { for(UINT i=0;i<3;++i) check(output_->GetBuffer(i,IID_PPV_ARGS(&backbuffers_[i])),"Get presentation buffer"); }
     void apply_color_space() {
         const auto out=DXGI_COLOR_SPACE_TYPE(output_color_space(clientDesc_.Format,sourceSpace_));UINT support=0;
         check(output_->CheckColorSpaceSupport(out,&support),"Query output color space");
@@ -272,6 +288,121 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         }
         if(slot.hudlessValid)s.status.bridgeFlags|=16u;else s.status.bridgeFlags&=~16u;
     }
+    static void create_native_device(IDXGIAdapter* adapter) {
+        const auto path=std::filesystem::path(system_directory())/L"d3d12.dll";
+        const HMODULE module=LoadLibraryW(path.c_str());
+        if(!module) throw DxError(HRESULT_FROM_WIN32(GetLastError()),"Load the system d3d12.dll");
+        const auto create=reinterpret_cast<decltype(&::D3D12CreateDevice)>(GetProcAddress(module,"D3D12CreateDevice"));
+        if(!create) throw DxError(E_NOINTERFACE,"The system d3d12.dll has no D3D12CreateDevice");
+        ComPtr<ID3D12Device> device;
+        check(create(adapter,D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&device)),"Create private D3D12 presentation device");
+        state().device=device;
+    }
+    void pause_generation() { if(generator_) generator_->quiesce(); else options_off(); }
+    // The presentation swapchain for one frame generation technology: the standard swapchain (a
+    // Streamline proxy that also hosts DLSS-G when Streamline is bound) or the FSR/XeSS SDK swapchain.
+    void create_output(Output kind) {
+        auto& s=state();
+        DXGI_SWAP_CHAIN_DESC1 outputDesc=clientDesc_;outputDesc.BufferCount=3;outputDesc.Format=DXGI_FORMAT(output_format(clientDesc_.Format));
+        outputDesc.SampleDesc={1,0};outputDesc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        outputDesc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;outputDesc.AlphaMode=DXGI_ALPHA_MODE_IGNORE;
+        // A client that waits on a frame-latency object gets the bridge's own (GetFrameLatencyWaitableObject),
+        // which outlives this swapchain; the swapchain itself throttles through a blocking Present.
+        outputDesc.Flags&=~UINT(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+        physicalFlags_=outputDesc.Flags;
+        ComPtr<IDXGIFactory2> factory;
+        if(kind==Output::Standard && s.slReady) check(s.sl.createFactory2(0,IID_PPV_ARGS(&factory)),"Create private Streamline DXGI factory");
+        else check(create_native_factory(IID_PPV_ARGS(&factory)),"Create native DXGI factory");
+        check(factory->MakeWindowAssociation(hwnd_,DXGI_MWA_NO_ALT_ENTER),"Keep fullscreen transitions under game control");
+        if(kind==Output::Standard) {
+            ComPtr<IDXGISwapChain1> output;
+            check(factory->CreateSwapChainForHwnd(s.slReady?proxyQueue_.Get():queue_.Get(),hwnd_,&outputDesc,&fullscreen_,restrictTo_.Get(),&output),
+                "Create private Streamline output swapchain");
+            check(output.As(&output_),"Query Streamline IDXGISwapChain4");
+            s.haveOptions=false; // a recreated Streamline swapchain receives the full DLSS-G options again
+        } else {
+            OutputParams params; params.hwnd=hwnd_; params.desc=outputDesc; params.fullscreen=&fullscreen_;
+            params.device=s.device.Get(); params.queue=queue_.Get(); params.factory=factory.Get();
+            params.hdr=output_color_space(clientDesc_.Format,sourceSpace_)==12; params.inputFlags=s.ngxFlags;
+            std::string error;
+            generator_=kind==Output::FSR?create_fsr_output(params,error):create_xess_output(params,error);
+            if(!generator_) throw DxError(E_FAIL,error);
+            output_=generator_->swapchain();
+        }
+        buffers();apply_color_space();
+        if(hdrType_!=DXGI_HDR_METADATA_TYPE_NONE)
+            output_->SetHDRMetaData(hdrType_,UINT(hdrMetadata_.size()),hdrMetadata_.empty()?nullptr:hdrMetadata_.data());
+        s.swapchain=output_.Get();s.output=kind;s.status.activeBackend=uint32_t(kind);
+        s.status.swapchainFormat=outputDesc.Format;
+    }
+    void destroy_output() {
+        auto& s=state();
+        if(generator_) generator_->quiesce();
+        else if(output_) { options_off(); for(auto& slot:s.frames.slots) if(slot.occupied) clear_tags(&slot.value); }
+        drain();
+        if(output_) {
+            BOOL fullscreen=FALSE;
+            if(SUCCEEDED(output_->GetFullscreenState(&fullscreen,nullptr)) && fullscreen) output_->SetFullscreenState(FALSE,nullptr);
+        }
+        for(auto& b:backbuffers_)b.Reset();
+        s.swapchain=nullptr; output_.Reset();
+        generator_.reset(); // SDK contexts go after the last reference to their swapchain
+        // DLSS-G's input fence belonged to the Streamline swapchain just released.
+        s.lastInputsFence.Reset(); s.lastInputsFenceValue=0;
+    }
+    Output desired_output() {
+        auto& s=state();
+        // Without a live plugin request the current swapchain stays; the plugin decides the technology.
+        if(!valid(s.request) || GetTickCount64()-s.heartbeat>1000) return s.output;
+        auto want=output_for(s.request);
+        const uint32_t bit=1u<<uint32_t(want);
+        if(want!=Output::Standard && (!(s.status.backendsAvailable&bit) || (s.status.backendFailedMask&bit))) want=Output::Standard;
+        return want;
+    }
+    // Only between frames, on the presenting thread: D3D11 keeps its buffers and never notices.
+    void switch_output(Output want) {
+        auto& s=state();
+        log(std::string("Presentation switching from the ")+output_label(s.output)+" to the "+output_label(want)+" swapchain");
+        destroy_output();
+        try { create_output(want); }
+        catch(const DxError& e) {
+            s.status.backendFailedMask|=1u<<uint32_t(want); s.status.backendResult=e.hr;
+            log(std::string(e.what())+" "+hexhr(e.hr)+"; "+output_label(want)+" frame generation is disabled for this session");
+            destroy_output();
+            create_output(Output::Standard);
+        }
+        allocatorRetired_.fill(0); lastPresent_.QuadPart=0;
+        log(std::string("Presenting through the ")+output_label(s.output)+" swapchain");
+    }
+    // FSR/XeSS: the frame's generation decision and SDK work, recorded before the list closes.
+    void record_generation(ID3D12GraphicsCommandList* cmd,Frame* frame,uint32_t presentId,float frameMs) {
+        auto& s=state();
+        GenerationInputs in{};
+        bool have=false;
+        if(frame && frame->inputs) {
+            auto& slot=inputs_[renderFrameId%inputs_.size()];
+            if(slot.occupied && slot.valid && slot.id==renderFrameId) {
+                in.depth=slot.depth.d12.Get(); in.motion=slot.motion.d12.Get();
+                in.depthWidth=slot.depth.width; in.depthHeight=slot.depth.height;
+                in.motionWidth=slot.motion.width; in.motionHeight=slot.motion.height;
+                in.jitterX=slot.constants.jitterOffset.x; in.jitterY=slot.constants.jitterOffset.y;
+                // Streamline's normalised scale back to NGX's scale to render-resolution pixels.
+                in.motionScaleX=slot.constants.mvecScale.x*float(slot.motion.width);
+                in.motionScaleY=slot.constants.mvecScale.y*float(slot.motion.height);
+                in.reset=slot.constants.reset==sl::eTrue; in.camera=&frame->camera; in.frameTimeMs=frameMs;
+                have=true;
+            }
+        }
+        if(frame) frame->inputsSubmitted=have;
+        const auto maxGenerated=generator_->max_generated();
+        const auto ready=frame_readiness(frame,s.status.swapchainFormat,maxGenerated,0,output_for(s.request)==s.output);
+        auto why=eligibility(s.request,ready);
+        const bool enable=why==Reason::Ready;
+        const bool recorded=generator_->record(cmd,presentId,enable?&in:nullptr,generated_frames(s.request,maxGenerated));
+        if(enable && !recorded) { why=Reason::BackendFailed; if(frame) frame->inputsSubmitted=false; }
+        if(enable && recorded) ++s.diag.tagged;
+        note_generation(frame,why,enable && recorded);
+    }
     HRESULT present(UINT sync,UINT flags,const DXGI_PRESENT_PARAMETERS* params) {
         SLGuard own; // private D3D12 calls are never rediscovered as game calls
         PresentDepthScope depth;
@@ -288,6 +419,16 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             return DXGI_ERROR_UNSUPPORTED;
         auto& s=state();
         if(!source_color_supported(clientDesc_.Format,sourceSpace_)) return DXGI_ERROR_UNSUPPORTED;
+        const auto want=desired_output();
+        if(want!=s.output || (generator_ && generator_->stale(s.ngxFlags))) switch_output(want);
+        const auto latency=update_latency();
+        const uint32_t interval=latency==Latency::XeLL?frame_limit_us(s.request.baseFpsLimit):0;
+        // XeLL's sleep mode may only change while the GPU is idle.
+        if(xell_mode_pending(latency==Latency::XeLL,interval)) { drain(); xell_apply(latency==Latency::XeLL,interval); }
+        LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+        const float frameMs=lastPresent_.QuadPart && qpcFrequency_.QuadPart ?
+            float(double(now.QuadPart-lastPresent_.QuadPart)*1000.0/double(qpcFrequency_.QuadPart)) : 0.f;
+        lastPresent_=now;
         auto& color=colors_.at(virtualIndex_);
         SharedTexture* final=&color.source;
         if(clientDesc_.Format==DXGI_FORMAT_R16G16B16A16_FLOAT) {
@@ -298,7 +439,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         check(queue_->Wait(shared12_.Get(),produced),"D3D12 wait for DX11 frame");
         // Required even though Unity itself only sees D3D11 buffers.
         const UINT index=output_->GetCurrentBackBufferIndex();
-        if(index>=3) throw DxError(E_UNEXPECTED,"Streamline returned invalid backbuffer index");
+        if(index>=3) throw DxError(E_UNEXPECTED,"Presentation swapchain returned an invalid backbuffer index");
         wait_cpu(allocatorRetired_[index]);
         check(allocators_[index]->Reset(),"Reset bridge command allocator");
         check(lists_[index]->Reset(allocators_[index].Get(),nullptr),"Reset bridge command list");
@@ -312,22 +453,27 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         cmd->ResourceBarrier(2,b);
         auto* frame=haveRenderFrame?s.frames.find(renderFrameId):nullptr;
         if(frame && frame->inputs) ++s.diag.presentsWithInputs;
-        if(frame && frame->inputs) {
+        // XeSS pairs its present IDs with XeLL's frame IDs, which are the game's frame numbers.
+        const uint32_t presentId=haveRenderFrame?renderFrameId:++fallbackPresentId_;
+        if(generator_) record_generation(cmd,frame,presentId,frameMs);
+        else if(frame && frame->inputs) {
             auto& slot=inputs_[renderFrameId%inputs_.size()];
-            if(slot.occupied && slot.valid && slot.id==renderFrameId) tag_inputs(slot,*frame);
+            if(s.dlssReady && frame->token && slot.occupied && slot.valid && slot.id==renderFrameId) tag_inputs(slot,*frame);
             else frame->inputsSubmitted=false;
         }
         check(cmd->Close(),"Close bridge command list");
         ID3D12CommandList* submit[]={cmd};queue_->ExecuteCommandLists(1,submit);++s.status.copiedFrames;
         // Always evaluate: Off must actively switch DLSS-G off (emergency key, menu), and the
-        // PCL present markers keep Reflex fed even when frame generation is not requested.
+        // present markers keep Reflex, XeLL or Anti-Lag 2 fed even when frame generation is not requested.
         // No per-frame logging here; the pipeline summary covers it every few seconds.
         before_present(output_.Get());
+        if(generator_) generator_->before_present(presentId);
         // Respect VSync unless the NVIDIA runtime explicitly says it cannot be
         // used with FG. In that case suspend FG, not the user's VSync setting.
-        if(sync && !s.vsyncSupported && s.status.lastAcceptedMode) {options_off();s.status.reason=uint32_t(Reason::VsyncUnsupported);}
+        else if(sync && !s.vsyncSupported && s.status.lastAcceptedMode) {options_off();s.status.reason=uint32_t(Reason::VsyncUnsupported);}
         const HRESULT hr=output_->Present(sync,flags);
-        if(FAILED(hr)) log("Private Streamline Present returned "+hexhr(hr));
+        if(FAILED(hr)) log("Private presentation Present returned "+hexhr(hr));
+        if(generator_) generator_->after_present();
         after_present(hr);
         if(FAILED(hr)) {broken_=true;return hr;}
         // This field is a borrowed NVIDIA fence. State holds its own COM ref.
@@ -343,6 +489,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         allocatorRetired_[index]=lastRetired_;
         check(c11_->Wait(shared11_.Get(),lastRetired_),"D3D11 wait before reusing shared inputs");c11_->Flush();
         ++s.status.sourcePresents;
+        if(latencySemaphore_.value) ReleaseSemaphore(latencySemaphore_.value,1,nullptr); // one presented frame retired
         virtualIndex_=next_virtual_buffer(virtualIndex_,clientDesc_.BufferCount,clientDesc_.SwapEffect);
         // A successful DXGI Present unbinds the render target in flip mode.
         if(clientDesc_.SwapEffect==DXGI_SWAP_EFFECT_FLIP_DISCARD || clientDesc_.SwapEffect==DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL)
@@ -357,12 +504,13 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(!plan.valid) return DXGI_ERROR_INVALID_CALL;
         if(flags&(DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE|DXGI_SWAP_CHAIN_FLAG_HW_PROTECTED|DXGI_SWAP_CHAIN_FLAG_RESTRICTED_CONTENT))return DXGI_ERROR_UNSUPPORTED;
         auto next=clientDesc_;next.Width=plan.width;next.Height=plan.height;next.Format=DXGI_FORMAT(plan.format);next.BufferCount=plan.count;next.Flags=flags;
-        options_off();drain();
-        for(auto& slot:state().frames.slots) if(slot.occupied)clear_tags(&slot.value);
+        if(generator_) generator_->quiesce();
+        else { options_off(); for(auto& slot:state().frames.slots) if(slot.occupied)clear_tags(&slot.value); }
+        drain();
         // Build replacements transactionally before touching the current chain.
         auto colors=make_colors(next);
         for(auto& b:backbuffers_)b.Reset();
-        const UINT physicalFlags=flags;
+        const UINT physicalFlags=flags&~UINT(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT); // see create_output
         const auto result=output_->ResizeBuffers(3,plan.width,plan.height,DXGI_FORMAT(output_format(plan.format)),physicalFlags);
         if(FAILED(result)) {buffers();return result;}
         const bool changedFormat=next.Format!=clientDesc_.Format;
@@ -374,6 +522,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(changedFormat)sourceSpace_=DXGI_COLOR_SPACE_TYPE(default_color_space(clientDesc_.Format));
         apply_color_space();state().status.sourceFormat=clientDesc_.Format;
         if(clientDesc_.Format==DXGI_FORMAT_R16G16B16A16_FLOAT)state().status.bridgeFlags|=8;else state().status.bridgeFlags&=~8u;
+        if(generator_) generator_->resized(plan.width,plan.height,DXGI_FORMAT(output_format(plan.format)));
         log("DX11 bridge resized to "+std::to_string(plan.width)+"x"+std::to_string(plan.height));return S_OK;
     }
     template<class Fn> HRESULT guarded(Fn&& fn) noexcept {
@@ -386,7 +535,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
 public:
     void initialize(ID3D11Device* game,IDXGIFactory* factory,HWND window,const DXGI_SWAP_CHAIN_DESC1& desc,
                     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full,IDXGIOutput* restrictTo) {
-        SLGuard own;auto& s=state();hwnd_=window;clientFactory_=factory;clientDesc_=desc;
+        SLGuard own;auto& s=state();hwnd_=window;clientFactory_=factory;clientDesc_=desc;restrictTo_=restrictTo;
         if(full)fullscreen_=*full;else fullscreen_.Windowed=TRUE;
         RECT rect{};check(GetClientRect(window,&rect)?S_OK:HRESULT_FROM_WIN32(GetLastError()),"Read game window dimensions");
         if(!clientDesc_.Width)clientDesc_.Width=UINT(std::max<LONG>(1,rect.right-rect.left));
@@ -407,17 +556,27 @@ public:
                 throw DxError(DXGI_ERROR_UNSUPPORTED,"A different adapter cannot reuse the Streamline instance");
             proxyDevice_=s.bridgeDeviceProxy;
         } else {
-            check(s.sl.createDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&proxyDevice_)),"Create private D3D12 presentation device");
-            on_device(proxyDevice_.Get());
-            if(!s.deviceReady)throw DxError(DXGI_ERROR_UNSUPPORTED,"Streamline could not bind the private D3D12 device");
-            s.bridgeDeviceProxy=proxyDevice_;
+            s.status.gpuVendor=ad.VendorId;
+            // Streamline hosts DLSS-G and Reflex on NVIDIA GPUs; otherwise a plain D3D12 device serves
+            // FSR, XeSS and the other latency technologies.
+            if(s.initialized && ad.VendorId==0x10DE) {
+                check(s.sl.createDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&proxyDevice_)),"Create private D3D12 presentation device");
+                on_device(proxyDevice_.Get());
+            }
+            if(!s.device) { proxyDevice_.Reset(); create_native_device(adapter.Get()); }
+            if(s.slReady) s.bridgeDeviceProxy=proxyDevice_; else proxyDevice_.Reset();
+            s.deviceReady=true;
+            probe_vendor_backends(s.device.Get(),ad.VendorId);
+            s.status.flags|=4u; // capability probes complete
         }
-        ComPtr<ID3D12CommandQueue> proxyQueue;D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
-        // The proxy sees mandatory CreateCommandQueue; submissions use its native interface.
-        check(proxyDevice_->CreateCommandQueue(&q,IID_PPV_ARGS(&proxyQueue)),"Create private present queue");
-        void* nativeQueue=nullptr;
-        if(s.sl.slGetNativeInterface(proxyQueue.Get(),&nativeQueue)!=sl::Result::eOk || !nativeQueue)throw DxError(E_FAIL,"Unwrap present queue");
-        queue_.Attach(static_cast<ID3D12CommandQueue*>(nativeQueue));
+        D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if(proxyDevice_) {
+            // The proxy sees mandatory CreateCommandQueue; submissions use its native interface.
+            check(proxyDevice_->CreateCommandQueue(&q,IID_PPV_ARGS(&proxyQueue_)),"Create private present queue");
+            void* nativeQueue=nullptr;
+            if(s.sl.slGetNativeInterface(proxyQueue_.Get(),&nativeQueue)!=sl::Result::eOk || !nativeQueue)throw DxError(E_FAIL,"Unwrap present queue");
+            queue_.Attach(static_cast<ID3D12CommandQueue*>(nativeQueue));
+        } else check(s.device->CreateCommandQueue(&q,IID_PPV_ARGS(&queue_)),"Create private present queue");
         check(s.device->CreateFence(0,D3D12_FENCE_FLAG_SHARED,IID_PPV_ARGS(&shared12_)),"Create cross-API fence");
         Handle fenceHandle;check(s.device->CreateSharedHandle(shared12_.Get(),nullptr,GENERIC_ALL,nullptr,&fenceHandle.value),"Export cross-API fence");
         check(d11_->OpenSharedFence(fenceHandle.value,IID_PPV_ARGS(&shared11_)),"Open cross-API fence on D3D11");
@@ -428,29 +587,25 @@ public:
             check(lists_[i]->Close(),"Close initial command list");
         }
         shaders();colors_=make_colors(clientDesc_);
-        ComPtr<IDXGIFactory2> privateFactory;
-        check(s.sl.createFactory2(0,IID_PPV_ARGS(&privateFactory)),"Create private Streamline DXGI factory");
-        DXGI_SWAP_CHAIN_DESC1 outputDesc=clientDesc_;outputDesc.BufferCount=3;outputDesc.Format=DXGI_FORMAT(output_format(clientDesc_.Format));
-        outputDesc.SampleDesc={1,0};outputDesc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        outputDesc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;outputDesc.AlphaMode=DXGI_ALPHA_MODE_IGNORE;
-        physicalFlags_=outputDesc.Flags;
-        check(privateFactory->MakeWindowAssociation(window,DXGI_MWA_NO_ALT_ENTER),"Keep fullscreen transitions under game control");
-        ComPtr<IDXGISwapChain1> output;
-        check(privateFactory->CreateSwapChainForHwnd(proxyQueue.Get(),window,&outputDesc,full,restrictTo,&output),"Create private Streamline output swapchain");
-        check(output.As(&output_),"Query Streamline IDXGISwapChain4");
-        buffers();apply_color_space();
-        s.presentQueue=queue_;s.swapchain=output_.Get();s.status.sourceApi=11;s.status.presentationApi=12;
-        s.status.sourceFormat=clientDesc_.Format;s.status.swapchainFormat=outputDesc.Format;
+        waitable_=(clientDesc_.Flags&DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)!=0;
+        QueryPerformanceFrequency(&qpcFrequency_);
+        // Frame generation technologies other than DLSS switch to their own swapchain on the first request.
+        create_output(Output::Standard);
+        s.presentQueue=queue_;s.status.sourceApi=11;s.status.presentationApi=12;
+        s.status.sourceFormat=clientDesc_.Format;
         s.status.bridgeFlags=1u|2u|4u|(clientDesc_.Format==DXGI_FORMAT_R16G16B16A16_FLOAT?8u:0u);
         active=this;registered_=true;
-        log("DX11 bridge ready: source format="+std::to_string(clientDesc_.Format)+" -> D3D12 format="+std::to_string(outputDesc.Format)+
-            "; same-adapter shared textures/fences; virtual buffers="+std::to_string(colors_.size())+"; output buffers=3");
+        std::ostringstream flags; flags<<std::hex<<std::uppercase<<clientDesc_.Flags<<", GPU vendor 0x"<<s.status.gpuVendor;
+        log("DX11 bridge ready: source format="+std::to_string(clientDesc_.Format)+" -> D3D12 format="+std::to_string(s.status.swapchainFormat)+
+            "; same-adapter shared textures/fences; virtual buffers="+std::to_string(colors_.size())+"; output buffers=3; client flags=0x"+flags.str()+
+            "; frame generation available: DLSS "+((s.status.backendsAvailable&2u)?"yes":"no")+", FSR "+((s.status.backendsAvailable&4u)?"yes":"no")+
+            ", XeSS "+((s.status.backendsAvailable&8u)?"up to "+std::to_string(s.status.xessMaxGenerated)+" generated":std::string("no")));
     }
     ~Dx11Swapchain() {
         std::lock_guard<std::recursive_mutex> lock(state().mutex);SLGuard own;
         if(registered_) {
-            options_off();
-            for(auto& slot:state().frames.slots)if(slot.occupied)clear_tags(&slot.value);
+            if(generator_) generator_->quiesce();
+            else { options_off(); for(auto& slot:state().frames.slots)if(slot.occupied)clear_tags(&slot.value); }
         }
         try {drain();}catch(const std::exception& e){log(std::string("Bridge teardown: ")+e.what());}
         if(registered_) {
@@ -459,6 +614,7 @@ public:
         }
         if(output_)output_->SetFullscreenState(FALSE,nullptr);
         for(auto& b:backbuffers_)b.Reset();output_.Reset();
+        generator_.reset();
         if(c11_)c11_->SetPrivateData(kImmediateContextTag,0,nullptr);
     }
     // True when the context is our immediate context, directly or through a forwarding wrapper.
@@ -528,7 +684,7 @@ public:
         return colors_[index].source.d11->QueryInterface(id,out);
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL value,IDXGIOutput* target) override {
-        return guarded([&]{options_off();drain();const auto r=output_->SetFullscreenState(value,target);if(SUCCEEDED(r))fullscreen_.Windowed=!value;return r;});
+        return guarded([&]{pause_generation();drain();const auto r=output_->SetFullscreenState(value,target);if(SUCCEEDED(r))fullscreen_.Windowed=!value;return r;});
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* value,IDXGIOutput** out) override {return output_->GetFullscreenState(value,out);}
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* d) override {
@@ -540,7 +696,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT n,UINT w,UINT h,DXGI_FORMAT f,UINT flags) override {return guarded([&]{return resize(n,w,h,f,flags);});}
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
-        if(!desc)return E_POINTER;return guarded([&]{options_off();drain();auto d=*desc;d.Format=DXGI_FORMAT(output_format(d.Format==DXGI_FORMAT_UNKNOWN?clientDesc_.Format:d.Format));return output_->ResizeTarget(&d);});
+        if(!desc)return E_POINTER;return guarded([&]{pause_generation();drain();auto d=*desc;d.Format=DXGI_FORMAT(output_format(d.Format==DXGI_FORMAT_UNKNOWN?clientDesc_.Format:d.Format));return output_->ResizeTarget(&d);});
     }
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override {return output_->GetContainingOutput(out);}
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {return output_->GetFrameStatistics(out);}
@@ -558,9 +714,30 @@ public:
     HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* r) override {return output_->GetRotation(r);}
     HRESULT STDMETHODCALLTYPE SetSourceSize(UINT w,UINT h) override {if(w!=clientDesc_.Width||h!=clientDesc_.Height)return DXGI_ERROR_UNSUPPORTED;return output_->SetSourceSize(w,h);}
     HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* w,UINT* h) override {return output_->GetSourceSize(w,h);}
-    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT n) override {return output_->SetMaximumFrameLatency(n);}
-    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* n) override {return output_->GetMaximumFrameLatency(n);}
-    HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override {return output_->GetFrameLatencyWaitableObject();}
+    // Frame-latency object semantics for a client that created its swapchain with the waitable flag.
+    // It must stay valid while the presentation swapchain is recreated for another frame generation
+    // technology, so it is a bridge-owned semaphore released once per presented frame.
+    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT n) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        if(!waitable_ || n<1 || n>kMaxLatency) return DXGI_ERROR_INVALID_CALL;
+        maxLatency_=n; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* n) override {
+        if(!n)return E_POINTER; std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        if(!waitable_) return DXGI_ERROR_INVALID_CALL;
+        *n=maxLatency_; return S_OK;
+    }
+    HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        if(!waitable_) return nullptr;
+        if(!latencySemaphore_.value) {
+            latencySemaphore_.value=CreateSemaphoreW(nullptr,LONG(maxLatency_),LONG(kMaxLatency),nullptr);
+            log("The game waits on a frame-latency object; the bridge provides it (maximum latency "+std::to_string(maxLatency_)+")");
+        }
+        HANDLE copy=nullptr;
+        if(!latencySemaphore_.value || !DuplicateHandle(GetCurrentProcess(),latencySemaphore_.value,GetCurrentProcess(),&copy,0,FALSE,DUPLICATE_SAME_ACCESS)) return nullptr;
+        return copy;
+    }
     HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* m) override {
         if(!m)return E_POINTER;if(m->_11!=1||m->_22!=1||m->_12||m->_21||m->_31||m->_32)return DXGI_ERROR_UNSUPPORTED;return output_->SetMatrixTransform(m);
     }
@@ -580,7 +757,13 @@ public:
     HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT n,UINT w,UINT h,DXGI_FORMAT f,UINT flags,const UINT* masks,IUnknown*const* queues) override {
         if(masks||queues)return DXGI_ERROR_UNSUPPORTED;return ResizeBuffers(n,w,h,f,flags);
     }
-    HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type,UINT size,void* data) override {return output_->SetHDRMetaData(type,size,data);}
+    HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type,UINT size,void* data) override {
+        return guarded([&]{
+            const auto hr=output_->SetHDRMetaData(type,size,data);
+            if(SUCCEEDED(hr)) { const auto* bytes=static_cast<const uint8_t*>(data); hdrType_=type; hdrMetadata_.assign(bytes,bytes+(data?size:0)); }
+            return hr;
+        });
+    }
 };
 } // namespace
 
@@ -596,7 +779,7 @@ HRESULT try_create_dx11_bridge(IUnknown* device,IDXGIFactory* factory,HWND hwnd,
     if(!out)return E_POINTER;*out=nullptr;
     if(insideSL || !device || !factory || !is_game_window(hwnd,desc.Width,desc.Height))return S_FALSE;
     auto& s=state();std::lock_guard<std::recursive_mutex> lock(s.mutex);
-    if(!s.initialized || active)return S_FALSE;
+    if(!s.bridgeAllowed || active)return S_FALSE;
     if(desc.SampleDesc.Count!=1 || desc.Stereo || desc.BufferCount<1 || desc.BufferCount>16 ||
        desc.SwapEffect==DXGI_SWAP_EFFECT_SEQUENTIAL || !source_format_supported(desc.Format) ||
        (desc.AlphaMode!=DXGI_ALPHA_MODE_UNSPECIFIED && desc.AlphaMode!=DXGI_ALPHA_MODE_IGNORE) ||

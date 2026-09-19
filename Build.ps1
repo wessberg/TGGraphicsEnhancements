@@ -37,8 +37,8 @@ foreach ($target in $targets) {
     $loader = Join-Path $PSScriptRoot "src\TGFG.Autoload\bin\$Configuration\$framework\TGFG.Autoload.dll"
     $context = Join-Path (Split-Path -Parent $plugin) 'TGFG.GameDir.txt'
     Assert-TgfgFile $context
-    Assert-TgfgManagedVersion $plugin 'TGFrameGeneration' '0.4.0.0'
-    Assert-TgfgManagedVersion $loader 'TGFG.Autoload' '0.4.0.0'
+    Assert-TgfgManagedVersion $plugin 'TGFrameGeneration' '0.5.0.0'
+    Assert-TgfgManagedVersion $loader 'TGFG.Autoload' '0.5.0.0'
     $game = (Get-Content -LiteralPath $context -Raw).Trim()
     if (-not $game) { throw "Empty evaluated game path: $context" }
     $stage = Join-Path $PSScriptRoot "artifacts\$target"
@@ -49,11 +49,11 @@ foreach ($target in $targets) {
         Copy-Item -LiteralPath $pair.Source -Destination $pair.Dest -Force
     }
     [ordered]@{
-        utc = [DateTime]::UtcNow.ToString('o'); version = '0.4.0'; runtime = $target
+        utc = [DateTime]::UtcNow.ToString('o'); version = '0.5.0'; runtime = $target
         framework = $framework; configuration = $Configuration; game_dir = $game
         managed_sha256 = (Get-FileHash -LiteralPath $pluginOut -Algorithm SHA256).Hash
         autoload_sha256 = (Get-FileHash -LiteralPath $loaderOut -Algorithm SHA256).Hash
-        native_abi = '0x00040000'; rendering_validated = $false
+        native_abi = '0x00050000'; rendering_validated = $false
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'build-manifest.json') -Encoding UTF8
     Write-Host "Built/staged ${target}: gameplay plugin AND autoload preloader -> $stage"
 }

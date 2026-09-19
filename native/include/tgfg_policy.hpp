@@ -13,18 +13,26 @@ enum class Reason : uint32_t {
     UnsupportedQueue=18, InputContractInvalid=19, ExistingStreamline=20,
     RuntimeNotSupported=21, CameraInvalid=22, PresentFailed=23,
     BridgeNotCreated=24, InteropFailure=25, UnsupportedColorSpace=26,
-    SourceDeviceMismatch=27, UnsupportedSourceLayout=28, BridgeReady=29, VsyncUnsupported=30
+    SourceDeviceMismatch=27, UnsupportedSourceLayout=28, BridgeReady=29, VsyncUnsupported=30,
+    BackendUnavailable=31, BackendFailed=32
 };
+enum class Backend : uint32_t { None=0, DLSS=1, FSR=2, XeSS=3 };
+enum class Latency : uint32_t { Off=0, Reflex=1, ReflexBoost=2, XeLL=3, AntiLag2=4 };
+// Presentation swapchain: the standard one (NVIDIA Streamline's proxy when Streamline is bound,
+// which also hosts DLSS-G) or the swapchain of the FSR or XeSS frame generation SDK.
+enum class Output : uint32_t { Standard=0, FSR=2, XeSS=3 };
+// ABI sanity bound only. The usable maximum is whatever the selected runtime reports.
+constexpr uint32_t kMaxMultiplier=16;
 inline bool valid(const TGFG_Request& r) {
     return r.size==sizeof(r) && r.abi==TGFG_ABI && r.mode<=2 &&
-        r.fixedMultiplier>=2 && r.fixedMultiplier<=6 &&
+        r.fixedMultiplier>=2 && r.fixedMultiplier<=kMaxMultiplier &&
         std::isfinite(r.dynamicTargetFps) && r.dynamicTargetFps>=0 && r.dynamicTargetFps<=1000 &&
-        std::isfinite(r.reflexBaseFpsLimit) && r.reflexBaseFpsLimit>=0 && r.reflexBaseFpsLimit<=1000 &&
-        r.reflexMode<=2;
+        std::isfinite(r.baseFpsLimit) && r.baseFpsLimit>=0 && r.baseFpsLimit<=1000 &&
+        r.latencyMode<=4 && r.backend<=3 && (r.mode==0 || r.backend!=0);
 }
 inline bool valid(const TGFG_Camera& c) {
     if(c.size!=sizeof(c) || c.abi!=TGFG_ABI || c.width==0 || c.height==0 || c.width>32768 || c.height>32768) return false;
-    const float* blocks[]={c.viewToClip,c.clipToView,c.clipToPrev,c.prevToClip};
+    const float* blocks[]={c.viewToClip,c.clipToView,c.clipToPrev,c.prevToClip,c.worldToView};
     for(auto p:blocks) for(int i=0;i<16;++i) if(!std::isfinite(p[i])) return false;
     const float* vectors[]={c.position,c.up,c.right,c.forward};
     for(auto p:vectors) for(int i=0;i<3;++i) if(!std::isfinite(p[i])) return false;
@@ -32,10 +40,17 @@ inline bool valid(const TGFG_Camera& c) {
         std::isfinite(c.fovRadians) && std::isfinite(c.aspect) &&
         c.nearPlane>0 && c.farPlane>c.nearPlane && c.fovRadians>0 && c.fovRadians<3.141593f && c.aspect>0;
 }
+inline Output output_for(const TGFG_Request& r) {
+    return r.backend==uint32_t(Backend::FSR)?Output::FSR:r.backend==uint32_t(Backend::XeSS)?Output::XeSS:Output::Standard;
+}
+// Generated frames per rendered frame: the request clamped to what the active runtime reports.
+inline uint32_t generated_frames(const TGFG_Request& r,uint32_t maxGenerated) {
+    return std::max(1u,std::min(r.fixedMultiplier-1,maxGenerated));
+}
 struct Readiness {
     bool sdk=false, caps=false, renderFrame=false, inputs=false, inputContract=false;
     uint32_t ageMs=0, maxGenerated=0, dynamicSupported=0, format=0, evalCount=0;
-    bool fatal=false, dx11Bridge=false;
+    bool fatal=false, dx11Bridge=false, backend=true; // backend: the requested technology is the one presenting
 };
 inline Reason eligibility(const TGFG_Request& r, const Readiness& s) {
     if(!valid(r)) return Reason::NoClient;
@@ -46,9 +61,10 @@ inline Reason eligibility(const TGFG_Request& r, const Readiness& s) {
     if(r.suspensionMask) return Reason::Suspended;
     if(s.fatal) return Reason::NativeError;
     if(!s.sdk) return Reason::WaitingBackend;
+    if(!s.backend) return Reason::BackendUnavailable;
     if(!s.caps) return Reason::CapsUnknown;
     if(s.format==10 || s.format==0) return Reason::UnsupportedFormat; // scRGB/FP16 or unknown
-    if(r.fixedMultiplier-1>s.maxGenerated) return Reason::MultiplierUnsupported; // fixed multiplier or dynamic upper bound
+    if(s.maxGenerated==0) return Reason::MultiplierUnsupported; // the multiplier itself is clamped to the maximum
     if(r.mode==2 && !s.dynamicSupported) return Reason::DynamicUnsupported;
     if(!s.renderFrame) return Reason::MissingRenderEvent;
     if(s.evalCount>1) return Reason::MultipleDlssViews;
@@ -56,6 +72,18 @@ inline Reason eligibility(const TGFG_Request& r, const Readiness& s) {
     if(!s.inputContract) return Reason::InputContractInvalid;
     if(!s.inputs) return Reason::NoDlssInputs;
     return Reason::Ready;
+}
+struct LatencyCaps { bool reflex=false, xell=false, xellStandalone=false, antiLag2=false; };
+// XeSS Frame Generation runs with XeLL and no other latency technology. DLSS Frame Generation
+// requires Reflex. Otherwise the user's choice applies when this GPU supports it.
+inline Latency select_latency(const TGFG_Request& r, Output output, bool dlssGenerating, const LatencyCaps& c) {
+    if(output==Output::XeSS) return c.xell?Latency::XeLL:Latency::Off;
+    const auto want=static_cast<Latency>(r.latencyMode);
+    if((want==Latency::Reflex || want==Latency::ReflexBoost) && c.reflex) return want;
+    if(want==Latency::XeLL && c.xellStandalone) return want;
+    if(want==Latency::AntiLag2 && c.antiLag2) return want;
+    if(dlssGenerating && c.reflex) return Latency::Reflex;
+    return Latency::Off;
 }
 inline uint32_t frame_limit_us(float fps) {
     return fps>0 && std::isfinite(fps) ? static_cast<uint32_t>(std::lround(1000000.0/std::max(1.0f,fps))) : 0;

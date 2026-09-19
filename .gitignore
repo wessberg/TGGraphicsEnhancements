@@ -14,3 +14,7 @@ TGFG-*.txt
 # Third-party SDK downloads and checkouts (fetched locally, see docs/SOURCES.md)
 /*.zip
 /Streamline-*/
+/XeSS-SDK-*/
+/FidelityFX-SDK-*/
+/AntiLag2-SDK-*/
+/_sdk_dl/

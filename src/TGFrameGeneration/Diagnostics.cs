@@ -14,7 +14,7 @@ namespace TGFrameGeneration
             try
             {
                 var sb=new StringBuilder();
-                sb.AppendLine("TGFrameGeneration " + Plugin.Version + " — experimental diagnostic report");
+                sb.AppendLine("TGFrameGeneration " + Plugin.Version + " diagnostic report");
                 sb.AppendLine("UTC: " + DateTime.UtcNow.ToString("O"));
                 using(var identity=Process.GetCurrentProcess()) sb.AppendLine("Managed process PID: " + identity.Id);
 #if BEPINEX_IL2CPP
@@ -28,8 +28,12 @@ namespace TGFrameGeneration
                 sb.AppendLine("GPU: " + SystemInfo.graphicsDeviceName);
                 sb.AppendLine("Render size: " + Screen.width + "x" + Screen.height + " @ " + Screen.currentResolution.refreshRateRatio.value.ToString("0.##") + " Hz");
                 var s=Session.Settings;
-                sb.AppendLine("Video settings: frame generation " + s.FrameGeneration.Value + ", mode " + s.Mode.Value + ", multiplier " + s.Multiplier.Value + "x, dynamic max " + s.MaxMultiplier.Value +
-                    "x, target " + s.TargetFps.Value + ", Reflex " + s.Reflex.Value + ", base limit " + s.BaseLimit.Value + " (" + Settings.VideoFilePath + ")");
+                sb.AppendLine("Video settings: frame generation " + s.FrameGeneration + ", mode " + s.Mode + ", multiplier " + s.Multiplier + "x, dynamic max " + s.MaxMultiplier +
+                    "x, target " + s.TargetFps + ", low latency " + s.LowLatency + ", base limit " + s.BaseLimit.Value + " (" + s.File.ConfigFilePath + ")");
+                sb.AppendLine("Capabilities: " + (s.Capabilities == null ? "not reported yet" :
+                    "technologies " + string.Join(",", Array.ConvertAll(s.Capabilities.Backends, b => b.ToString())) +
+                    ", low latency " + string.Join(",", Array.ConvertAll(s.Capabilities.Latencies, l => l.ToString())) +
+                    ", DLSS inputs " + (s.Capabilities.InputSource ? "available" : "unavailable (not an NVIDIA GPU)")));
                 sb.AppendLine("Bridge: " + Session.Bridge.Detail);
                 sb.AppendLine("Frame bridge: " + FrameBridge.Detail + " | camera markers queued: " + FrameBridge.CamerasQueued);
                 sb.AppendLine("Status: " + Session.StatusText);

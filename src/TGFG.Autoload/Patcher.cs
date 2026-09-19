@@ -17,7 +17,7 @@ namespace TGFG.Autoload
 using BepInEx.Preloader.Core.Patching;
 namespace TGFG.Autoload
 {
-    [PatcherPluginInfo("tgfg.autoload", "TGFG native autoload", "0.4.0")]
+    [PatcherPluginInfo("tgfg.autoload", "TGFG native autoload", "0.5.0")]
     public sealed class Patcher : BasePatcher
     {
         public override void Initialize() { Bootstrap.Run("IL2CPP / BepInEx 6"); }

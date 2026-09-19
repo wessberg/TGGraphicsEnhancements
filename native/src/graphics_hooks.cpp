@@ -85,6 +85,13 @@ HRESULT WINAPI combined_hook(IDXGIAdapter* adapter,D3D_DRIVER_TYPE driver,HMODUL
 }
 static_assert(std::is_same_v<decltype(&combined_hook),decltype(&::D3D11CreateDeviceAndSwapChain)>);
 }
+HRESULT create_native_factory(REFIID iid,void** out) {
+    // The trampoline reaches the system CreateDXGIFactory2 without our export hook, so the factory
+    // is neither re-hooked nor a Streamline proxy. Its swapchain calls still pass our vtable hooks,
+    // which step aside while insideSL is set.
+    if(!realFactory2) return E_FAIL;
+    SLGuard bypass; return realFactory2(0,iid,out);
+}
 bool add_hook(void* target,void* detour,void** original) {
     if(!target || !detour) return false;
     std::lock_guard<std::mutex> guard(hooksMutex);
@@ -125,7 +132,7 @@ bool install_graphics_hooks() {
     HOOK(dxgi,"CreateDXGIFactory2",factory2_hook,realFactory2);
     HOOK(d11,"D3D11CreateDeviceAndSwapChain",combined_hook,realCombined);
 #undef HOOK
-    log("D3D11 swapchain-creation hooks installed. Game factories remain native; only the private D3D12 output uses Streamline proxies.");
+    log("D3D11 swapchain-creation hooks installed. Game factories remain native; only the private D3D12 output is replaced.");
     return true;
 }
 } // namespace tgfg

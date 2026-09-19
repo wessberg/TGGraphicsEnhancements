@@ -30,9 +30,8 @@ namespace TGFrameGeneration
             // A monotonic per-session seed avoids collision after a managed reload in the same process.
             sequence=(ulong)DateTime.UtcNow.Ticks;
             width=Screen.width; height=Screen.height;
-            Log.LogInfo("TGFG experimental: native Video settings adapter loaded; rendering is NOT verified. " +
-                "Graphics API: " + SystemInfo.graphicsDeviceType + ". Frame generation " + Settings.FrameGeneration.Value +
-                " (" + Settings.VideoFilePath + ").");
+            Log.LogInfo("TGFG " + Plugin.Version + " loaded. Graphics API: " + SystemInfo.graphicsDeviceType +
+                ". Frame generation " + Settings.FrameGeneration + ", low latency " + Settings.LowLatency + " (" + Settings.File.ConfigFilePath + ").");
         }
         internal static void Tick()
         {
@@ -40,6 +39,7 @@ namespace TGFrameGeneration
             try
             {
                 float now=Time.unscaledTime;
+                ModManagers.Tick(); // catches its own failures
                 NativeVideoSettings.Tick(now); // catches its own failures
                 if(Settings.EmergencyKey.Value!=KeyCode.None && Input.GetKeyDown(Settings.EmergencyKey.Value))
                     Settings.SetFrameGenerationOff();
@@ -53,7 +53,12 @@ namespace TGFrameGeneration
                 else request.Sequence=sequence;
                 NativeStatus result;
                 HaveStatus=Bridge.Exchange(ref request,out result);
-                if(HaveStatus) Status=result;
+                if(HaveStatus)
+                {
+                    Status=result;
+                    // The rows and mod-manager entries offer what the runtimes report for this GPU.
+                    if(Status.CapsKnown && Settings.Capabilities==null) Settings.ApplyCapabilities(new VideoCapabilities(true,Status));
+                }
                 string report=(HaveStatus ? Status.Reason + "/" + Status.DlssgStatus + "/" + Status.LastSetOptionsResult : Bridge.Detail) + "/" + Suspension;
                 if(report!=lastReport) { lastReport=report; Log.LogInfo(StatusText); }
             }
@@ -82,20 +87,26 @@ namespace TGFrameGeneration
             float limit=Settings.BaseLimit.Value;
             if(limit>0 && limit<1) limit=1;
             var mode=Settings.RequestedMode;
+            var backend=Settings.FrameGeneration;
+            int multiplier=mode==GenerationMode.Dynamic ? Settings.MaxMultiplier : Settings.Multiplier;
+            // Clamp to what the selected runtime reports; native clamps again, so this is only for clarity in logs.
+            uint reported=HaveStatus && Status.CapsKnown ? Status.MaxGenerated(backend) : 0;
+            if(reported>0) multiplier=Math.Min(multiplier,(int)reported+1);
             return new NativeRequest {
                 Size=(uint)Abi.RequestSize, Abi=Abi.Version, Sequence=sequence,
                 Mode=(uint)mode,
-                FixedMultiplier=(uint)Mathf.Clamp(mode==GenerationMode.Dynamic ? Settings.MaxMultiplier.Value : Settings.Multiplier.Value,2,6),
-                DynamicTargetFps=Mathf.Clamp(Settings.TargetFps.Value,0,1000), ReflexBaseFpsLimit=limit,
+                FixedMultiplier=(uint)Mathf.Clamp(multiplier,2,Settings.MaxMultiplierBound),
+                DynamicTargetFps=Mathf.Clamp(Settings.TargetFps,0,1000), BaseFpsLimit=limit,
                 SuspensionMask=(uint)suspension,
                 SourceGraphicsApi=SystemInfo.graphicsDeviceType==GraphicsDeviceType.Direct3D12 ? 12u :
                     SystemInfo.graphicsDeviceType==GraphicsDeviceType.Direct3D11 ? 11u : 0u,
-                ReflexMode=(uint)Mathf.Clamp((int)Settings.Reflex.Value,0,2)
+                LatencyMode=(uint)Mathf.Clamp((int)Settings.LowLatency,0,4),
+                Backend=mode==GenerationMode.Off ? 0u : (uint)backend
             };
         }
         private static bool Same(NativeRequest a, NativeRequest b) => a.Mode==b.Mode && a.FixedMultiplier==b.FixedMultiplier &&
-            a.DynamicTargetFps==b.DynamicTargetFps && a.ReflexBaseFpsLimit==b.ReflexBaseFpsLimit &&
-            a.SuspensionMask==b.SuspensionMask && a.SourceGraphicsApi==b.SourceGraphicsApi && a.ReflexMode==b.ReflexMode;
+            a.DynamicTargetFps==b.DynamicTargetFps && a.BaseFpsLimit==b.BaseFpsLimit &&
+            a.SuspensionMask==b.SuspensionMask && a.SourceGraphicsApi==b.SourceGraphicsApi && a.LatencyMode==b.LatencyMode && a.Backend==b.Backend;
         internal static void Stop()
         {
             if(stopped) return;

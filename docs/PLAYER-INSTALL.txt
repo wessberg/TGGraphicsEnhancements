@@ -1,38 +1,51 @@
-TGFrameGeneration 0.4.0 - experimental direct Streamline / DX11 bridge
+TG Frame Generation 0.5.0: DLSS, FSR and XeSS frame generation with Reflex, XeLL or Anti-Lag 2
 
-Requires the corresponding existing BepInEx installation:
-  Mono:   BepInEx 5
-  IL2CPP: BepInEx 6 IL2CPP
-Install only ONE runtime package in each game installation.
+Requires BepInEx for your game version:
+  Mono (modding) branch:  BepInEx 5
+  Standard (IL2CPP):      BepInEx 6 IL2CPP (untested)
+Install only ONE runtime package per game installation.
 
-Close the game. Merge this package's BepInEx folder into the game installation.
-Do not install any launcher, replace a graphics proxy, change Steam launch options,
-or create steam_appid.txt. Press Play in Steam normally after installation.
-The ZIP's TGFG-Package-manifest.json can optionally be placed in the game root for
-Test-Setup.ps1; player startup does not depend on that manifest.
+Close the game and merge this package's BepInEx folder into the game folder. Nothing else is
+needed: no launcher, no replaced graphics DLL, no Steam launch options, no steam_appid.txt.
+Start the game from Steam as usual. TGFG-Package-manifest.json can go in the game folder for
+Test-Setup.ps1; the game doesn't need it.
 
-Keep generation Off for the first test. Loading the DLL is not proof of working FG.
-Review these game-local logs:
+Options > Video gains two rows below the upscaler:
+  Frame Generation  Off, or DLSS, FSR or XeSS as supported by your GPU. It uses the motion
+                    vectors and depth of the game's DLSS upscaling, so select DLSS as the
+                    upscaler first; the row stays greyed out otherwise. That needs an NVIDIA
+                    RTX GPU. RTX 20 and 30 cards can use FSR or XeSS frame generation.
+  Low Latency       NVIDIA Reflex, Intel XeLL or AMD Anti-Lag 2, as supported. It stays on
+                    while frame generation is on: DLSS needs Reflex and XeSS uses XeLL.
+FoA Mod Manager shows the same rows. The settings are saved in
+  BepInEx/config/com.wessberg.tgframegeneration.cfg
+Settings from older TGFG versions are carried over on first start.
+
+F8 turns frame generation off. If something looks wrong, check these logs:
   BepInEx/TGFrameGeneration/Autoload.log
   BepInEx/TGFrameGeneration/Native/TGFG.Native.log
-The diagnostic report (main config: 04 Diagnostics > Write diagnostic report now) includes an autoload log tail.
+For a diagnostic report, set "Write diagnostic report now" to true in the [Advanced] section
+of the config file. Reports go to BepInEx/TGFrameGeneration/diagnostics; read one before sharing it.
 
-To disable automatic native loading, close the game and create an empty:
+To stop TGFG from loading its graphics backend, close the game and create an empty
   BepInEx/TGFrameGeneration/disable-autoload.txt
-Restart normally. Setting Frame Generation to Off in Options > Video is NOT the same as removing the bridge.
+Setting Frame Generation to Off is not the same: the backend keeps running.
 
-Updating by hand from 0.3.x: TGFG now installs NVIDIA's Streamline interposer as
-  BepInEx/TGFrameGeneration/Native/Streamline/TGFG.Streamline.dll
-(the same NVIDIA-signed file under a private name, so DLSS 5 / RenoDX DLSS does not hook it).
-Delete the old BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll; it is no longer used.
+Updating by hand from 0.4.x or 0.3.x: copy the whole BepInEx folder of this package, including
+Native/FidelityFX and Native/XeSS. Delete BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll
+if it's there: TGFG now uses NVIDIA's interposer under the name TGFG.Streamline.dll, so the RenoDX
+DLSS addon ("DLSS 5") doesn't hook it.
 
-For uninstall, close the game and remove only these TGFG files:
+To uninstall, close the game and remove these TGFG files:
   BepInEx/patchers/TGFG.Autoload.dll
-  BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
-  BepInEx/TGFrameGeneration/Native/   (TGFG private backend and runtime copies)
-The TGFG config and logs may be kept. Do not remove BepInEx itself or other mods.
+  BepInEx/plugins/TGFrameGeneration/
+  BepInEx/TGFrameGeneration/Native/
+The config file and logs can stay. Don't remove BepInEx itself or other mods.
 
-This package is not a verified rendering release. Startup ordering, Mono/IL2CPP
-behavior and RenoDX coexistence still require testing. It has not been shown to
-produce correct FG in FoA. No arbitrary DX12 switch is needed by the mod; Unity's
-active renderer must be DX11 for this backend.
+The NVIDIA, AMD and Intel runtimes in Native/ are redistributed under their own licenses, which
+are next to them: Native/Streamline/LICENSE-*.txt, Native/FidelityFX/LICENSE-FidelityFX.md and
+Native/XeSS/LICENSE-XeSS.txt.
+
+Tested on an RTX 5080: DLSS frame generation (fixed and dynamic, with and without ReShade + RenoDX
+HDR and the RenoDX DLSS addon) and FSR frame generation. XeSS frame generation, XeLL and Anti-Lag 2
+have not yet been confirmed in game. The game must render with Direct3D 11, its default.
