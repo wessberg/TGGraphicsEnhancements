@@ -142,11 +142,18 @@ monitor; out-of-range/gamut values are clipped and a 10-bit output is used.
 
 ## BepInEx and frame identity
 
-The existing managed plugin sends simulation boundaries and camera packets, and
-queues native render-thread callbacks through Unity command buffers. The ABI is
-`0x00030000`; structures use pack 4: request 40 bytes, camera 352, status 152.
-Both managed runtimes use the same native interface. New status fields distinguish
-D3D11 source rendering from D3D12 output presentation.
+The managed plugin sends simulation boundaries, camera packets and HDRP input
+packets, and queues native render-thread callbacks through Unity command buffers.
+The ABI is `0x00050000`; structures use pack 4: request 48 bytes, camera 416,
+status 188, HDRP inputs 48. Both managed runtimes use the same native interface
+and the same C# sources. Status fields distinguish D3D11 source rendering from
+D3D12 output presentation.
+
+Under IL2CPP, the classes TGFG derives from game and HDRP types (the Video tab's
+Setting and DependentOption, HDRP's CustomPass) are registered with Il2CppInterop,
+which sends the base class's virtual calls to the managed methods of the same name
+and parameter types. Il2CppInterop allocates these objects without running the
+IL2CPP base constructor, so `Il2CppTypes.Construct` runs it.
 
 Fixed N× sends N-1 generated frames. Dynamic sends NVIDIA's eDynamic and target
 FPS. Requested and accepted modes/sequences remain distinct. A request is not

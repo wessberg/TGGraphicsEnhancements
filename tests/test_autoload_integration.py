@@ -79,7 +79,8 @@ class AutoloadIntegration(unittest.TestCase):
         self.assertIn("'artifacts\\Native'",source)
         self.assertIn("$nativeManifest.version -ne '0.5.0'",source)
         # Forward-slash zip entries (not Compress-Archive) and the Nexus download copy.
-        self.assertIn("New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json','TGFG-PLAYER-INSTALL.txt')",source)
+        self.assertIn("New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json')",source)
+        self.assertNotIn('PLAYER-INSTALL',source)
         self.assertNotIn('Compress-Archive',source)
         self.assertIn("'artifacts/Nexus/' + (Get-TgfgNexusName $target)",source)
 

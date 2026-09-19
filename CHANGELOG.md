@@ -17,14 +17,21 @@
   post-processing hands the native side HDRP's own depth and motion vectors (TGFG_SetHdrpInputs,
   render event 3), with HDRP's TAA jitter and the motion vector scale HDRP gives DLSS. DLSS's
   inputs take precedence while it runs. FSR and XeSS frame generation therefore work on AMD and
-  Intel GPUs. Where the HDRP path is missing (IL2CPP), the rows are greyed out unless DLSS is the
+  Intel GPUs. If the custom pass can't be installed, the rows are greyed out unless DLSS is the
   selected upscaler.
+- The standard version (IL2CPP, BepInEx 6) has the same Video rows and HDRP input path as the Mono
+  build, from the same sources. TGFG's subclasses of the game's Setting and DependentOption and of
+  HDRP's CustomPass are registered with Il2CppInterop, which routes the base class's virtual calls
+  to them. Il2CppInterop allocates those objects without running the IL2CPP base constructor, so
+  TGFG runs it (Il2CppTypes.Construct).
 - Packages include NVIDIA's license notices next to the Streamline runtime
   (LICENSE-Streamline.txt, LICENSE-NVIDIA-RTX-SDKs.txt, LICENSE-NVIDIA-Reflex.txt), staged from
   the SDK release by Stage-Runtime.ps1.
 - Packaging writes zip entries with forward slashes (Compress-Archive in Windows PowerShell used
   backslashes) and copies each package to artifacts/Nexus as "TGFrameGeneration - mono.zip" or
   "TGFrameGeneration.zip". Build paths are mapped, so the DLLs no longer name local folders.
+  A package holds the BepInEx folder and TGFG-Package-manifest.json; TGFG-PLAYER-INSTALL.txt is
+  no longer included.
 - Removed leftovers of the 0.3 patch workflow: APPLY.md, integrate-autoload.patch,
   source-manifest.json, the validation logs, docs/VALIDATION.md, the retired Launch-Game.ps1 and
   the 0.3 example config.

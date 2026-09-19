@@ -37,20 +37,13 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine" Condition="Exists('$(UnityReferenceDir)\UnityEngine.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
-    <!-- Game settings model for the native Video-tab rows (Mono only). -->
-    <Reference Include="TG.Main"><HintPath>$(UnityReferenceDir)\TG.Main.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Awaken.Utility" Condition="Exists('$(UnityReferenceDir)\Awaken.Utility.dll')"><HintPath>$(UnityReferenceDir)\Awaken.Utility.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="UniTask" Condition="Exists('$(UnityReferenceDir)\UniTask.dll')"><HintPath>$(UnityReferenceDir)\UniTask.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Unity.Collections" Condition="Exists('$(UnityReferenceDir)\Unity.Collections.dll')"><HintPath>$(UnityReferenceDir)\Unity.Collections.dll</HintPath><Private>false</Private></Reference>
-    <!-- HDRP custom pass supplying depth and motion vectors when no upscaler does (Mono only). -->
-    <Reference Include="Unity.RenderPipelines.HighDefinition.Runtime"><HintPath>$(UnityReferenceDir)\Unity.RenderPipelines.HighDefinition.Runtime.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(UnityReferenceDir)\Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
     <Reference Include="BepInEx.Core"><HintPath>$(BepInExCoreDir)\BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="BepInEx.Unity.IL2CPP"><HintPath>$(BepInExCoreDir)\BepInEx.Unity.IL2CPP.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="BepInEx.Unity.Common" Condition="Exists('$(BepInExCoreDir)\BepInEx.Unity.Common.dll')"><HintPath>$(BepInExCoreDir)\BepInEx.Unity.Common.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppInterop.Runtime"><HintPath>$(BepInExCoreDir)\Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCoreDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2Cppmscorlib"><HintPath>$(UnityReferenceDir)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppSystem" Condition="Exists('$(UnityReferenceDir)\Il2CppSystem.dll')"><HintPath>$(UnityReferenceDir)\Il2CppSystem.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppSystem.Core" Condition="Exists('$(UnityReferenceDir)\Il2CppSystem.Core.dll')"><HintPath>$(UnityReferenceDir)\Il2CppSystem.Core.dll</HintPath><Private>false</Private></Reference>
@@ -65,6 +58,14 @@
     <Reference Include="UnityEngine.TextCoreTextEngineModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.TextCoreTextEngineModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.TextCoreTextEngineModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TextRenderingModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.TextRenderingModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+    <!-- Game settings model for the native Video-tab rows. -->
+    <Reference Include="TG.Main"><HintPath>$(UnityReferenceDir)\TG.Main.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Awaken.Utility" Condition="Exists('$(UnityReferenceDir)\Awaken.Utility.dll')"><HintPath>$(UnityReferenceDir)\Awaken.Utility.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UniTask" Condition="Exists('$(UnityReferenceDir)\UniTask.dll')"><HintPath>$(UnityReferenceDir)\UniTask.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Collections" Condition="Exists('$(UnityReferenceDir)\Unity.Collections.dll')"><HintPath>$(UnityReferenceDir)\Unity.Collections.dll</HintPath><Private>false</Private></Reference>
+    <!-- HDRP custom pass supplying depth and motion vectors when no upscaler does. -->
+    <Reference Include="Unity.RenderPipelines.HighDefinition.Runtime"><HintPath>$(UnityReferenceDir)\Unity.RenderPipelines.HighDefinition.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(UnityReferenceDir)\Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <!-- Build together, but do not load the preloader as a gameplay dependency. -->
   <ItemGroup>

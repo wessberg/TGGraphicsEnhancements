@@ -37,7 +37,10 @@ namespace TGFrameGeneration
         private void OnDestroy() { Session.Stop(); }
 #endif
     }
+    // Interop attributes are not System.Attribute, and Unity ignores execution order on injected types.
+#if !BEPINEX_IL2CPP
     [DefaultExecutionOrder(-32000)]
+#endif
     public sealed class RuntimeBehaviour : MonoBehaviour
     {
 #if BEPINEX_IL2CPP

@@ -83,7 +83,7 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(label, caps)
         # Low latency may be Off only while frame generation is Off; a single choice greys the row out.
         self.assertIn("if (selected == FrameGenerationSetting.Off) allowed.Add(LowLatencySetting.Off);", caps)
-        self.assertIn("latency.SetInteractabilityFunction(() => caps.AllowedLatencies(Selected).Length > 1);", rows)
+        self.assertIn("latency.SetInteractabilityFunction((Func<bool>)(() => caps.AllowedLatencies(Selected).Length > 1));", rows)
         self.assertIn("select_latency", policy)
         self.assertIn("if(output==Output::XeSS) return c.xell?Latency::XeLL:Latency::Off;", policy)
 
@@ -105,8 +105,31 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("s.lastUpscalerFrame=renderFrameId;s.upscalerSeen=true;", capture)
         rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
         self.assertIn("HdrpInputs.Available || upscaling == null || upscaling.IsDLSSEnabled", rows)
-        self.assertIn("upscaling.UpscalingTypeOption.onChange += _ => RefreshInteractability();", rows)
+        self.assertIn("upscaling.UpscalingTypeOption.onChange += (Action<ToggleOption>)(_ => RefreshInteractability());", rows)
         self.assertIn("InputSource = HdrpInputs.Available ||", self.text("src/TGFrameGeneration/VideoCapabilities.cs"))
+
+    def test_il2cpp_ports(self):
+        # Both runtimes build the Video rows and the HDRP inputs; IL2CPP registers the subclasses and runs
+        # the IL2CPP base constructor, which Il2CppInterop's derived-object allocation skips.
+        rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
+        hdrp = self.text("src/TGFrameGeneration/HdrpInputs.cs")
+        for source in (rows, hdrp):
+            self.assertNotIn("#if BEPINEX_MONO", source)
+            self.assertNotIn("only implemented for the Mono runtime", source)
+        self.assertIn('Il2CppTypes.Construct(this, typeof(Setting), "NativeMethodInfoPtr__ctor_Protected_Void_0");', rows)
+        self.assertIn('Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Func_1_Boolean_Il2CppReferenceArray_1_PrefOption_0",', rows)
+        self.assertIn("Il2CppTypes.Register<SwitchRowsOption>();", rows)
+        # Tooltips must not return managed strings through Il2CppInterop's delegate bridge (game crash in String.Trim).
+        self.assertIn("new Func<IntPtr>(() => IL2CPP.ManagedStringToIl2Cpp(text()))", rows)
+        self.assertNotIn(".AddTooltip((Func<string>)", rows)
+        # Setting inherits Element<SettingsMaster>; Il2CppInterop can't map its T without the tolerant lookup.
+        self.assertIn("Il2CppTypes.Register<FrameGenerationVideoSetting>(genericBase: true);", rows)
+        self.assertIn('AccessTools.Method(typeof(ClassInjector), "SystemTypeFromIl2CppType")', self.text("src/TGFrameGeneration/Il2CppTypes.cs"))
+        self.assertIn('Il2CppTypes.Construct(this, typeof(CustomPass), "NativeMethodInfoPtr__ctor_Protected_Void_0");', hdrp)
+        self.assertIn("Il2CppTypes.Register<FrameInputPass>();", hdrp)
+        self.assertIn("private new void Execute(CustomPassContext ctx) => HdrpInputs.Execute(ctx);", hdrp)
+        project = self.text("src/TGFrameGeneration/TGFrameGeneration.csproj")
+        self.assertNotIn("(Mono only)", project)
 
     def test_plugin_identity(self):
         plugin = self.text("src/TGFrameGeneration/Plugin.cs")

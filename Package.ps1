@@ -93,9 +93,8 @@ foreach ($build in $builds) {
         requires_launcher=$false; steam_startup_validated=$false; rendering_validated=$false
         files=$records
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'TGFG-Package-manifest.json') -Encoding UTF8
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/PLAYER-INSTALL.txt') -Destination (Join-Path $stage 'TGFG-PLAYER-INSTALL.txt')
-    # Packages contain BepInEx payload, manifest and player instructions, not build tools/launchers.
-    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json','TGFG-PLAYER-INSTALL.txt') ($stage + '.zip')
+    # Packages contain the BepInEx payload and its manifest: no build tools, launchers or instructions.
+    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json') ($stage + '.zip')
     $packages += @{Stage=$stage; Game=$build.Metadata.game_dir; Target=$target}
     Write-Host "Packaged: $stage.zip"
     # The same package under the name it gets on Nexus Mods, replaced by every packaging run.

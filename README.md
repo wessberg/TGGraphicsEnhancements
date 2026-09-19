@@ -142,7 +142,7 @@ backs up every TGFG file it replaces under `BepInEx/TGFrameGeneration/Backups`.
 Nexus Mods downloads to `artifacts/Nexus`: `TGFrameGeneration - mono.zip` for the Mono branch and
 `TGFrameGeneration.zip` for the standard version. A package contains the plugin,
 the preloader, the native backend, the vendor runtimes with their license notices and
-`TGFG-PLAYER-INSTALL.txt`. Install one runtime package per game installation, then start the game
+`TGFG-Package-manifest.json`. Install one runtime package per game installation, then start the game
 from Steam as usual.
 
 `Test-Setup.ps1 -GameDir <game folder> -Runtime Mono` (or `IL2CPP`) checks an installed copy without starting

@@ -4,17 +4,29 @@
 // post-processing, where HDRP has finished the frame's depth and motion vectors; the copy itself
 // happens on the render thread (render event 3). While DLSS runs, the native side uses DLSS's
 // inputs instead.
-#if BEPINEX_MONO
 using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
+#if BEPINEX_IL2CPP
+using Il2CppInterop.Runtime.Injection;
+#endif
 namespace TGFrameGeneration
 {
     internal sealed class FrameInputPass : CustomPass
     {
+#if BEPINEX_IL2CPP
+        public FrameInputPass(IntPtr pointer) : base(pointer) { }
+        internal FrameInputPass() : base(ClassInjector.DerivedConstructorPointer<FrameInputPass>())
+        {
+            ClassInjector.DerivedConstructorBody(this);
+            Il2CppTypes.Construct(this, typeof(CustomPass), "NativeMethodInfoPtr__ctor_Protected_Void_0");
+        }
+        private new void Execute(CustomPassContext ctx) => HdrpInputs.Execute(ctx); // see Il2CppTypes
+#else
         protected override void Execute(CustomPassContext ctx) => HdrpInputs.Execute(ctx);
+#endif
     }
     internal static class HdrpInputs
     {
@@ -22,8 +34,9 @@ namespace TGFrameGeneration
         private struct Cached { internal IntPtr Pointer; internal int Width, Height; }
         private static GameObject host;
         // GetNativeTexturePtr waits for the render thread, so it runs once per render texture and
-        // again only when HDRP resizes that texture (which recreates its GPU resource).
-        private static readonly Dictionary<RenderTexture, Cached> pointers = new Dictionary<RenderTexture, Cached>();
+        // again only when HDRP resizes that texture (which recreates its GPU resource). Keyed by instance
+        // ID: under IL2CPP every property read returns a new wrapper object for the same texture.
+        private static readonly Dictionary<int, Cached> pointers = new Dictionary<int, Cached>();
         private static int cachedScreenWidth, cachedScreenHeight, lastResult = int.MinValue;
         internal static bool Available { get; private set; }
         internal static string Detail { get; private set; } = "Not installed.";
@@ -33,6 +46,9 @@ namespace TGFrameGeneration
             if (host != null) return;
             try
             {
+#if BEPINEX_IL2CPP
+                Il2CppTypes.Register<FrameInputPass>();
+#endif
                 // Configured while inactive: the volume registers with HDRP when it becomes enabled.
                 host = new GameObject("TGFG frame generation inputs") { hideFlags = HideFlags.HideAndDontSave };
                 host.SetActive(false);
@@ -100,11 +116,12 @@ namespace TGFrameGeneration
         {
             var rt = handle?.rt;
             if (rt == null) return IntPtr.Zero;
-            if (pointers.TryGetValue(rt, out var cached) && cached.Pointer != IntPtr.Zero && cached.Width == rt.width && cached.Height == rt.height)
+            int id = rt.GetInstanceID();
+            if (pointers.TryGetValue(id, out var cached) && cached.Pointer != IntPtr.Zero && cached.Width == rt.width && cached.Height == rt.height)
                 return cached.Pointer;
             if (pointers.Count >= 64) pointers.Clear(); // render graph pools cycle through a few textures
             cached = new Cached { Pointer = rt.GetNativeTexturePtr(), Width = rt.width, Height = rt.height };
-            pointers[rt] = cached;
+            pointers[id] = cached;
             return cached.Pointer;
         }
         private static void Report(int result, string problem)
@@ -130,16 +147,3 @@ namespace TGFrameGeneration
         }
     }
 }
-#else
-namespace TGFrameGeneration
-{
-    internal static class HdrpInputs
-    {
-        internal static bool Available => false;
-        internal static string Detail => "HDRP inputs are only implemented for the Mono runtime.";
-        internal static ulong Packets => 0;
-        internal static void Initialize() { }
-        internal static void Dispose() { }
-    }
-}
-#endif
