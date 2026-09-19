@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\Build.Local.props" Condition="Exists('..\..\Build.Local.props')" />
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net472</TargetFrameworks>
+    <AssemblyName>TGFrameGeneration</AssemblyName>
+    <RootNamespace>TGFrameGeneration</RootNamespace>
+    <Version>0.4.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <GameDirIl2Cpp Condition="'$(GameDirIl2Cpp)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
+    <GameDirMono Condition="'$(GameDirMono)' == ''">C:\Games\Tainted Grail FoA Mono</GameDirMono>
+    <Il2CppInteropDir Condition="'$(Il2CppInteropDir)' == ''">$(GameDirIl2Cpp)\BepInEx\interop</Il2CppInteropDir>
+    <MonoManagedDir Condition="'$(MonoManagedDir)' == ''">$(GameDirMono)\Fall of Avalon_Data\Managed</MonoManagedDir>
+    <DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <DefineConstants>$(DefineConstants);BEPINEX_IL2CPP</DefineConstants>
+    <UnityReferenceDir>$(Il2CppInteropDir)</UnityReferenceDir>
+    <BepInExCoreDir>$(GameDirIl2Cpp)\BepInEx\core</BepInExCoreDir>
+    <TargetGameDir>$(GameDirIl2Cpp)</TargetGameDir>
+    <TGRuntime>IL2CPP</TGRuntime>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
+    <DefineConstants>$(DefineConstants);BEPINEX_MONO</DefineConstants>
+    <UnityReferenceDir>$(MonoManagedDir)</UnityReferenceDir>
+    <BepInExCoreDir>$(GameDirMono)\BepInEx\core</BepInExCoreDir>
+    <TargetGameDir>$(GameDirMono)</TargetGameDir>
+    <TGRuntime>Mono</TGRuntime>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine" Condition="Exists('$(UnityReferenceDir)\UnityEngine.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <!-- Game settings model for the native Video-tab rows (Mono only). -->
+    <Reference Include="TG.Main"><HintPath>$(UnityReferenceDir)\TG.Main.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Awaken.Utility" Condition="Exists('$(UnityReferenceDir)\Awaken.Utility.dll')"><HintPath>$(UnityReferenceDir)\Awaken.Utility.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UniTask" Condition="Exists('$(UnityReferenceDir)\UniTask.dll')"><HintPath>$(UnityReferenceDir)\UniTask.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Collections" Condition="Exists('$(UnityReferenceDir)\Unity.Collections.dll')"><HintPath>$(UnityReferenceDir)\Unity.Collections.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <Reference Include="BepInEx.Core"><HintPath>$(BepInExCoreDir)\BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP"><HintPath>$(BepInExCoreDir)\BepInEx.Unity.IL2CPP.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BepInEx.Unity.Common" Condition="Exists('$(BepInExCoreDir)\BepInEx.Unity.Common.dll')"><HintPath>$(BepInExCoreDir)\BepInEx.Unity.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(BepInExCoreDir)\Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2Cppmscorlib"><HintPath>$(UnityReferenceDir)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSystem" Condition="Exists('$(UnityReferenceDir)\Il2CppSystem.dll')"><HintPath>$(UnityReferenceDir)\Il2CppSystem.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppSystem.Core" Condition="Exists('$(UnityReferenceDir)\Il2CppSystem.Core.dll')"><HintPath>$(UnityReferenceDir)\Il2CppSystem.Core.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != ''">
+    <RequiredUnity Include="UnityEngine.CoreModule;UnityEngine.InputLegacyModule;UnityEngine.UI;UnityEngine.UIModule;Unity.TextMeshPro" />
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityReferenceDir)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(UnityReferenceDir)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(UnityReferenceDir)\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(UnityReferenceDir)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(UnityReferenceDir)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextCoreTextEngineModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.TextCoreTextEngineModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.TextCoreTextEngineModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.TextRenderingModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <!-- Build together, but do not load the preloader as a gameplay dependency. -->
+  <ItemGroup>
+    <ProjectReference Include="..\TGFG.Autoload\TGFG.Autoload.csproj"
+                      ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+  <Target Name="ValidateLocalReferences" BeforeTargets="ResolveReferences" Condition="'$(TargetFramework)' != ''">
+    <Error Condition="!Exists('$(UnityReferenceDir)\%(RequiredUnity.Identity).dll')" Text="Missing $(UnityReferenceDir)\%(RequiredUnity.Identity).dll. Set Build.Local.props to this runtime's installed game. Run BepInEx once for IL2CPP interop generation." />
+    <Error Condition="'$(TargetFramework)' == 'net472' and !Exists('$(BepInExCoreDir)\BepInEx.dll')" Text="Missing BepInEx 5 Mono core at $(BepInExCoreDir)." />
+    <Error Condition="'$(TargetFramework)' == 'net6.0' and !Exists('$(BepInExCoreDir)\BepInEx.Unity.IL2CPP.dll')" Text="Missing BepInEx 6 IL2CPP core at $(BepInExCoreDir)." />
+  </Target>
+  <!-- Export evaluated paths: scripts do not guess defaults or parse MSBuild expressions. -->
+  <Target Name="WriteTGFGContext" AfterTargets="Build"
+          Condition="'$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
+    <WriteLinesToFile File="$(TargetDir)TGFG.GameDir.txt" Lines="$(TargetGameDir)"
+                      Overwrite="true" Encoding="UTF-8" />
+  </Target>
+  <!-- Direct dotnet/MSBuild deployment uses the same complete package path as Build.ps1. -->
+  <Target Name="CopyToGame" AfterTargets="Build" DependsOnTargets="WriteTGFGContext"
+          Condition="'$(DeployToGame)' == 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
+    <Exec Command="powershell.exe -NoProfile -File &quot;$(MSBuildProjectDirectory)\..\..\Build.ps1&quot; -Runtime $(TGRuntime) -Configuration &quot;$(Configuration)&quot; -StageOnly -Deploy" />
+  </Target>
+</Project>

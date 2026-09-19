@@ -1,0 +1,17 @@
+test_build_deploy_from_same_repo (__main__.AutoloadIntegration.test_build_deploy_from_same_repo) ... ok
+test_build_only_reference (__main__.AutoloadIntegration.test_build_only_reference) ... ok
+test_diagnostics_without_late_loading (__main__.AutoloadIntegration.test_diagnostics_without_late_loading) ... ok
+test_direct_msbuild_deploy_uses_shared_flow (__main__.AutoloadIntegration.test_direct_msbuild_deploy_uses_shared_flow) ... ok
+test_manifest_whitelist_and_backups (__main__.AutoloadIntegration.test_manifest_whitelist_and_backups) ... ok
+test_matching_versions_and_paths (__main__.AutoloadIntegration.test_matching_versions_and_paths) ... ok
+test_native_version_kept_separate (__main__.AutoloadIntegration.test_native_version_kept_separate) ... ok
+test_no_launcher_in_default_packaging (__main__.AutoloadIntegration.test_no_launcher_in_default_packaging) ... ok
+test_preloader_does_not_reference_gameplay_or_unity (__main__.AutoloadIntegration.test_preloader_does_not_reference_gameplay_or_unity) ... ok
+test_solution_has_both_projects (__main__.AutoloadIntegration.test_solution_has_both_projects) ... ok
+test_synchronous_same_abi (__main__.AutoloadIntegration.test_synchronous_same_abi) ... ok
+test_two_runtime_lifecycles (__main__.AutoloadIntegration.test_two_runtime_lifecycles) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.002s
+
+OK

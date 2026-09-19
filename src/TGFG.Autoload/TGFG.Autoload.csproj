@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\Build.Local.props" Condition="Exists('..\..\Build.Local.props')" />
+  <PropertyGroup>
+    <TargetFrameworks>net472;net6.0</TargetFrameworks>
+    <AssemblyName>TGFG.Autoload</AssemblyName>
+    <RootNamespace>TGFG.Autoload</RootNamespace>
+    <Version>0.4.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <GameDirMono Condition="'$(GameDirMono)' == ''">C:\Games\Tainted Grail FoA Mono</GameDirMono>
+    <GameDirIl2Cpp Condition="'$(GameDirIl2Cpp)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
+    <DefineConstants>$(DefineConstants);BEPINEX_MONO</DefineConstants>
+    <CoreDir>$(GameDirMono)\BepInEx\core</CoreDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <DefineConstants>$(DefineConstants);BEPINEX_IL2CPP</DefineConstants>
+    <CoreDir>$(GameDirIl2Cpp)\BepInEx\core</CoreDir>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+    <RequiredCore Include="BepInEx;Mono.Cecil" />
+    <Reference Include="BepInEx"><HintPath>$(CoreDir)\BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Mono.Cecil"><HintPath>$(CoreDir)\Mono.Cecil.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <RequiredCore Include="BepInEx.Core;BepInEx.Preloader.Core" />
+    <Reference Include="BepInEx.Core"><HintPath>$(CoreDir)\BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BepInEx.Preloader.Core"><HintPath>$(CoreDir)\BepInEx.Preloader.Core.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="ValidateReferences" BeforeTargets="ResolveReferences" Condition="'$(TargetFramework)' != ''">
+    <Error Condition="!Exists('$(CoreDir)\%(RequiredCore.Identity).dll')" Text="Missing $(CoreDir)\%(RequiredCore.Identity).dll. Select the corresponding installed BepInEx runtime." />
+  </Target>
+</Project>

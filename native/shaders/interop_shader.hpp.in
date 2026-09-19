@@ -1,0 +1,3 @@
+// Generated at configure time from the auditable HLSL source, not a hand-maintained copy.
+#pragma once
+namespace tgfg { inline constexpr const char* interopShader=R"TGFGHLSL(@TGFG_INTEROP_SHADER@)TGFGHLSL"; }

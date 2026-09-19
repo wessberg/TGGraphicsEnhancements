@@ -1,0 +1,2161 @@
+diff --git a/.gitignore b/.gitignore
+index e345464..8f04ee4 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -5,3 +5,8 @@ Build.Local.props
+ __pycache__/
+ *.pyc
+ .vs/
++
++# Native build output and local diagnostic captures
++build/
++TGFG-*.log
++TGFG-*.txt
+diff --git a/Build.ps1 b/Build.ps1
+index db088be..6296042 100644
+--- a/Build.ps1
++++ b/Build.ps1
+@@ -1,43 +1,65 @@
+ # SPDX-License-Identifier: MIT
++# Developer workflow; nothing in this script launches the game.
+ [CmdletBinding()]
+ param(
+     [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
+     [string]$GameDirMono = '',
+     [string]$GameDirIl2Cpp = '',
+-    [switch]$Deploy
++    [ValidateSet('Release','Debug')][string]$Configuration = 'Release',
++    [switch]$Package,
++    [switch]$Deploy,
++    # Used by the csproj's DeployToGame target after MSBuild already built both DLLs.
++    [switch]$StageOnly
+ )
+ $ErrorActionPreference = 'Stop'
+ Set-StrictMode -Version Latest
+-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install a .NET SDK capable of targeting net6.0 and net472, then rerun.' }
+-if ($Deploy) {
+-    $game = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'Avalon|Tainted.*Grail' }
+-    if ($game) { throw 'Close the game before deploying a DLL.' }
++& (Join-Path $PSScriptRoot 'tools\Test-Scripts.ps1')
++. (Join-Path $PSScriptRoot 'tools\Package.Common.ps1')
++if (-not $StageOnly -and -not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
++    throw 'Install a .NET SDK capable of targeting net6.0 and net472.'
+ }
++if ($Deploy) { Assert-TgfgGameClosed }
+ $project = Join-Path $PSScriptRoot 'src\TGFrameGeneration\TGFrameGeneration.csproj'
+-$frameworks = switch ($Runtime) { 'Mono' { @('net472') }; 'IL2CPP' { @('net6.0') }; 'Both' { @('net472','net6.0') } }
+-foreach ($framework in $frameworks) {
+-    $arguments = @('build', $project, '-c', 'Release', '-f', $framework, '--nologo')
+-    if ($GameDirMono) { $arguments += "-p:GameDirMono=$GameDirMono" }
+-    if ($GameDirIl2Cpp) { $arguments += "-p:GameDirIl2Cpp=$GameDirIl2Cpp" }
+-    if ($Deploy) { $arguments += '-p:DeployToGame=true' }
+-    & dotnet @arguments
+-    if ($LASTEXITCODE -ne 0) { throw "Managed build failed: $framework. Check the missing-reference message above." }
+-    $runtimeName = if ($framework -eq 'net472') { 'Mono' } else { 'IL2CPP' }
+-    $output = Join-Path $PSScriptRoot "src\TGFrameGeneration\bin\Release\$framework\TGFrameGeneration.dll"
+-    if (-not (Test-Path $output)) { throw "Build reported success but $output is missing." }
+-    $stage = Join-Path $PSScriptRoot "artifacts\$runtimeName\BepInEx\plugins\TGFrameGeneration"
+-    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+-    Copy-Item $output $stage -Force
+-    $manifest = [ordered]@{
+-        utc = [DateTime]::UtcNow.ToString('o')
+-        version = '0.3.0'
+-        runtime = $runtimeName
+-        framework = $framework
+-        managed_sha256 = (Get-FileHash $output -Algorithm SHA256).Hash
+-        rendering_validated = $false
+-        note = 'This confirms a local managed build only. A standalone TGFG.Native.dll Streamline backend is still required for FG.'
++$targets = if ($Runtime -eq 'Both') { @('Mono','IL2CPP') } else { @($Runtime) }
++foreach ($target in $targets) {
++    $framework = Get-TgfgFramework $target
++    if (-not $StageOnly) {
++        # ProjectReference builds the matching preloader, without a runtime reference.
++        # Limit restore to the requested framework so Mono does not require IL2CPP.
++        $arguments = @('build', $project, '-c', $Configuration, '-f', $framework,
++                       "-p:TargetFrameworks=$framework", '-p:DeployToGame=false', '--nologo')
++        if ($GameDirMono) { $arguments += "-p:GameDirMono=$GameDirMono" }
++        if ($GameDirIl2Cpp) { $arguments += "-p:GameDirIl2Cpp=$GameDirIl2Cpp" }
++        & dotnet @arguments
++        if ($LASTEXITCODE -ne 0) { throw "Managed/preloader build failed: $target. No deployment attempted." }
+     }
+-    $manifest | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot "artifacts\$runtimeName\build-manifest.json") -Encoding UTF8
+-    Write-Host "Built $runtimeName -> $stage"
++    $plugin = Join-Path $PSScriptRoot "src\TGFrameGeneration\bin\$Configuration\$framework\TGFrameGeneration.dll"
++    $loader = Join-Path $PSScriptRoot "src\TGFG.Autoload\bin\$Configuration\$framework\TGFG.Autoload.dll"
++    $context = Join-Path (Split-Path -Parent $plugin) 'TGFG.GameDir.txt'
++    Assert-TgfgFile $context
++    Assert-TgfgManagedVersion $plugin 'TGFrameGeneration' '0.3.1.0'
++    Assert-TgfgManagedVersion $loader 'TGFG.Autoload' '0.3.1.0'
++    $game = (Get-Content -LiteralPath $context -Raw).Trim()
++    if (-not $game) { throw "Empty evaluated game path: $context" }
++    $stage = Join-Path $PSScriptRoot "artifacts\$target"
++    $pluginOut = Join-Path $stage 'BepInEx\plugins\TGFrameGeneration\TGFrameGeneration.dll'
++    $loaderOut = Join-Path $stage 'BepInEx\patchers\TGFG.Autoload.dll'
++    foreach ($pair in @(@{Source=$plugin; Dest=$pluginOut}, @{Source=$loader; Dest=$loaderOut})) {
++        New-Item -ItemType Directory -Path (Split-Path -Parent $pair.Dest) -Force | Out-Null
++        Copy-Item -LiteralPath $pair.Source -Destination $pair.Dest -Force
++    }
++    [ordered]@{
++        utc = [DateTime]::UtcNow.ToString('o'); version = '0.3.1'; runtime = $target
++        framework = $framework; configuration = $Configuration; game_dir = $game
++        managed_sha256 = (Get-FileHash -LiteralPath $pluginOut -Algorithm SHA256).Hash
++        autoload_sha256 = (Get-FileHash -LiteralPath $loaderOut -Algorithm SHA256).Hash
++        native_abi = '0x00030000'; rendering_validated = $false
++    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'build-manifest.json') -Encoding UTF8
++    Write-Host "Built/staged $target: gameplay plugin AND autoload preloader -> $stage"
++}
++if ($Package -or $Deploy) {
++    & (Join-Path $PSScriptRoot 'Package.ps1') -Runtime $Runtime -Deploy:$Deploy
++} else {
++    Write-Host 'Managed pair only. Use Build.ps1 -Package for a complete package, or -Deploy to package and install it.'
++    Write-Host 'Native artifacts are reused from artifacts/Native; Build-Native.ps1 and Stage-Runtime.ps1 remain the native build/staging steps.'
+ }
+-Write-Host 'No native proxy, NVIDIA runtime, ReShade, RenoDX, or existing INI was installed or overwritten.'
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e40938a..c654ab0 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,14 @@
++# v0.3.1 - repository-integrated Steam autoload
++
++- Adds src/TGFG.Autoload in the existing solution and gameplay build graph.
++- Same root Build.Local.props, two runtime-specific managed pairs.
++- Build.ps1 -Deploy stages/installs complete plugin/preloader/native/runtime package.
++- Package.ps1 produces a launcher-free player ZIP from this repo's artifacts.
++- Test-Setup.ps1 checks the installed Steam-autoload layout, not developer launcher files.
++- Replaces stale launcher advice and adds an autoload log tail to gameplay diagnostics.
++- Retains all native v0.3.0 source, SDK build scripts and ABI unchanged.
++- No Windows compilation, PowerShell execution or in-game validation claimed.
++
+ # Changelog
+ 
+ ## 0.3.0 — DX11 rendering / private DX12 Streamline presentation
+diff --git a/Launch-Game.ps1 b/Launch-Game.ps1
+index 1194541..12d06b7 100644
+--- a/Launch-Game.ps1
++++ b/Launch-Game.ps1
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: MIT
++# Compatibility entry point only. The separate launcher is no longer the player workflow.
+ [CmdletBinding()]
+ param(
+     [string]$GameDir='C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA',
+@@ -7,10 +8,7 @@ param(
+ )
+ $ErrorActionPreference='Stop'
+ Set-StrictMode -Version Latest
++if ($GameArguments.Count -ne 0) { throw 'GameArguments are not used by automatic loading. Start the game normally from Steam.' }
++Write-Warning 'Launch-Game.ps1 is retired as a launcher. This command checks the installed package only.'
+ & (Join-Path $PSScriptRoot 'Test-Setup.ps1') -GameDir $GameDir -Runtime $Runtime
+-if(Get-Process -Name 'Fall of Avalon' -ErrorAction SilentlyContinue) {throw 'Close the running game before using the TGFG launcher.'}
+-if(-not (Get-Process -Name 'steam' -ErrorAction SilentlyContinue)) {Write-Warning 'Start Steam before testing a Steam installation. A Steam-relaunched process will lose the bootstrap.'}
+-$launcher=Join-Path $PSScriptRoot 'artifacts\Native\TGFG.Launcher.exe'
+-$game=Join-Path (Resolve-Path $GameDir).Path 'Fall of Avalon.exe'
+-& $launcher '--game' $game '--' '-force-d3d11' @GameArguments
+-if($LASTEXITCODE -ne 0) {throw "TGFG launcher failed ($LASTEXITCODE). See its output and artifacts\Native\TGFG.Native.log."}
++Write-Host 'No process was started. Press Play in Steam.'
+diff --git a/Package.ps1 b/Package.ps1
+new file mode 100644
+index 0000000..3fd9e4f
+--- /dev/null
++++ b/Package.ps1
+@@ -0,0 +1,91 @@
++# SPDX-License-Identifier: MIT
++# Package/deploy existing builds in THIS repository. No external ProjectRoot.
++[CmdletBinding()]
++param(
++    [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
++    [switch]$Deploy
++)
++$ErrorActionPreference = 'Stop'
++Set-StrictMode -Version Latest
++. (Join-Path $PSScriptRoot 'tools\Package.Common.ps1')
++if ($Deploy) { Assert-TgfgGameClosed }
++$nativeRoot = Join-Path $PSScriptRoot 'artifacts\Native'
++$native = Join-Path $nativeRoot 'TGFG.Native.dll'
++Assert-TgfgAmd64 $native
++$nativeManifestPath = Join-Path $nativeRoot 'build-manifest.json'
++Assert-TgfgFile $nativeManifestPath
++$nativeManifest = Get-Content -LiteralPath $nativeManifestPath -Raw | ConvertFrom-Json
++Assert-TgfgFields $nativeManifest @('version','native_sha256') 'Native build manifest'
++if ($nativeManifest.version -ne '0.3.0' -or
++    $nativeManifest.native_sha256 -ne (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash) {
++    throw 'Expected the existing v0.3.0 native backend and matching hash (ABI 0x00030000). Rebuild/stage with Build-Native.ps1 only if it is missing or mismatched.'
++}
++$nativeFiles = @(@{Source=$native; Relative='BepInEx/TGFrameGeneration/Native/TGFG.Native.dll'})
++$required = @(Get-TgfgRuntimeNames)
++foreach ($name in $required + @('nvapi64.dll')) {
++    $path = Join-Path $nativeRoot "Streamline/$name"
++    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
++        if ($required -contains $name) { throw "Missing NVIDIA runtime: $path. Run Stage-Runtime.ps1 first." }
++        continue
++    }
++    Assert-TgfgNvidiaSignature $path
++    $nativeFiles += @{Source=$path; Relative="BepInEx/TGFrameGeneration/Native/Streamline/$name"}
++}
++$targets = if ($Runtime -eq 'Both') { @('Mono','IL2CPP') } else { @($Runtime) }
++$builds = @()
++# Validate all requested managed builds BEFORE writing any game files.
++foreach ($target in $targets) {
++    $root = Join-Path $PSScriptRoot "artifacts/$target"
++    $metadataPath = Join-Path $root 'build-manifest.json'
++    Assert-TgfgFile $metadataPath
++    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
++    Assert-TgfgFields $metadata @('version','runtime','framework','managed_sha256','autoload_sha256','game_dir') 'Managed build manifest'
++    if ($metadata.version -ne '0.3.1' -or $metadata.runtime -ne $target -or
++        $metadata.framework -ne (Get-TgfgFramework $target)) { throw "Rebuild the integrated managed pair for $target using Build.ps1." }
++    $plugin = Join-Path $root 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll'
++    $loader = Join-Path $root 'BepInEx/patchers/TGFG.Autoload.dll'
++    Assert-TgfgManagedVersion $plugin 'TGFrameGeneration' '0.3.1.0'
++    Assert-TgfgManagedVersion $loader 'TGFG.Autoload' '0.3.1.0'
++    if ((Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash -ne $metadata.managed_sha256 -or
++        (Get-FileHash -LiteralPath $loader -Algorithm SHA256).Hash -ne $metadata.autoload_sha256) {
++        throw "The $target DLLs do not match their build manifest. Rebuild instead of mixing outputs."
++    }
++    if ($Deploy) { Assert-TgfgGame $metadata.game_dir $target }
++    $builds += @{Target=$target; Metadata=$metadata; Files=(@(
++        @{Source=$plugin; Relative='BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll'},
++        @{Source=$loader; Relative='BepInEx/patchers/TGFG.Autoload.dll'}
++    ) + $nativeFiles)}
++}
++if ($Deploy -and $builds.Count -gt 1) {
++    $destinations = @($builds | ForEach-Object { [IO.Path]::GetFullPath($_.Metadata.game_dir).TrimEnd('\','/') } | Sort-Object -Unique)
++    if ($destinations.Count -ne $builds.Count) { throw 'Mono and IL2CPP deployment targets must be different game installations.' }
++}
++$packages = @()
++foreach ($build in $builds) {
++    $target = $build.Target
++    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
++    $stage = Join-Path $PSScriptRoot "artifacts/Packages/TGFrameGeneration-0.3.1-$target-$stamp"
++    $records = @()
++    foreach ($entry in $build.Files) {
++        $destination = Get-TgfgOwnedPath $stage $entry.Relative
++        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
++        Copy-Item -LiteralPath $entry.Source -Destination $destination -Force
++        $records += [ordered]@{path=$entry.Relative; sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash}
++    }
++    [ordered]@{
++        version='0.3.1'; runtime=$target; framework=(Get-TgfgFramework $target)
++        native_version='0.3.0'; native_abi='0x00030000'; utc=[DateTime]::UtcNow.ToString('o')
++        requires_launcher=$false; steam_startup_validated=$false; rendering_validated=$false
++        files=$records
++    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'TGFG-Package-manifest.json') -Encoding UTF8
++    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/PLAYER-INSTALL.txt') -Destination (Join-Path $stage 'TGFG-PLAYER-INSTALL.txt')
++    # Packages contain BepInEx payload, manifest and player instructions, not build tools/launchers.
++    Compress-Archive -LiteralPath @((Join-Path $stage 'BepInEx'), (Join-Path $stage 'TGFG-Package-manifest.json'), (Join-Path $stage 'TGFG-PLAYER-INSTALL.txt')) -DestinationPath ($stage + '.zip') -CompressionLevel Optimal
++    $packages += @{Stage=$stage; Game=$build.Metadata.game_dir; Target=$target}
++    Write-Host "Packaged: $stage.zip"
++}
++if ($Deploy) {
++    foreach ($package in $packages) { Install-TgfgPayload $package.Stage $package.Game $package.Target }
++}
++Write-Host 'Review NVIDIA runtime distribution terms before publishing these runtime-containing packages.'
++Write-Host 'No game EXE, graphics proxy, Doorstop configuration, Steam setting, or existing mod configuration was changed.'
+diff --git a/README.md b/README.md
+index a1b5ffd..26c37e1 100644
+--- a/README.md
++++ b/README.md
+@@ -1,10 +1,10 @@
+-# TG Frame Generation 0.3.0 — DX11 → DX12 Streamline bridge
++# TG Frame Generation 0.3.1 — integrated Steam autoload / DX11 bridge
+ 
+ **FoA stays on Direct3D 11. TGFG supplies a separate Direct3D 12 presentation
+ backend to NVIDIA Streamline. No OptiScaler or FidelityFX backend is used.**
+ The existing BepInEx settings-menu adapter and the Mono/IL2CPP build split are
+-retained. This package replaces the v0.2 native backend; it does not remove a
+-DX12 check and pretend that DX11 resources are DX12 resources.
++retained. The native backend remains v0.3.0 / ABI v3. This update integrates the
++preloader, build, package and deployment into the existing repository.
+ 
+ ## Status — experimental source, not a verified release
+ 
+@@ -21,7 +21,7 @@ capture, shader-based input copies, optional scRGB-to-HDR10 conversion, resource
+ tagging, presentation, Reflex markers and fixed/Dynamic DLSS-G options.
+ Windows compilation or game testing may reveal defects requiring corrections.
+ 
+-Your earlier diagnostic established **v0.2 Mono loading and UI insertion**, not
++Your supplied diagnostics established **v0.3.0 Mono loading and UI insertion**, not
+ native FG. No IL2CPP game test has been supplied. The UI is preserved structurally;
+ its status area is now shorter and the full report has more native diagnostics.
+ 
+@@ -39,7 +39,8 @@ NVIDIA Streamline DLSS-G + Reflex + private output swapchain
+        ↓ rendered and generated output frames
+ Display
+ 
+-BepInEx Mono OR IL2CPP → native controls, camera/frame events, diagnostics
++Steam Play → BepInEx preloader TGFG.Autoload → native bootstrap
++BepInEx gameplay plugin → native controls, camera/frame events, diagnostics
+ ```
+ 
+ The source color is taken at the wrapper's Present boundary. This is intended to
+@@ -61,7 +62,7 @@ still needs testing.
+ | GPU synchronization | Producer signal/consumer wait, private queue submission, NVIDIA input-consumption fence, consumer signal/D3D11 wait. No per-frame image download to CPU. |
+ | HDR | FP16 scRGB source can be converted to RGB10A2/PQ/BT.2020 for presentation. Existing SDR/HDR10 formats are copied. The HDR10 output path requires compatible HDR output. |
+ | Diagnostics | Source/output APIs, source/output formats, bridge flags, interop HRESULT, source presents, copies, captured input pairs, NGX calls, NVIDIA-reported output count, native PID. |
+-| Loading | Early launcher bootstrap; no replacement of `winhttp.dll`, `dxgi.dll` or `version.dll`. |
++| Loading | Automatic BepInEx preloader; no TGFG launcher and no replacement of `winhttp.dll`, `dxgi.dll` or `version.dll`. |
+ 
+ The DX11-facing adapter exposes **a stable logical `GetBuffer(0)`**. The private
+ DX12 output has three physical buffers and uses its actual current buffer index.
+@@ -82,135 +83,118 @@ requires generated interop assemblies from that exact game build. GPU, driver,
+ OS and hardware-scheduling capability are determined by NVIDIA's runtime, not
+ inferred solely from the GPU model.
+ 
+-## 1. Build and deploy the managed plugin
++## 1. Build inside this repository
+ 
+-Extract this into a **new folder**. Do not mix the v0.2 and v0.3 native DLLs or
+-managed DLLs: the ABI changed to `0x00030000` (status packet is now 152 bytes).
+-Close the game before deployment.
++Autoload now lives in `src/TGFG.Autoload`, beside the gameplay plugin, and is built
++by the existing `Build.ps1`. There is no second repo or `-ProjectRoot` argument.
++Both projects use this repo's existing `Build.Local.props`.
+ 
+-```powershell
+-Copy-Item .\Build.Local.props.example .\Build.Local.props
+-notepad .\Build.Local.props
++For the current Steam installation running Mono:
+ 
+-# Current Steam installation running Mono:
++```powershell
+ .\Build.ps1 -Runtime Mono `
+   -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' `
+   -Deploy
++```
++
++`-Deploy` builds both managed DLLs, assembles the complete package using this
++repo's existing `artifacts/Native`, backs up replaced TGFG files, and installs it.
++No process is launched. Native v0.3.0 (ABI `0x00030000`) is reused unchanged.
++The managed pair is v0.3.1. The old standalone Build-Autoload.ps1 is not needed.
+ 
+-# Both runtimes, after configuring their separate paths in Build.Local.props:
+-.\Build.ps1 -Runtime Both
++Without `-Deploy` or `-Package`, only the managed pair is built/staged. Use
++`-Package` to create a complete player ZIP without installing it:
++
++```powershell
++# After configuring both installations in Build.Local.props:
++.\Build.ps1 -Runtime Both -Package
++
++# Repackage existing managed/native artifacts without compiling:
++.\Package.ps1 -Runtime Mono -Deploy
+ ```
+ 
+-`-Deploy` only copies the managed DLL. Without it, outputs are staged under:
++The managed artifacts are kept separate:
+ 
+ ```text
+ artifacts/Mono/BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
++artifacts/Mono/BepInEx/patchers/TGFG.Autoload.dll
+ artifacts/IL2CPP/BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
++artifacts/IL2CPP/BepInEx/patchers/TGFG.Autoload.dll
+ ```
+ 
+-Do not install both variants together. An existing v0.2 config is retained, so
+-**set Mode to Off before the first native test**. A fresh config defaults to Off.
++Player ZIPs are staged under `artifacts/Packages` with runtime-specific names.
++They contain the plugin, matching preloader, native backend, matching NVIDIA
++runtime and installation instructions, not a launcher or development scripts.
++Do not install both runtime packages into the same game installation.
+ 
+-## 2. Build the native backend and launcher
++## 2. Native prerequisites (existing artifacts can be reused)
+ 
+-Replace these example SDK paths with your own:
++This integration changes no native source and requires no native rebuild when
++`artifacts/Native/TGFG.Native.dll` matches its existing v0.3.0 build manifest.
++If native artifacts or runtime files are missing, use the same existing scripts:
+ 
+ ```powershell
+ .\Build-Native.ps1 `
+   -StreamlineRoot C:\SDKs\Streamline-2.14.1 `
+   -NgxIncludeDir C:\SDKs\DLSS\include
+-```
+ 
+-Optional offline detouring sources: `-MinHookRoot C:\SDKs\minhook-1.3.4`.
+-The script compiles the native code and launcher, runs portable tests plus a
+-**Windows compilation test of all four HLSL shader entrypoints**, and stages:
++.\Stage-Runtime.ps1 -RuntimeDirectory C:\SDKs\Streamline-2.14.1\bin\x64
+ 
+-```text
+-artifacts/Native/TGFG.Native.dll
+-artifacts/Native/TGFG.Launcher.exe
+-artifacts/Native/build-manifest.json
++.\Build.ps1 -Runtime Mono `
++  -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' `
++  -Deploy
+ ```
+ 
+-A successful local build still does not establish game/GPU correctness.
+-The script does not modify your game directory or its graphics proxies.
++Official NVIDIA DLLs are not part of the source patch. Packaging rechecks native
++hashes and NVIDIA production signatures. Review NVIDIA distribution requirements
++before publishing runtime-containing archives. No existing game/RenoDX runtime
++DLLs are overwritten: these are separate TGFG-private copies.
+ 
+-## 3. Stage matching official NVIDIA runtime DLLs
++## 3. Press Play in Steam
+ 
+-```powershell
+-.\Stage-Runtime.ps1 -RuntimeDirectory C:\SDKs\Streamline-2.14.1\bin\x64
+-```
+-
+-Required: `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`,
+-`sl.pcl.dll`, `nvngx_dlssg.dll`. The script validates NVIDIA production signatures,
+-then copies them to `artifacts/Native/Streamline` and writes hashes. If NVIDIA's
+-packages distribute these in separate folders, first assemble a consistent set
+-in a staging directory. Do not gather unrelated runtime versions from other games.
++After deployment, start the game normally. No TGFG launcher, Steam launch options,
++app-ID file or monitor script is required by this package. BepInEx's preloader
++calls the native bootstrap in that game's own process.
+ 
+-No NVIDIA runtime is copied over your existing game/RenoDX files. An already
+-loaded independent `sl.interposer.dll` is refused rather than silently creating
+-a second owner.
++This backend still requires Unity's **DX11** rendering path. Autoload does not
++force an API, change the player's display mode, or add launch arguments. Native
++DX12 is private to the bridge. A game running DX12 remains unsupported by it.
+ 
+-## 4. Start the game **on DX11**
+-
+-Keep Steam running. Leave the current Doorstop/ReShade/RenoDX loader files in
+-place. Do not restore the Ultimate ASI Loader that previously interfered with
+-BepInEx. Close any running FoA process, then:
++Optional installation check (does not launch the game):
+ 
+ ```powershell
+-.\Launch-Game.ps1 `
++.\Test-Setup.ps1 `
+   -GameDir 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' `
+   -Runtime Mono
+ ```
+ 
+-This runs `Test-Setup.ps1` and then invokes the equivalent native command:
+-
+-```powershell
+-.\artifacts\Native\TGFG.Launcher.exe `
+-  --game 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA\Fall of Avalon.exe' `
+-  -- -force-d3d11
+-```
+-
+-**Do not use `-force-d3d12` for this backend.** The launcher rejects conflicting
+-renderer switches. The D3D12 device is private to the bridge, not Unity's renderer.
+-
+-The launcher starts only a new child process. It briefly uses Windows debugging
+-events to run the loader up to a restored executable-entrypoint breakpoint,
+-holds the main thread, detaches, loads the native DLL, bootstraps outside DllMain,
+-then resumes. It does not attach to an existing game, patch disk files, or leave a
+-persistent debugger. This startup code also requires Windows validation. A TLS
+-callback that initializes graphics before the executable entrypoint is outside
+-this bootstrap's contract. Steam replacing the launched process will lose the
+-bootstrap; compare the launch PID with both PIDs in the diagnostic.
+-
+-The native DLL and NVIDIA runtime folder remain beside the launcher. They are
+-not late-loaded by BepInEx. Using the managed plugin alone still tests menu/config
+-only; it cannot create the early presentation bridge.
++The old Launch-Game.ps1 is retired as a launcher; it now only performs this check.
++Do not combine an externally injected native backend with automatic loading.
+ 
+ ## First test and diagnostics
+ 
+-Start **Off**, in borderless/windowed gameplay. Check that the image and colors
+-are correct and that the report has source DX11, output DX12, bridge bit 0 set,
+-and increasing source-present/copy counts. These counters can increase with FG
+-Off and do **not** prove generated frames.
+-
+-Then select **Fixed 2×**, close the Video menu, and move the camera in gameplay.
+-The plugin suspends FG while its Video menu is open and under configured
+-pause/focus/cursor safety conditions. Verify captured input pairs and NVIDIA's
+-reported output count, then check presented output independently. Only after
+-that should higher multipliers, Dynamic mode, custom targets and HDR comparisons
+-be assessed. A successful options call is not proof of successful interpolation.
+-
+-Use **Write diagnostic report** in Video settings. Also collect:
++Leave Mode **Off**. Check these paths inside the GAME installation:
+ 
+ ```text
+-BepInEx/LogOutput.log
+-artifacts/Native/TGFG.Native.log
+-Streamline logs written under artifacts/Native
++BepInEx/TGFrameGeneration/Autoload.log
++BepInEx/TGFrameGeneration/Native/TGFG.Native.log
++BepInEx/TGFrameGeneration/diagnostics/
+ ```
+ 
+-The diagnostic includes `sourceApi=11`, `presentationApi=12`, bridge flags,
+-interop errors and separate counters in readable form. The first native log
+-failure usually matters more than a later generic suspended state.
++The gameplay diagnostic includes a bounded tail of Autoload.log, with an explicit
++warning that old sessions may be present. Compare timestamps and PIDs. A loaded
++DLL and successful bootstrap return are not proof that loading occurred early
++enough or that a bridge was created. BepInEx preloader timing in this game has not
++been validated for either runtime.
++
++First verify source DX11, private presentation DX12, bridge flag and increasing
++copy counts. Those may advance with FG Off and do not prove interpolation. Then
++test Fixed 2x in gameplay outside Video settings, and measure presented output.
++
++To disable automatic native startup, close the game and place an empty
++`BepInEx/TGFrameGeneration/disable-autoload.txt`. Restart normally. Deployment
++preserves this marker and all existing settings. Remove/move the marker to resume
++autoload. Startup failure may leave partial hooks; restart after correcting it.
+ 
+ ## Known limits — do not interpret the package as certified compatibility
+ 
+@@ -243,9 +227,11 @@ failure usually matters more than a later generic suspended state.
+   interception order, COM wrappers, HUD ordering and resize/fullscreen behavior
+   with your actual RenoDX and ReShade versions remain unverified.
+ 
+-To return to the original native path, exit and launch normally through Steam
+-without TGFG.Launcher. Remove the managed plugin to remove its menu/config layer.
+-No graphics proxy or system setting must be restored by this package.
++To return to the original native path, exit and disable/remove the autoload
++preloader before launching normally through Steam. Removing only the gameplay
++plugin does not stop preloader initialization. No graphics proxy is replaced.
+ 
+ See `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/VALIDATION.md` and
+ `docs/SOURCES.md` for implementation detail, test boundaries and primary sources.
++
++Repository integration details: `docs/AUTOLOAD-INTEGRATION.md`.
+diff --git a/TGFrameGeneration.sln b/TGFrameGeneration.sln
+new file mode 100644
+index 0000000..435215f
+--- /dev/null
++++ b/TGFrameGeneration.sln
+@@ -0,0 +1,24 @@
++Microsoft Visual Studio Solution File, Format Version 12.00
++# Visual Studio Version 17
++VisualStudioVersion = 17.0.31903.59
++MinimumVisualStudioVersion = 10.0.40219.1
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TGFrameGeneration", "src\TGFrameGeneration\TGFrameGeneration.csproj", "{6A683E25-FC32-46EE-B50F-31E2E4686C5E}"
++EndProject
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TGFG.Autoload", "src\TGFG.Autoload\TGFG.Autoload.csproj", "{2357517D-10C5-4134-9046-C2A5762ACF04}"
++EndProject
++Global
++    GlobalSection(SolutionConfigurationPlatforms) = preSolution
++        Debug|Any CPU = Debug|Any CPU
++        Release|Any CPU = Release|Any CPU
++    EndGlobalSection
++    GlobalSection(ProjectConfigurationPlatforms) = postSolution
++        {6A683E25-FC32-46EE-B50F-31E2E4686C5E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++        {6A683E25-FC32-46EE-B50F-31E2E4686C5E}.Debug|Any CPU.Build.0 = Debug|Any CPU
++        {6A683E25-FC32-46EE-B50F-31E2E4686C5E}.Release|Any CPU.ActiveCfg = Release|Any CPU
++        {6A683E25-FC32-46EE-B50F-31E2E4686C5E}.Release|Any CPU.Build.0 = Release|Any CPU
++        {2357517D-10C5-4134-9046-C2A5762ACF04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++        {2357517D-10C5-4134-9046-C2A5762ACF04}.Debug|Any CPU.Build.0 = Debug|Any CPU
++        {2357517D-10C5-4134-9046-C2A5762ACF04}.Release|Any CPU.ActiveCfg = Release|Any CPU
++        {2357517D-10C5-4134-9046-C2A5762ACF04}.Release|Any CPU.Build.0 = Release|Any CPU
++    EndGlobalSection
++EndGlobal
+diff --git a/Test-Setup.ps1 b/Test-Setup.ps1
+index 186f65c..4478b35 100644
+--- a/Test-Setup.ps1
++++ b/Test-Setup.ps1
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: MIT
++# Checks the installed Steam-autoload layout, without requiring developer artifacts.
+ [CmdletBinding()]
+ param(
+     [string]$GameDir='C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA',
+@@ -6,28 +7,20 @@ param(
+ )
+ $ErrorActionPreference='Stop'
+ Set-StrictMode -Version Latest
+-$game=(Resolve-Path $GameDir).Path
+-$native=Join-Path $PSScriptRoot 'artifacts\Native'
+-$plugin=Join-Path $game 'BepInEx\plugins\TGFrameGeneration\TGFrameGeneration.dll'
+-$managedManifest=Join-Path $PSScriptRoot "artifacts\$Runtime\build-manifest.json"
+-$required=@((Join-Path $game 'Fall of Avalon.exe'),(Join-Path $game 'UnityPlayer.dll'),$plugin,$managedManifest,
+-    (Join-Path $native 'TGFG.Native.dll'),(Join-Path $native 'TGFG.Launcher.exe'),(Join-Path $native 'build-manifest.json'))
+-foreach($name in @('sl.interposer.dll','sl.common.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlssg.dll')) {
+-    $required+=Join-Path $native "Streamline\$name"
++. (Join-Path $PSScriptRoot 'tools\Package.Common.ps1')
++$game=(Resolve-Path -LiteralPath $GameDir).Path
++Assert-TgfgGame $game $Runtime
++$manifestPath=Join-Path $game 'BepInEx/TGFrameGeneration/Install-manifest.json'
++if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
++    # A player manually merging a ZIP can point at the root package manifest instead.
++    $manifestPath=Join-Path $game 'TGFG-Package-manifest.json'
+ }
+-foreach($file in $required) { if(-not (Test-Path -LiteralPath $file -PathType Leaf)) {throw "Missing: $file"} }
+-$version=[Reflection.AssemblyName]::GetAssemblyName($plugin).Version
+-if($version.Major -ne 0 -or $version.Minor -ne 3) { throw "Managed plugin is $version, not v0.3. Rebuild/deploy the matching managed DLL." }
+-if($Runtime -eq 'Mono' -and -not (Test-Path (Join-Path $game 'BepInEx\core\BepInEx.dll'))) {throw 'The selected installation does not contain BepInEx 5 Mono core.'}
+-if($Runtime -eq 'IL2CPP' -and -not (Test-Path (Join-Path $game 'BepInEx\core\BepInEx.Unity.IL2CPP.dll'))) {throw 'The selected installation does not contain BepInEx 6 IL2CPP core.'}
+-$managed=Get-Content -LiteralPath $managedManifest -Raw | ConvertFrom-Json
+-$framework=if($Runtime -eq 'Mono') {'net472'} else {'net6.0'}
+-if($managed.runtime -ne $Runtime -or $managed.framework -ne $framework) {throw 'Managed stage metadata does not match the selected runtime.'}
+-if((Get-FileHash $plugin -Algorithm SHA256).Hash -ne $managed.managed_sha256) {throw 'Installed managed DLL differs from the selected runtime build. Rebuild/deploy using Build.ps1.'}
+-$manifest=Get-Content -LiteralPath (Join-Path $native 'build-manifest.json') -Raw | ConvertFrom-Json
+-if(-not ($manifest.PSObject.Properties.Name -contains 'version') -or $manifest.version -ne '0.3.0') {throw 'Native build manifest is not v0.3.0. Rebuild the native targets in this folder.'}
+-if((Get-FileHash (Join-Path $native 'TGFG.Native.dll') -Algorithm SHA256).Hash -ne $manifest.native_sha256) {throw 'Native DLL differs from its build manifest.'}
+-if((Get-FileHash (Join-Path $native 'TGFG.Launcher.exe') -Algorithm SHA256).Hash -ne $manifest.launcher_sha256) {throw 'Launcher differs from its build manifest.'}
+-Write-Host "Files and version checks passed for $Runtime / $game"
+-Write-Host 'This does not establish rendering compatibility. Start Off, verify bridge copies, then try Fixed 2x.'
+-Write-Host 'Game API must remain Direct3D11; the private presentation API should be Direct3D12.'
++Assert-TgfgFile $manifestPath
++$manifest=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
++Test-TgfgPayload $manifest $game $Runtime
++if (Test-Path -LiteralPath (Join-Path $game 'BepInEx/TGFrameGeneration/disable-autoload.txt')) {
++    throw 'Autoload is disabled by BepInEx/TGFrameGeneration/disable-autoload.txt. Move that marker aside to test autoload; this script will not delete it.'
++}
++Write-Host "Installed file, version and hash checks passed for $Runtime / $game"
++Write-Host 'Press Play in Steam normally. No TGFG launcher or launch arguments are needed by this package.'
++Write-Host 'This does not verify initialization timing or FG. Start Off and inspect Autoload.log and Native/TGFG.Native.log under BepInEx/TGFrameGeneration.'
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index a61df40..6941567 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -1,4 +1,4 @@
+-# v0.3 architecture and ownership
++# Native v0.3 architecture and ownership (integrated package v0.3.1)
+ 
+ This is original TGFG integration code. The Open Shaders implementation was read
+ as an architectural precedent, not copied as a Skyrim backend dependency. The
+@@ -111,7 +111,7 @@ and color format. The generic managed adapter does not call this export because
+ no verified FoA post-RenoDX/pre-HUD stage has been identified. Default operation
+ therefore has final color, depth and motion, but no promised HUD reconstruction.
+ 
+-## Startup
++## Legacy development launcher (not the player workflow)
+ 
+ The launcher holds only the child process it creates. A temporary software
+ breakpoint at the PE entrypoint permits the Windows loader to finish; the byte
+@@ -120,3 +120,13 @@ and the debugger is detached before native loading. TGFG_Bootstrap executes
+ outside DllMain, before the main thread starts the game. The original loader
+ proxies on disk are not replaced. Early TLS graphics and Steam replacement
+ processes require separate handling and are not covered by this mechanism.
++
++## Integrated automatic startup
++
++The normal startup entry point is now `src/TGFG.Autoload`, loaded by BepInEx's
++preloader inside the game process Steam starts. It synchronously invokes the
++existing native bootstrap. The gameplay project builds the preloader through a
++build-only project reference, but does not reference/load it at runtime. See
++AUTOLOAD-INTEGRATION.md for the separate Mono/IL2CPP patcher contracts and the
++unverified relationship between this preloader phase and FoA graphics startup.
++The legacy native launcher is not included in player packages.
+diff --git a/docs/AUTOLOAD-INTEGRATION.md b/docs/AUTOLOAD-INTEGRATION.md
+new file mode 100644
+index 0000000..6aeabab
+--- /dev/null
++++ b/docs/AUTOLOAD-INTEGRATION.md
+@@ -0,0 +1,104 @@
++# Autoload is part of the existing repository
++
++This change is based on the supplied v0.3.0 source snapshot plus the standalone
++v0.1.0 autoload source. It is not based on a fetch of a live Git repository or on
++unuploaded local edits. Apply the provided Git patch to the existing repo; do not
++replace that repo with another source folder. No native file is changed.
++
++## One build and deployment flow
++
++`src/TGFG.Autoload` is beside `src/TGFrameGeneration` in the same repo and solution.
++Both import the existing root `Build.Local.props`, with the same fallback game
++paths. Both target net472 and net6.0. The gameplay project has a build-only
++ProjectReference to autoload (`ReferenceOutputAssembly=false`, `Private=false`).
++This ensures the preloader builds alongside the gameplay plugin without becoming
++an assembly dependency loaded by gameplay. The preloader has no Unity or gameplay
++assembly reference. Do not combine the two entry points into one DLL.
++
++`Build.ps1 -Runtime Mono` builds and stages BOTH managed DLLs. `-Runtime Both`
++builds both pairs. `-Deploy` now packages and deploys the complete mod, including
++the already-built native backend and staged signed NVIDIA runtimes. `-Package`
++creates the full runtime-specific player ZIP without deploying. The separate
++`Package.ps1` does the same from existing managed/native artifacts without compiling.
++
++Native artifacts remain at `artifacts/Native`. The existing `Build-Native.ps1`
++and `Stage-Runtime.ps1` remain unchanged. Native ABI is still `0x00030000`, and the
++native build manifest must identify v0.3.0 and the actual matching DLL hash. An
++existing matching native build can be reused; neither launcher existence nor
++launcher hash is a dependency of the new package/installed-layout checks.
++
++The managed projects are now v0.3.1. Do not copy a preloader from net6.0 into Mono
++or vice versa. Their filenames match, but the artifact roots are separate.
++`Build.ps1` limits restore/build to the selected target framework.
++
++Direct `dotnet build ... -p:DeployToGame=true` retains a complete deploy path: the
++csproj calls the same root build script with `-StageOnly -Deploy` after both
++projects compile. That mode does not recursively invoke dotnet. It assumes the
++standard bin/<Configuration>/<TargetFramework> output layout.
++
++## Existing local changes
++
++The patch does not touch `native/`, `CMakeLists.txt`, `Build-Native.ps1`,
++`Stage-Runtime.ps1`, `Build.Local.props`, NVIDIA binaries or existing build artifacts.
++Your native compilation fixes and local SDK copies remain yours. Git may report a
++conflict in a managed project/build script you also changed. Use `git apply --check`
++and do not bypass conflicts by overwriting the whole repository.
++
++The default game paths remain the previous v0.3 defaults. Both projects share the
++root Build.Local.props. The build writes the evaluated game directory to a small
++build-output file so packaging uses MSBuild's actual value, not a second script's
++possibly different default or an ad-hoc XML parser.
++
++## Installed layout
++
++```
++BepInEx/
++  patchers/TGFG.Autoload.dll
++  plugins/TGFrameGeneration/TGFrameGeneration.dll
++  TGFrameGeneration/
++    Install-manifest.json
++    Autoload.log
++    Native/
++      TGFG.Native.dll
++      TGFG.Native.log
++      Streamline/<matching official NVIDIA runtime files>
++```
++
++The package assembler validates hashes, assembly identities, native PE machine
++architecture and NVIDIA signatures. It only copies an allowlisted payload. The
++installer backs up overwritten TGFG files and attempts rollback on copy failure.
++It does not edit a game EXE, another mod, Doorstop configuration, Steam launch
++settings, launch arguments, steam_appid.txt or existing TGFG configuration. Backup
++folders and disable-autoload.txt are not removed during deployment.
++
++`Build.ps1 -Deploy` installs Install-manifest.json; manual player ZIP extraction
++can instead retain TGFG-Package-manifest.json in the game root for Test-Setup.ps1.
++Neither manifest is needed for BepInEx to discover the preloader at game startup.
++The generated distribution includes no launcher or developer scripts.
++
++`Test-Setup.ps1` now checks the INSTALLED autoload layout. It does not require the
++repo's native artifacts or launcher to exist on a player's computer. The old
++`Launch-Game.ps1` now only checks installation and prints instructions to use
++Steam; it does not start a process. The native launcher source remains available
++for deliberate low-level development, but is not deployed by this workflow.
++
++## Validation boundary
++
++This is a repository integration and startup-packaging change, not a new renderer.
++The original autoload preloader bootstrap implementation is retained, with its
++version updated. It has not been compiled or run on Windows here. Native startup
++can fail or occur too late. A successful bootstrap is not proof of a captured
++swapchain or generated output. All v0.3 rendering limitations, including missing
++game-specific HUD-less extraction and unverified RenoDX ordering, remain.
++
++The latest supplied diagnostic predates this integration and showed v0.3.0 Mono
++with no native DLL. It is not evidence of successful autoload timing.
++
++## Primary references checked for this integration
++
++- BepInEx 5 preloader contract; separate patcher/plugin assemblies:
++  https://docs.bepinex.dev/articles/dev_guide/preloader_patchers.html
++- BepInEx 6 BasePatcher lifecycle:
++  https://docs.bepinex.dev/master/articles/dev_guide/preloader_patchers.html
++- MSBuild ProjectReference ReferenceOutputAssembly semantics:
++  https://learn.microsoft.com/en-us/visualstudio/msbuild/common-msbuild-project-items
+diff --git a/docs/PLAYER-INSTALL.txt b/docs/PLAYER-INSTALL.txt
+new file mode 100644
+index 0000000..94ec729
+--- /dev/null
++++ b/docs/PLAYER-INSTALL.txt
+@@ -0,0 +1,33 @@
++TGFrameGeneration 0.3.1 - experimental direct Streamline / DX11 bridge
++
++Requires the corresponding existing BepInEx installation:
++  Mono:   BepInEx 5
++  IL2CPP: BepInEx 6 IL2CPP
++Install only ONE runtime package in each game installation.
++
++Close the game. Merge this package's BepInEx folder into the game installation.
++Do not install any launcher, replace a graphics proxy, change Steam launch options,
++or create steam_appid.txt. Press Play in Steam normally after installation.
++The ZIP's TGFG-Package-manifest.json can optionally be placed in the game root for
++Test-Setup.ps1; player startup does not depend on that manifest.
++
++Keep generation Off for the first test. Loading the DLL is not proof of working FG.
++Review these game-local logs:
++  BepInEx/TGFrameGeneration/Autoload.log
++  BepInEx/TGFrameGeneration/Native/TGFG.Native.log
++The Video menu's diagnostic report includes an autoload log tail.
++
++To disable automatic native loading, close the game and create an empty:
++  BepInEx/TGFrameGeneration/disable-autoload.txt
++Restart normally. Disabling FG in the menu is NOT the same as removing the bridge.
++
++For uninstall, close the game and remove only these TGFG files:
++  BepInEx/patchers/TGFG.Autoload.dll
++  BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
++  BepInEx/TGFrameGeneration/Native/   (TGFG private backend and runtime copies)
++The TGFG config and logs may be kept. Do not remove BepInEx itself or other mods.
++
++This package is not a verified rendering release. Startup ordering, Mono/IL2CPP
++behavior and RenoDX coexistence still require testing. It has not been shown to
++produce correct FG in FoA. No arbitrary DX12 switch is needed by the mod; Unity's
++active renderer must be DX11 for this backend.
+diff --git a/docs/TESTING.md b/docs/TESTING.md
+index f9954e1..f14e08b 100644
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -12,13 +12,13 @@ and runs tests including compilation of the exact embedded HLSL. Preserve the
+ first compiler error rather than only the final MSBuild summary if it fails.
+ The Linux preparation tests do not establish any of those Windows outcomes.
+ 
+-`Test-Setup.ps1` checks expected files, the managed assembly version and the native
+-build-manifest hashes without loading the native DLL into PowerShell. It cannot
++`Test-Setup.ps1` checks expected files, the managed assembly version and the installed package
++manifest hashes without loading the native DLL into PowerShell. It cannot
+ check runtime hook ordering or whether interpolation will work.
+ 
+ ## Off-mode output bridge
+ 
+-Launch with `-force-d3d11` through the helper; keep generation Off. The game report
++Start normally through Steam with the integrated preloader installed; keep generation Off. The game report
+ must remain Direct3D11. The native report must show source DX11, presentation
+ DX12, an active bridge, source-present/copy counts increasing, and no failing
+ interop HRESULT. Check the image while moving, resizing and reopening settings.
+@@ -72,10 +72,11 @@ combined compatibility. Keep backups of addon files; no test script replaces the
+ 
+ ## Report collection
+ 
+-Collect the new in-game diagnostic, BepInEx/LogOutput.log, native/Streamline logs
+-under artifacts/Native, and the launcher output. Include whether this was Off,
+-Fixed 2× or Dynamic and whether the capture was in gameplay or a menu. Compare
+-managed and native PIDs with the PID printed by the launcher.
++Collect the new in-game diagnostic, BepInEx/LogOutput.log,
++BepInEx/TGFrameGeneration/Autoload.log and native/Streamline logs under
++BepInEx/TGFrameGeneration/Native in the game installation. Include whether this
++was Off, Fixed 2× or Dynamic and whether the capture was in gameplay or a menu.
++Compare managed and native PIDs with the current session in Autoload.log.
+ 
+ Bridge flags: 1 active, 2 shared-texture path created, 4 shared-fence path created,
+ 8 scRGB-to-HDR10 output path, 16 explicit HUD-less tag supplied for the last tagged
+@@ -84,5 +85,9 @@ or flags are hardcoded to pretend frame generation succeeded.
+ 
+ ## Rollback
+ 
+-Exit, start normally through Steam without TGFG.Launcher, and remove the managed
+-plugin to remove the menu additions. No proxy DLL or system setting was overwritten.
++Exit and disable autoload using BepInEx/TGFrameGeneration/disable-autoload.txt,
++or remove BepInEx/patchers/TGFG.Autoload.dll. Then start normally through Steam.
++Removing only the gameplay plugin removes its menu but does not stop preloader
++initialization. No proxy DLL or system setting was overwritten.
++
++Check game-local BepInEx/TGFrameGeneration/Autoload.log first; confirm the current PID.
+diff --git a/docs/VALIDATION.md b/docs/VALIDATION.md
+index 01194c3..cdb56da 100644
+--- a/docs/VALIDATION.md
++++ b/docs/VALIDATION.md
+@@ -1,3 +1,30 @@
++# Validation record - integrated v0.3.1
++
++This update integrates the existing native backend and preloader into one source
++repository. The preparation environment has no .NET SDK, PowerShell runtime,
++Windows SDK, game assemblies or game/GPU execution. No new managed binary has
++been compiled here and no PowerShell script was executed here.
++
++Executed for this integration:
++
++- 14 existing source consistency checks and 12 new autoload/build-graph checks.
++- Two portable C++ test executables (80 ABI/policy/ring and 61 interop checks).
++- Git patch checks described in validation/integration-patch-checks.txt.
++
++The current run logs are in `validation/integration-*`. They record portable C++
++test execution and Python source/structure checks. Patch application is tested
++against the supplied v0.3.0 baseline and with synthetic local edits; this is not
++a test against unuploaded changes in the user's working tree.
++
++The native files and build scripts are unchanged. Their portable regression tests
++remain useful but do not validate automatic startup, GPU code or Windows APIs.
++The PowerShell scripts include local parser/behavior tests for execution on the
++user's Windows machine. Those checks were not executed in this environment.
++
++---
++
++## Historical v0.3.0 preparation record (not proof of v0.3.1 startup)
++
+ # Validation record — v0.3.0
+ 
+ Date: 2026-09-18. Preparation environment: Linux x86-64, GNU C++ 14.2.0,
+diff --git a/source-manifest.json b/source-manifest.json
+index ca82d34..9fa4a37 100644
+--- a/source-manifest.json
++++ b/source-manifest.json
+@@ -1,24 +1,29 @@
+ {
+-  "package": "TGFrameGeneration DX11-to-DX12 direct Streamline source",
+-  "version": "0.3.0",
++  "package": "TGFrameGeneration integrated Steam autoload / unchanged DX11 native backend",
++  "version": "0.3.1",
++  "native_version": "0.3.0",
+   "abi": "0x00030000",
+-  "created_utc": "2026-09-18T17:42:18.774800+00:00",
++  "created_utc": "2026-09-18T20:15:01.032499+00:00",
+   "windows_compilation_performed": false,
+   "managed_compilation_performed": false,
++  "powershell_execution_performed": false,
+   "game_gpu_test_performed": false,
+   "validation": {
+     "portable_checks": 141,
+     "portable_ctest_executables": 2,
+-    "source_consistency_tests": 14
++    "source_consistency_tests": 26,
++    "git_application_checks_passed": true,
++    "native_source_changes": 0
+   },
++  "note": "Hashes describe the supplied source snapshot, not unuploaded local edits; no runtime certification.",
+   "files": {
+     ".editorconfig": {
+       "bytes": 114,
+       "sha256": "0d6fad3fd4e7046d9f722be4fdfc436466c598c86e4c5e82148f6394c4f17f9c"
+     },
+     ".gitignore": {
+-      "bytes": 63,
+-      "sha256": "f836844f7d8629811d9f7d3e1fdc08557ca595dfcbdebbc57bc791a852b15d1f"
++      "bytes": 145,
++      "sha256": "430da692f02c1195eb5ecf4c71acd68fd2af6bfbd4eb64281024794e4c895d45"
+     },
+     "Build-Native.ps1": {
+       "bytes": 2120,
+@@ -29,12 +34,12 @@
+       "sha256": "3bf7a827ab654afb358ef44e1640e1de3e9615350a0176c91d284e4bd4cae85c"
+     },
+     "Build.ps1": {
+-      "bytes": 2461,
+-      "sha256": "999b9dabd99caf2fd0e0ee0af69a4bb82c89809e88d97e90e70e39f875534ade"
++      "bytes": 3835,
++      "sha256": "f85ef0932e92dd26851671e6636387481851516fe33895f4df4895abcc07b458"
+     },
+     "CHANGELOG.md": {
+-      "bytes": 1205,
+-      "sha256": "3c08f6e40969f9762c5115bd861ccfaa14b87d68deaa73b0e2105704cb39e545"
++      "bytes": 1892,
++      "sha256": "699edcfca30cee02bd993881ec6ee188bf770ba04d5dd88dce44965640e6a50b"
+     },
+     "CMakeLists.txt": {
+       "bytes": 3794,
+@@ -49,40 +54,56 @@
+       "sha256": "6f7ea4d46f02b23c0c1a85f48be42d1d16919441e8e1562455f2caa478823dff"
+     },
+     "Launch-Game.ps1": {
+-      "bytes": 1024,
+-      "sha256": "cd85610e780fc8eb505abdf67605b38e7c318063865f15ffdb2fa916002976cc"
++      "bytes": 763,
++      "sha256": "cdaca17705881b25bec3c53fb4f194a36a5eb046cd370ee3ec8f51bbe0a77ee1"
++    },
++    "Package.ps1": {
++      "bytes": 5748,
++      "sha256": "a3ef56de3beb639988b6a2bda9be5d7f056573d4f6f0a1c8cfffb6cc3643607d"
+     },
+     "README.md": {
+-      "bytes": 13168,
+-      "sha256": "9d374e99495761e860d5d548443072c362743514656ce7759efe4a922cb08cb9"
++      "bytes": 12739,
++      "sha256": "986476dbcd31c3d2dcda2f419c9cdcaa9c4ab9e8a237f67b9d562536a98925fe"
+     },
+     "Stage-Runtime.ps1": {
+       "bytes": 1609,
+       "sha256": "70b5b2aa6dd6f6acacc4a35a398adf36ffac6060d64feeae021d4d1b7dc702c5"
+     },
++    "TGFrameGeneration.sln": {
++      "bytes": 1474,
++      "sha256": "b50b4cd2732a78c30f6ab61797d35d739d83621a7b7d4aa4a4b710a8cee9970f"
++    },
+     "Test-Setup.ps1": {
+-      "bytes": 2954,
+-      "sha256": "119e56a44e1b19f33217c8eac9db29d478b68209c86a272bc7e7618f4d566574"
++      "bytes": 1529,
++      "sha256": "6feb881f3cc33cf0b4bf580e502441fe00990ce2e189f3104ca067da5f95a758"
+     },
+     "config/TGFG-settings-example.cfg": {
+       "bytes": 495,
+       "sha256": "fb51f818214b22f2d5e5d3c63617f32b97a500888c8f74f0afb61ffe56c458e2"
+     },
+     "docs/ARCHITECTURE.md": {
+-      "bytes": 7088,
+-      "sha256": "af08731369a837aab964dd0f54878556d673030f7d172f5a501ebadb612f3422"
++      "bytes": 7736,
++      "sha256": "1cdadf6ef8b43bd7a586d48fb815c5acde893bf2d4dd65852289f30e3a051595"
++    },
++    "docs/AUTOLOAD-INTEGRATION.md": {
++      "bytes": 5581,
++      "sha256": "16e403b5ecc9a322527fd48c9a43e6613fd80247730de74b4565f336b06924a4"
++    },
++    "docs/PLAYER-INSTALL.txt": {
++      "bytes": 1717,
++      "sha256": "3f878a6b51729018b27fb10d30dec15dc723e4674b079369883deb15eddbea1e"
+     },
+     "docs/SOURCES.md": {
+       "bytes": 4041,
+       "sha256": "03de31e766a465bcb4161559bdd6a25edb139cbb2533fc7a5549029339a72923"
+     },
+     "docs/TESTING.md": {
+-      "bytes": 4692,
+-      "sha256": "22bd73ad7da2b8a0aab6db8294ca9b349f96cff6ed8cf173f0edfe7ab6f99cf4"
++      "bytes": 5010,
++      "sha256": "f8b116cfae63d79929d302294b39baee4fc3fcc8b7e779859aba67b9790c9e59"
+     },
+     "docs/VALIDATION.md": {
+-      "bytes": 3955,
+-      "sha256": "5b3870546a30d618d2f4351b7283c34c62552d0975e2df9181a4e4845bb9e788"
++      "bytes": 5260,
++      "sha256": "35cbe715ba37e1258be65a9dac87a18cbbca9bb10a47afbad5f72566d491783f"
+     },
+     "native/include/dx11_bridge.hpp": {
+       "bytes": 890,
+@@ -140,9 +161,21 @@
+       "bytes": 10574,
+       "sha256": "4877d2a932c3c5f31e214d128127bb7fa74d24df5dd41cc1f62f4170fa5453a4"
+     },
++    "src/TGFG.Autoload/Bootstrap.cs": {
++      "bytes": 11200,
++      "sha256": "de343e56d4d2bfeca0d4645645ded78f6cd95ba290b995e2fd928e3ef87a4d2c"
++    },
++    "src/TGFG.Autoload/Patcher.cs": {
++      "bytes": 914,
++      "sha256": "96aeb02a4226bffb6ca0fe632f3257f32e539ed6670af2be6b86eb22bee6488a"
++    },
++    "src/TGFG.Autoload/TGFG.Autoload.csproj": {
++      "bytes": 2454,
++      "sha256": "bcea5b6d3dc0bf6da7cb0b68ffe27828179187f414ce162a9ddc22bbf7eeecec"
++    },
+     "src/TGFrameGeneration/Diagnostics.cs": {
+-      "bytes": 4424,
+-      "sha256": "987176f41cef2828f4de07c704bf398199ec886655dbe1e268b4cd1249715cd8"
++      "bytes": 7028,
++      "sha256": "4ae847586e67272fa382f4a90f613e3081ded9fa20ab9fa486f4b57acbe8b9b5"
+     },
+     "src/TGFrameGeneration/FrameBridge.cs": {
+       "bytes": 8101,
+@@ -153,8 +186,8 @@
+       "sha256": "eaac849a804a6886f4b3927b0478a0287062c270cb852b6f6643d5155d1e8448"
+     },
+     "src/TGFrameGeneration/NativeBridge.cs": {
+-      "bytes": 3891,
+-      "sha256": "8c5f7b26f401680bf75871452e92f2453ec726dc42316be3849329af85821e94"
++      "bytes": 4000,
++      "sha256": "12996a038625d4e6c619f177610a31100e13ac9e331cd5d34ab7bd0957188377"
+     },
+     "src/TGFrameGeneration/NativeVideoMenu.cs": {
+       "bytes": 13458,
+@@ -162,7 +195,7 @@
+     },
+     "src/TGFrameGeneration/Plugin.cs": {
+       "bytes": 1521,
+-      "sha256": "d62449fc58170d921a0f24479fb24b42488c9ec8d39d54335f9ac86d8e0ff59d"
++      "sha256": "acbab5870342502b7e0c8f86a53c65dee83e2378a3f745bb8a02f7096c28fa1c"
+     },
+     "src/TGFrameGeneration/Session.cs": {
+       "bytes": 6115,
+@@ -173,13 +206,17 @@
+       "sha256": "68fe5a5438ec8d46d0bab24d69467bed7a2636a5dae56cd9b73307776b1ba5bf"
+     },
+     "src/TGFrameGeneration/TGFrameGeneration.csproj": {
+-      "bytes": 6180,
+-      "sha256": "a29b8405aabd100c2528f289ebd996f5bdb114f7eb424b784e15fdae3d4a44f2"
++      "bytes": 6967,
++      "sha256": "a384a35d16e231939e1debe210bd15c1e7d588d5e8c4931d4fdc2782889d3c77"
+     },
+     "tests/interop_tests.cpp": {
+       "bytes": 2809,
+       "sha256": "57cd86f0100c3adda4c9347c95c2e9273d122164ac159075a175fdd0f4edc05d"
+     },
++    "tests/package_tests.ps1": {
++      "bytes": 4630,
++      "sha256": "c7bc9e2badbd53020363a0f96ff1d9c2d5ab3b84306e874b37769395e340fd83"
++    },
+     "tests/policy_tests.cpp": {
+       "bytes": 5385,
+       "sha256": "8c8c0495e06de2b81e74312e96271bf7d4bf9d162a9d1c4b04d08618dcf3b6e3"
+@@ -189,8 +226,20 @@
+       "sha256": "ab6444b6758ec8cf57e081748ae4a63b96192095a73a795db9c2dea43241bf6d"
+     },
+     "tests/source_checks.py": {
+-      "bytes": 8483,
+-      "sha256": "eea5b7021fb5a77f4c7dbcd95008922fcf17c5e0a62e154c0d97b9fa4315fa18"
++      "bytes": 8763,
++      "sha256": "57ae071e9ed829cc8ab2107f261ed41b51db4bb2a860fd84f0a1f62c0d403275"
++    },
++    "tests/test_autoload_integration.py": {
++      "bytes": 6637,
++      "sha256": "e210dd0344e12d5653fdc67f84981a60ef7fed06ea8f1c41215dcdec541d1c4b"
++    },
++    "tools/Package.Common.ps1": {
++      "bytes": 9907,
++      "sha256": "919c01e1359eddf67d1517f83dd04be6c0e8a1647b2cbe91eff729bbaf0c5336"
++    },
++    "tools/Test-Scripts.ps1": {
++      "bytes": 938,
++      "sha256": "52e928e48d9fd87e909615a58eca7cba2b54e0e8bbdf0a89ec2d49afc10b0834"
+     },
+     "validation/cmake-build.txt": {
+       "bytes": 77,
+@@ -204,6 +253,34 @@
+       "bytes": 390,
+       "sha256": "440e729b2e4cac25d813d94a91aed28fa392da764582c70c9f008cf62dee5f8d"
+     },
++    "validation/integration-autoload-checks.txt": {
++      "bytes": 1395,
++      "sha256": "34e16cb6e2e51629caa71accaf56d8bdb9a638f45fd5c056f8d1e420a1865e32"
++    },
++    "validation/integration-cmake-build.txt": {
++      "bytes": 346,
++      "sha256": "a86ac316e0e2b10c1eb8283b263b15691c4fcc04cb33cb79029d70dadb9c13d5"
++    },
++    "validation/integration-cmake-configure.txt": {
++      "bytes": 625,
++      "sha256": "34c2d26ad10f6c444d5f773c27d3386e122a07766b26d6f5db20319cef646c54"
++    },
++    "validation/integration-ctest.txt": {
++      "bytes": 390,
++      "sha256": "ec7bf76b1e0ee680dd8e898c13f3d1ad241c64e5c404bc9786c03d0f073779e5"
++    },
++    "validation/integration-patch-checks.txt": {
++      "bytes": 605,
++      "sha256": "fedba4a2386a8ce1f3d0fc4e9cc4f9d99c6f4a51ff69e41d3f5ac92f867383a3"
++    },
++    "validation/integration-portable-checks.txt": {
++      "bytes": 178,
++      "sha256": "b3c45c66455477d1bfdffc19d7531b32fcfe430cac4f472a3b55f44d68c39067"
++    },
++    "validation/integration-source-checks.txt": {
++      "bytes": 1499,
++      "sha256": "7853d83d5cc9c3623067584c57aa93b113ed7ae04f9a94f47c4669bd9220d0b6"
++    },
+     "validation/portable-checks.txt": {
+       "bytes": 178,
+       "sha256": "b3c45c66455477d1bfdffc19d7531b32fcfe430cac4f472a3b55f44d68c39067"
+diff --git a/src/TGFG.Autoload/Bootstrap.cs b/src/TGFG.Autoload/Bootstrap.cs
+new file mode 100644
+index 0000000..c7b85fa
+--- /dev/null
++++ b/src/TGFG.Autoload/Bootstrap.cs
+@@ -0,0 +1,209 @@
++// SPDX-License-Identifier: MIT
++using System;
++using System.ComponentModel;
++using System.Diagnostics;
++using System.IO;
++using System.Runtime.InteropServices;
++using System.Security.Cryptography;
++using System.Text;
++using System.Threading;
++using BepInEx;
++using BepInEx.Logging;
++
++namespace TGFG.Autoload
++{
++    internal static class Bootstrap
++    {
++        private const uint ExpectedAbi = 0x00030000;
++        private const uint LoadLibrarySearchDllLoadDir = 0x00000100;
++        private const uint LoadLibrarySearchDefaultDirs = 0x00001000;
++        private static int attempted;
++        // Keep the reference for process lifetime. Hooks may still reference the DLL
++        // even if bootstrap fails partway through. Never FreeLibrary after bootstrap.
++        private static IntPtr nativeModule;
++        private static ManualLogSource logger;
++        private static string logPath;
++
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        private delegate uint GetAbi();
++        // Matches DWORD WINAPI TGFG_Bootstrap(void*) in the v0.3 source.
++        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
++        private delegate uint NativeBootstrap(IntPtr unused);
++
++        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
++        private static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
++        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
++        private static extern IntPtr GetModuleHandleW(string name);
++        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
++        private static extern IntPtr GetProcAddress(IntPtr module, string name);
++        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
++        private static extern uint GetModuleFileNameW(IntPtr module, StringBuilder filename, uint size);
++        [DllImport("user32.dll", SetLastError = true)]
++        [return: MarshalAs(UnmanagedType.Bool)]
++        private static extern bool EnumWindows(EnumWindow callback, IntPtr argument);
++        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
++        [return: MarshalAs(UnmanagedType.Bool)]
++        private delegate bool EnumWindow(IntPtr window, IntPtr argument);
++        [DllImport("user32.dll")]
++        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
++        [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
++        private static extern int GetClassNameW(IntPtr window, StringBuilder name, int maxCount);
++
++        internal static void Run(string runtime)
++        {
++            if (Interlocked.Exchange(ref attempted, 1) != 0) return;
++            try
++            {
++                logger = Logger.CreateLogSource("TGFG.Autoload");
++                if (Environment.OSVersion.Platform != PlatformID.Win32NT || IntPtr.Size != 8)
++                    throw new PlatformNotSupportedException("TGFG's current native backend requires Windows x64.");
++
++                string root = Path.GetFullPath(Path.Combine(Paths.BepInExRootPath, "TGFrameGeneration"));
++                Directory.CreateDirectory(root);
++                logPath = Path.Combine(root, "Autoload.log");
++                int pid;
++                using (var process = Process.GetCurrentProcess()) pid = process.Id;
++                Write("=== TGFG.Autoload 0.3.1; PID=" + pid + "; " + runtime + " ===");
++                Write("Invoked by BepInEx preloader Initialize; no launcher, Unity call, or background worker.");
++                Write("Patcher=" + typeof(Bootstrap).Assembly.Location);
++
++                if (File.Exists(Path.Combine(root, "disable-autoload.txt")))
++                {
++                    Write("DISABLED by BepInEx/TGFrameGeneration/disable-autoload.txt. Native backend not loaded.");
++                    return;
++                }
++
++                // Restrict this bootstrap to the intended game, not every Unity
++                // process sharing a BepInEx install or started by a mod manager.
++                string exe = ModulePath(IntPtr.Zero);
++                if (!string.Equals(Path.GetFileName(exe), "Fall of Avalon.exe", StringComparison.OrdinalIgnoreCase))
++                    throw new InvalidOperationException("Unexpected executable: " + exe);
++                string nativePath = Path.Combine(root, "Native", "TGFG.Native.dll");
++                if (GetModuleHandleW("TGFG.Native.dll") != IntPtr.Zero)
++                    throw new InvalidOperationException("TGFG.Native.dll was already loaded. Do not combine autoload with TGFG.Launcher or a second bootstrap.");
++                if (GetModuleHandleW("sl.interposer.dll") != IntPtr.Zero)
++                    throw new InvalidOperationException("An independent Streamline interposer is already loaded. Refusing a second owner.");
++
++                string[] required = {
++                    "sl.interposer.dll", "sl.common.dll", "sl.dlss_g.dll",
++                    "sl.reflex.dll", "sl.pcl.dll", "nvngx_dlssg.dll"
++                };
++                RequireAmd64Pe(nativePath);
++                foreach (string name in required)
++                    RequireAmd64Pe(Path.Combine(root, "Native", "Streamline", name));
++
++                Write("Before bootstrap: d3d11.dll mapped=" + Mapped("d3d11.dll") +
++                      ", d3d12.dll mapped=" + Mapped("d3d12.dll") +
++                      ", dxgi.dll mapped=" + Mapped("dxgi.dll") +
++                      ", Unity windows=" + UnityWindowCount((uint)pid));
++                Write("Module/window presence does not establish device or swapchain creation order.");
++                Write("Native=" + nativePath + "; SHA256=" + Sha256(nativePath));
++
++                nativeModule = LoadLibraryExW(nativePath, IntPtr.Zero,
++                    LoadLibrarySearchDllLoadDir | LoadLibrarySearchDefaultDirs);
++                if (nativeModule == IntPtr.Zero)
++                {
++                    int error = Marshal.GetLastWin32Error();
++                    throw new Win32Exception(error, "LoadLibraryExW failed for " + nativePath +
++                        ". Error 126 can mean a missing dependency, not a missing TGFG.Native.dll.");
++                }
++                Write("Native loaded in PID=" + pid + " from " + ModulePath(nativeModule));
++                uint abi = Bind<GetAbi>("TGFG_GetAbiVersion")();
++                if (abi != ExpectedAbi)
++                    throw new InvalidOperationException("Native ABI 0x" + abi.ToString("X8") +
++                        " does not match expected 0x" + ExpectedAbi.ToString("X8") + ".");
++
++                // Synchronous: Unity is not allowed to race ahead of hook installation.
++                // Do NOT move this to ThreadPool/Task.Run or a plugin Awake() callback.
++                uint code = Bind<NativeBootstrap>("TGFG_Bootstrap")(IntPtr.Zero);
++                Write("TGFG_Bootstrap returned " + code + " in PID=" + pid + ".");
++                if (code != 0)
++                    throw new InvalidOperationException("Native bootstrap failed (code " + code +
++                        "). See BepInEx/TGFrameGeneration/Native/TGFG.Native.log. Partial hooks may remain; restart after correcting the cause.");
++                Write("AUTOLOAD COMPLETED. This proves the bootstrap returned success, NOT that a game swapchain was intercepted or FG works.");
++                Write("Next checkpoint: in-game native PID matches " + pid +
++                      ", sourceApi=11, presentationApi=12, bridge and copy counters advance with Mode Off.");
++            }
++            catch (Exception ex)
++            {
++                // An ordinary loader/file error should not prevent BepInEx's other
++                // plugins from loading. Native access violations cannot be recovered here.
++                Write("AUTOLOAD FAILED: " + ex, true);
++            }
++        }
++
++        private static T Bind<T>(string symbol) where T : Delegate
++        {
++            IntPtr address = GetProcAddress(nativeModule, symbol);
++            if (address == IntPtr.Zero) throw new EntryPointNotFoundException(symbol);
++            return Marshal.GetDelegateForFunctionPointer<T>(address);
++        }
++        private static bool Mapped(string module) { return GetModuleHandleW(module) != IntPtr.Zero; }
++        private static string ModulePath(IntPtr module)
++        {
++            var buffer = new StringBuilder(32768);
++            uint count = GetModuleFileNameW(module, buffer, (uint)buffer.Capacity);
++            if (count == 0 || count >= buffer.Capacity)
++                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot resolve module path.");
++            return buffer.ToString();
++        }
++        private static int UnityWindowCount(uint pid)
++        {
++            int count = 0;
++            EnumWindow callback = (window, unused) => {
++                uint owner;
++                GetWindowThreadProcessId(window, out owner);
++                if (owner == pid)
++                {
++                    var name = new StringBuilder(256);
++                    GetClassNameW(window, name, name.Capacity);
++                    if (name.ToString().StartsWith("Unity", StringComparison.Ordinal)) count++;
++                }
++                return true;
++            };
++            bool success = EnumWindows(callback, IntPtr.Zero);
++            GC.KeepAlive(callback);
++            return success ? count : -1;
++        }
++        private static void RequireAmd64Pe(string path)
++        {
++            using (var stream = File.OpenRead(path))
++            using (var reader = new BinaryReader(stream))
++            {
++                if (stream.Length < 64 || reader.ReadUInt16() != 0x5A4D)
++                    throw new BadImageFormatException("Not a PE image: " + path);
++                stream.Position = 0x3C;
++                int pe = reader.ReadInt32();
++                if (pe < 64 || pe > stream.Length - 6)
++                    throw new BadImageFormatException("Invalid PE header: " + path);
++                stream.Position = pe;
++                if (reader.ReadUInt32() != 0x00004550 || reader.ReadUInt16() != 0x8664)
++                    throw new BadImageFormatException("Expected AMD64 native runtime: " + path);
++            }
++        }
++        private static string Sha256(string path)
++        {
++            using (var stream = File.OpenRead(path))
++            using (var hash = SHA256.Create())
++                return BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", "");
++        }
++        private static void Write(string message, bool error = false)
++        {
++            try
++            {
++                if (logger != null)
++                {
++                    if (error) logger.LogError(message); else logger.LogInfo(message);
++                }
++                else Console.Error.WriteLine("[TGFG.Autoload] " + message);
++            }
++            catch { /* Logging must not abort other preloader plugins. */ }
++            try
++            {
++                if (logPath != null)
++                    File.AppendAllText(logPath, DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine);
++            }
++            catch { /* BepInEx logging above remains available in read-only folders. */ }
++        }
++    }
++}
+diff --git a/src/TGFG.Autoload/Patcher.cs b/src/TGFG.Autoload/Patcher.cs
+new file mode 100644
+index 0000000..0f2a434
+--- /dev/null
++++ b/src/TGFG.Autoload/Patcher.cs
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: MIT
++// This is a PRELOADER assembly. Do not add Unity or TGFrameGeneration references.
++#if BEPINEX_MONO
++using System.Collections.Generic;
++using Mono.Cecil;
++namespace TGFG.Autoload
++{
++    public static class Patcher
++    {
++        // A valid BepInEx 5 patcher contract with no assembly modifications.
++        public static IEnumerable<string> TargetDLLs { get { yield break; } }
++        public static void Patch(AssemblyDefinition assembly) { }
++        public static void Initialize() { Bootstrap.Run("Mono / BepInEx 5"); }
++    }
++}
++#elif BEPINEX_IL2CPP
++using BepInEx.Preloader.Core.Patching;
++namespace TGFG.Autoload
++{
++    [PatcherPluginInfo("tgfg.autoload", "TGFG native autoload", "0.3.1")]
++    public sealed class Patcher : BasePatcher
++    {
++        public override void Initialize() { Bootstrap.Run("IL2CPP / BepInEx 6"); }
++    }
++}
++#else
++#error Select the Mono or IL2CPP target.
++#endif
+diff --git a/src/TGFG.Autoload/TGFG.Autoload.csproj b/src/TGFG.Autoload/TGFG.Autoload.csproj
+new file mode 100644
+index 0000000..801b1a1
+--- /dev/null
++++ b/src/TGFG.Autoload/TGFG.Autoload.csproj
+@@ -0,0 +1,39 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <Import Project="..\..\Build.Local.props" Condition="Exists('..\..\Build.Local.props')" />
++  <PropertyGroup>
++    <TargetFrameworks>net472;net6.0</TargetFrameworks>
++    <AssemblyName>TGFG.Autoload</AssemblyName>
++    <RootNamespace>TGFG.Autoload</RootNamespace>
++    <Version>0.3.1</Version>
++    <LangVersion>latest</LangVersion>
++    <Nullable>disable</Nullable>
++    <PlatformTarget>x64</PlatformTarget>
++    <EnableNETAnalyzers>false</EnableNETAnalyzers>
++    <ImplicitUsings>disable</ImplicitUsings>
++    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
++    <GameDirMono Condition="'$(GameDirMono)' == ''">C:\Games\Tainted Grail FoA Mono</GameDirMono>
++    <GameDirIl2Cpp Condition="'$(GameDirIl2Cpp)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
++  </PropertyGroup>
++  <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
++    <DefineConstants>$(DefineConstants);BEPINEX_MONO</DefineConstants>
++    <CoreDir>$(GameDirMono)\BepInEx\core</CoreDir>
++  </PropertyGroup>
++  <PropertyGroup Condition="'$(TargetFramework)' == 'net6.0'">
++    <DefineConstants>$(DefineConstants);BEPINEX_IL2CPP</DefineConstants>
++    <CoreDir>$(GameDirIl2Cpp)\BepInEx\core</CoreDir>
++  </PropertyGroup>
++  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
++    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
++    <RequiredCore Include="BepInEx;Mono.Cecil" />
++    <Reference Include="BepInEx"><HintPath>$(CoreDir)\BepInEx.dll</HintPath><Private>false</Private></Reference>
++    <Reference Include="Mono.Cecil"><HintPath>$(CoreDir)\Mono.Cecil.dll</HintPath><Private>false</Private></Reference>
++  </ItemGroup>
++  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
++    <RequiredCore Include="BepInEx.Core;BepInEx.Preloader.Core" />
++    <Reference Include="BepInEx.Core"><HintPath>$(CoreDir)\BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
++    <Reference Include="BepInEx.Preloader.Core"><HintPath>$(CoreDir)\BepInEx.Preloader.Core.dll</HintPath><Private>false</Private></Reference>
++  </ItemGroup>
++  <Target Name="ValidateReferences" BeforeTargets="ResolveReferences" Condition="'$(TargetFramework)' != ''">
++    <Error Condition="!Exists('$(CoreDir)\%(RequiredCore.Identity).dll')" Text="Missing $(CoreDir)\%(RequiredCore.Identity).dll. Select the corresponding installed BepInEx runtime." />
++  </Target>
++</Project>
+diff --git a/src/TGFrameGeneration/Diagnostics.cs b/src/TGFrameGeneration/Diagnostics.cs
+index a5fd66f..2e8588f 100644
+--- a/src/TGFrameGeneration/Diagnostics.cs
++++ b/src/TGFrameGeneration/Diagnostics.cs
+@@ -17,7 +17,7 @@ namespace TGFrameGeneration
+             try
+             {
+                 var sb=new StringBuilder();
+-                sb.AppendLine("TGFrameGeneration 0.3.0 — experimental diagnostic report");
++                sb.AppendLine("TGFrameGeneration " + Plugin.Version + " — experimental diagnostic report");
+                 sb.AppendLine("UTC: " + DateTime.UtcNow.ToString("O"));
+                 using(var identity=Process.GetCurrentProcess()) sb.AppendLine("Managed process PID: " + identity.Id);
+ #if BEPINEX_IL2CPP
+@@ -36,6 +36,7 @@ namespace TGFrameGeneration
+                 sb.AppendLine("Frame bridge: " + FrameBridge.Detail);
+                 sb.AppendLine("Status: " + Session.StatusText);
+                 sb.AppendLine("UI: " + Session.Menu.Discovery);
++                AppendAutoloadDiagnostic(sb);
+                 sb.AppendLine("\nLoaded native module names (paths omitted):");
+                 using(var process=Process.GetCurrentProcess())
+                     foreach(ProcessModule m in process.Modules)
+@@ -72,5 +73,49 @@ namespace TGFrameGeneration
+             }
+             catch(Exception ex) { Session.Log.LogError("Diagnostic report failed: " + ex); }
+         }
++        private static void AppendAutoloadDiagnostic(StringBuilder sb)
++        {
++            string root = Path.Combine(Paths.BepInExRootPath, "TGFrameGeneration");
++            sb.AppendLine("\nAutomatic startup: BepInEx preloader; no TGFG launcher required.");
++            sb.AppendLine("Autoload log: " + Path.Combine(root, "Autoload.log"));
++            sb.AppendLine("Native log: " + Path.Combine(root, "Native", "TGFG.Native.log"));
++            sb.AppendLine("Install manifest present: " + File.Exists(Path.Combine(root, "Install-manifest.json")));
++            sb.AppendLine("Autoload disabled by marker: " + File.Exists(Path.Combine(root, "disable-autoload.txt")));
++            try
++            {
++                string path = Path.Combine(root, "Autoload.log");
++                if (!File.Exists(path))
++                {
++                    sb.AppendLine("No autoload log. Check patcher installation and BepInEx preloader errors.");
++                    return;
++                }
++                // Bounded read: an append-only log must not exhaust memory in the report writer.
++                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
++                                                   FileShare.ReadWrite | FileShare.Delete))
++                {
++                    long offset = Math.Max(0, stream.Length - 32768);
++                    stream.Seek(offset, SeekOrigin.Begin);
++                    var bytes = new byte[(int)Math.Min(32768, stream.Length - offset)];
++                    int used = 0;
++                    while (used < bytes.Length)
++                    {
++                        int read = stream.Read(bytes, used, bytes.Length - used);
++                        if (read == 0) break;
++                        used += read;
++                    }
++                    string tail = Encoding.UTF8.GetString(bytes, 0, used);
++                    if (offset != 0)
++                    {
++                        int newline = tail.IndexOf('\n');
++                        tail = newline >= 0 ? tail.Substring(newline + 1) : "";
++                    }
++                    var lines = tail.Split(new[] { '\n' });
++                    sb.AppendLine("Autoload log tail (may include earlier sessions; compare PIDs and UTC):");
++                    for (int i = Math.Max(0, lines.Length - 40); i < lines.Length; i++)
++                        sb.AppendLine(lines[i].TrimEnd('\r'));
++                }
++            }
++            catch (Exception ex) { sb.AppendLine("Autoload log read failed: " + ex.Message); }
++        }
+     }
+ }
+diff --git a/src/TGFrameGeneration/NativeBridge.cs b/src/TGFrameGeneration/NativeBridge.cs
+index 057e25c..2c92c2a 100644
+--- a/src/TGFrameGeneration/NativeBridge.cs
++++ b/src/TGFrameGeneration/NativeBridge.cs
+@@ -21,7 +21,7 @@ namespace TGFrameGeneration
+         private CameraCall setCamera;
+         internal IntPtr RenderEvent { get; private set; }
+         internal bool Connected => submit != null && read != null && RenderEvent!=IntPtr.Zero;
+-        internal string Detail { get; private set; } = "TGFG.Native.dll not loaded. Managed menu/config testing only; no FG. Use TGFG.Launcher for early initialization.";
++        internal string Detail { get; private set; } = "TGFG.Native.dll not loaded. No FG. Check BepInEx/patchers/TGFG.Autoload.dll and BepInEx/TGFrameGeneration/Autoload.log; start normally through Steam.";
+         private static T Bind<T>(IntPtr module,string symbol) where T:Delegate
+         {
+             IntPtr address=GetProcAddress(module,symbol);
+@@ -36,7 +36,7 @@ namespace TGFrameGeneration
+                 var module=GetModuleHandleW("TGFG.Native.dll");
+                 if(module==IntPtr.Zero) return false;
+                 if(Bind<GetAbi>(module,"TGFG_GetAbiVersion")()!=Abi.Version)
+-                { Detail="Native ABI mismatch. Rebuild/stage both managed and native v0.3.0 components."; return false; }
++                { Detail="Native ABI mismatch. This managed build requires native ABI v3 (0x00030000). Rebuild/package the matching backend."; return false; }
+                 var newSubmit=Bind<Submit>(module,"TGFG_Submit");
+                 var newRead=Bind<Read>(module,"TGFG_ReadStatus");
+                 begin=Bind<FrameCall>(module,"TGFG_BeginSimulation");
+@@ -45,7 +45,7 @@ namespace TGFrameGeneration
+                 RenderEvent=Bind<GetEvent>(module,"TGFG_GetRenderEvent")();
+                 if(RenderEvent==IntPtr.Zero) throw new InvalidOperationException("No render event callback.");
+                 submit=newSubmit; read=newRead;
+-                Detail="Bound standalone TGFG.Native.dll, DX11-to-DX12 direct Streamline ABI v3. No native library loaded late by BepInEx.";
++                Detail="Bound standalone TGFG.Native.dll, DX11-to-DX12 direct Streamline ABI v3. Gameplay plugin binds only; native startup belongs to the BepInEx preloader.";
+                 return true;
+             }
+             catch(Exception ex) { Detail="Native binding failed: "+ex.Message; return false; }
+diff --git a/src/TGFrameGeneration/Plugin.cs b/src/TGFrameGeneration/Plugin.cs
+index 03f87b7..06484c8 100644
+--- a/src/TGFrameGeneration/Plugin.cs
++++ b/src/TGFrameGeneration/Plugin.cs
+@@ -17,7 +17,7 @@ namespace TGFrameGeneration
+     {
+         public const string Id = "tgfoa.experimental.dlss-frame-generation";
+         public const string Name = "TG Frame Generation (Experimental)";
+-        public const string Version = "0.3.0";
++        public const string Version = "0.3.1";
+ #if BEPINEX_IL2CPP
+         public override void Load()
+         {
+diff --git a/src/TGFrameGeneration/TGFrameGeneration.csproj b/src/TGFrameGeneration/TGFrameGeneration.csproj
+index 1f9d198..78387da 100644
+--- a/src/TGFrameGeneration/TGFrameGeneration.csproj
++++ b/src/TGFrameGeneration/TGFrameGeneration.csproj
+@@ -4,7 +4,7 @@
+     <TargetFrameworks>net6.0;net472</TargetFrameworks>
+     <AssemblyName>TGFrameGeneration</AssemblyName>
+     <RootNamespace>TGFrameGeneration</RootNamespace>
+-    <Version>0.3.0</Version>
++    <Version>0.3.1</Version>
+     <LangVersion>latest</LangVersion>
+     <Nullable>disable</Nullable>
+     <PlatformTarget>x64</PlatformTarget>
+@@ -22,12 +22,14 @@
+     <UnityReferenceDir>$(Il2CppInteropDir)</UnityReferenceDir>
+     <BepInExCoreDir>$(GameDirIl2Cpp)\BepInEx\core</BepInExCoreDir>
+     <TargetGameDir>$(GameDirIl2Cpp)</TargetGameDir>
++    <TGRuntime>IL2CPP</TGRuntime>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
+     <DefineConstants>$(DefineConstants);BEPINEX_MONO</DefineConstants>
+     <UnityReferenceDir>$(MonoManagedDir)</UnityReferenceDir>
+     <BepInExCoreDir>$(GameDirMono)\BepInEx\core</BepInExCoreDir>
+     <TargetGameDir>$(GameDirMono)</TargetGameDir>
++    <TGRuntime>Mono</TGRuntime>
+   </PropertyGroup>
+   <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+@@ -53,14 +55,25 @@
+     <Reference Include="UnityEngine.TextRenderingModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.TextRenderingModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+     <Reference Include="UnityEngine.IMGUIModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+   </ItemGroup>
++  <!-- Build together, but do not load the preloader as a gameplay dependency. -->
++  <ItemGroup>
++    <ProjectReference Include="..\TGFG.Autoload\TGFG.Autoload.csproj"
++                      ReferenceOutputAssembly="false" Private="false" />
++  </ItemGroup>
+   <Target Name="ValidateLocalReferences" BeforeTargets="ResolveReferences" Condition="'$(TargetFramework)' != ''">
+     <Error Condition="!Exists('$(UnityReferenceDir)\%(RequiredUnity.Identity).dll')" Text="Missing $(UnityReferenceDir)\%(RequiredUnity.Identity).dll. Set Build.Local.props to this runtime's installed game. Run BepInEx once for IL2CPP interop generation." />
+     <Error Condition="'$(TargetFramework)' == 'net472' and !Exists('$(BepInExCoreDir)\BepInEx.dll')" Text="Missing BepInEx 5 Mono core at $(BepInExCoreDir)." />
+     <Error Condition="'$(TargetFramework)' == 'net6.0' and !Exists('$(BepInExCoreDir)\BepInEx.Unity.IL2CPP.dll')" Text="Missing BepInEx 6 IL2CPP core at $(BepInExCoreDir)." />
+   </Target>
+-  <Target Name="CopyToGame" AfterTargets="Build" Condition="'$(DeployToGame)' == 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
+-    <PropertyGroup><PluginOutDir>$(TargetGameDir)\BepInEx\plugins\TGFrameGeneration</PluginOutDir></PropertyGroup>
+-    <MakeDir Directories="$(PluginOutDir)" />
+-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginOutDir)" SkipUnchangedFiles="true" />
++  <!-- Export evaluated paths: scripts do not guess defaults or parse MSBuild expressions. -->
++  <Target Name="WriteTGFGContext" AfterTargets="Build"
++          Condition="'$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
++    <WriteLinesToFile File="$(TargetDir)TGFG.GameDir.txt" Lines="$(TargetGameDir)"
++                      Overwrite="true" Encoding="UTF-8" />
++  </Target>
++  <!-- Direct dotnet/MSBuild deployment uses the same complete package path as Build.ps1. -->
++  <Target Name="CopyToGame" AfterTargets="Build" DependsOnTargets="WriteTGFGContext"
++          Condition="'$(DeployToGame)' == 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
++    <Exec Command="powershell.exe -NoProfile -File &quot;$(MSBuildProjectDirectory)\..\..\Build.ps1&quot; -Runtime $(TGRuntime) -Configuration &quot;$(Configuration)&quot; -StageOnly -Deploy" />
+   </Target>
+ </Project>
+diff --git a/tests/package_tests.ps1 b/tests/package_tests.ps1
+new file mode 100644
+index 0000000..68b3d9b
+--- /dev/null
++++ b/tests/package_tests.ps1
+@@ -0,0 +1,71 @@
++# SPDX-License-Identifier: MIT
++# Filesystem packaging tests with FAKE binaries and mocked binary validation.
++# No GPU DLL is loaded, no game is started, and no real game folder is used.
++[CmdletBinding()]
++param()
++$ErrorActionPreference='Stop'
++Set-StrictMode -Version Latest
++. (Join-Path (Split-Path -Parent $PSScriptRoot) 'tools/Package.Common.ps1')
++# Deliberately replace platform/binary checks only within this test script's scope.
++function Assert-TgfgManagedVersion([string]$Path,[string]$Name,[string]$Version) { Assert-TgfgFile $Path }
++function Assert-TgfgAmd64([string]$Path) { Assert-TgfgFile $Path }
++function Assert-TgfgNvidiaSignature([string]$Path) { Assert-TgfgFile $Path }
++function Assert-TgfgGameClosed { }
++function Assert-TgfgGame([string]$GameDir,[string]$Runtime) { }
++$tests=0
++function Assert-True([bool]$Condition,[string]$Message) {
++    if(-not $Condition) { throw $Message }; $script:tests++
++}
++function Assert-Throws([scriptblock]$Action,[string]$Message) {
++    $threw=$false; try { & $Action } catch { $threw=$true }
++    Assert-True $threw $Message
++}
++$temp=Join-Path ([IO.Path]::GetTempPath()) ('tgfg-package-tests-'+[Guid]::NewGuid().ToString('N'))
++New-Item -ItemType Directory -Path $temp | Out-Null
++try {
++    $stage=Join-Path $temp 'stage'; $game=Join-Path $temp 'fake-game'
++    New-Item -ItemType Directory -Path $game | Out-Null
++    $records=@()
++    foreach($relative in (Get-TgfgRequiredPaths)) {
++        $path=Get-TgfgOwnedPath $stage $relative
++        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
++        Set-Content -LiteralPath $path -Value ('TEST FIXTURE - NOT A BINARY - '+$relative)
++        $records += [ordered]@{path=$relative; sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
++    }
++    $manifest=[ordered]@{version='0.3.1';runtime='Mono';framework='net472';native_version='0.3.0';native_abi='0x00030000';files=$records}
++    $manifestPath=Join-Path $stage 'TGFG-Package-manifest.json'
++    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath
++    $valid=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
++    Test-TgfgPayload $valid $stage 'Mono'; $tests++
++    Assert-Throws { Test-TgfgPayload $valid $stage 'IL2CPP' } 'Wrong runtime was accepted.'
++    Assert-Throws { Get-TgfgOwnedPath $stage '../outside.dll' } 'Path traversal was accepted.'
++    Assert-Throws { Get-TgfgOwnedPath $stage 'dxgi.dll' } 'A game proxy was accepted as payload.'
++    $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
++    $bad.files += $bad.files[0]
++    Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'Duplicate payload was accepted.'
++    $bad=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
++    $bad.files=@($bad.files | Where-Object { $_.path -notlike '*/TGFG.Autoload.dll' })
++    Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'Missing preloader was accepted.'
++    $file=Get-TgfgOwnedPath $stage $valid.files[0].path
++    $original=[IO.File]::ReadAllBytes($file)
++    Add-Content -LiteralPath $file -Value 'tampered'
++    Assert-Throws { Test-TgfgPayload $valid $stage 'Mono' } 'Tampered payload was accepted.'
++    [IO.File]::WriteAllBytes($file,$original)
++    # Existing TGFG file must be backed up; unrelated proxy/config must survive.
++    $old=Join-Path $game 'BepInEx/patchers/TGFG.Autoload.dll'
++    New-Item -ItemType Directory -Path (Split-Path -Parent $old) -Force | Out-Null
++    Set-Content -LiteralPath $old -Value 'old preloader fixture'
++    $oldHash=(Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash
++    $proxy=Join-Path $game 'dxgi.dll'; Set-Content -LiteralPath $proxy -Value 'unrelated proxy fixture'
++    $proxyHash=(Get-FileHash -LiteralPath $proxy -Algorithm SHA256).Hash
++    Install-TgfgPayload $stage $game 'Mono'
++    Assert-True ((Get-FileHash -LiteralPath $proxy -Algorithm SHA256).Hash -eq $proxyHash) 'Proxy changed.'
++    Assert-True (Test-Path -LiteralPath (Join-Path $game 'BepInEx/TGFrameGeneration/Install-manifest.json')) 'Installed manifest missing.'
++    $backupFiles=@(Get-ChildItem -LiteralPath (Join-Path $game 'BepInEx/TGFrameGeneration/Backups') -Recurse -File)
++    Assert-True (@($backupFiles | Where-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq $oldHash }).Count -eq 1) 'Old payload was not backed up.'
++    Test-TgfgPayload $valid $game 'Mono'; $tests++
++    Write-Host "$tests mocked filesystem package checks passed. Not a binary, signature, Windows startup, or GPU test."
++} finally {
++    # This is our unique test directory, never a user-supplied game path.
++    Remove-Item -LiteralPath $temp -Recurse -Force
++}
+diff --git a/tests/source_checks.py b/tests/source_checks.py
+index db40428..1b035fb 100644
+--- a/tests/source_checks.py
++++ b/tests/source_checks.py
+@@ -14,7 +14,7 @@ class SourceConsistency(unittest.TestCase):
+     def test_managed_targets(self):
+         tree = ET.fromstring(self.text("src/TGFrameGeneration/TGFrameGeneration.csproj"))
+         self.assertEqual(tree.find(".//TargetFrameworks").text, "net6.0;net472")
+-        self.assertEqual(tree.find(".//Version").text, "0.3.0")
++        self.assertEqual(tree.find(".//Version").text, "0.3.1")
+         self.assertEqual(tree.find(".//PlatformTarget").text, "x64")
+         self.assertIn("BEPINEX_MONO", self.text("src/TGFrameGeneration/TGFrameGeneration.csproj"))
+         self.assertIn("BEPINEX_IL2CPP", self.text("src/TGFrameGeneration/TGFrameGeneration.csproj"))
+@@ -137,15 +137,19 @@ class SourceConsistency(unittest.TestCase):
+         self.assertIn("interop_shader.hpp.in", cmake)
+         self.assertLess(cmake.index("if(TGFG_BUILD_NATIVE)"), cmake.index("tgfg_shader_tests"))
+ 
+-    def test_launch_preflight(self):
++    def test_installed_preflight(self):
+         preflight = self.text("Test-Setup.ps1")
+-        launcher = self.text("Launch-Game.ps1")
+-        self.assertIn("Get-FileHash", preflight)
+-        self.assertIn("0.3.0", preflight)
+-        self.assertIn("Test-Setup.ps1", launcher)
+-        self.assertIn("-force-d3d11", launcher)
+-        self.assertNotIn("-force-d3d12", launcher)
+-        self.assertNotIn("Copy-Item", launcher)
++        helpers = self.text("tools/Package.Common.ps1")
++        compatibility = self.text("Launch-Game.ps1")
++        self.assertIn("Get-FileHash", helpers)
++        self.assertIn("Install-manifest.json", preflight)
++        self.assertIn("Test-TgfgPayload", preflight)
++        self.assertNotRegex(preflight, r"Join-Path[^\n]*artifacts")
++        self.assertNotIn("TGFG.Launcher.exe", preflight)
++        self.assertIn("Test-Setup.ps1", compatibility)
++        self.assertNotIn("-force-d3d11", compatibility)
++        self.assertNotIn("Copy-Item", compatibility)
++        self.assertNotIn("Start-Process", compatibility)
+ 
+     def test_testing_limits_disclosed(self):
+         readme = self.text("README.md").replace("**", "")
+diff --git a/tests/test_autoload_integration.py b/tests/test_autoload_integration.py
+new file mode 100644
+index 0000000..4db35e1
+--- /dev/null
++++ b/tests/test_autoload_integration.py
+@@ -0,0 +1,126 @@
++"""Source/build-graph checks only; not C#/PowerShell compilation or runtime tests."""
++from pathlib import Path
++import re
++import unittest
++import xml.etree.ElementTree as ET
++ROOT = Path(__file__).resolve().parents[1]
++
++def text(name):
++    return (ROOT/name).read_text(encoding='utf-8')
++
++class AutoloadIntegration(unittest.TestCase):
++    def test_build_only_reference(self):
++        tree = ET.parse(ROOT/'src/TGFrameGeneration/TGFrameGeneration.csproj')
++        refs = tree.findall('.//ProjectReference')
++        self.assertEqual(len(refs), 1)
++        self.assertEqual(refs[0].get('ReferenceOutputAssembly'), 'false')
++        self.assertEqual(refs[0].get('Private'), 'false')
++        child = (ROOT/'src/TGFrameGeneration'/refs[0].get('Include').replace('\\','/')).resolve()
++        self.assertEqual(child, ROOT/'src/TGFG.Autoload/TGFG.Autoload.csproj')
++        self.assertTrue(child.is_file())
++
++    def test_matching_versions_and_paths(self):
++        trees = [ET.parse(ROOT/p) for p in (
++            'src/TGFrameGeneration/TGFrameGeneration.csproj','src/TGFG.Autoload/TGFG.Autoload.csproj')]
++        for t in trees:
++            self.assertEqual(t.find('.//Version').text, '0.3.1')
++            self.assertEqual(set(t.find('.//TargetFrameworks').text.split(';')), {'net472','net6.0'})
++            self.assertEqual(t.find('Import').get('Project'), '..\\..\\Build.Local.props')
++        for prop in ['GameDirMono', 'GameDirIl2Cpp']:
++            self.assertEqual(trees[0].find('.//'+prop).text, trees[1].find('.//'+prop).text)
++        self.assertIn('Version = "0.3.1"', text('src/TGFrameGeneration/Plugin.cs'))
++        self.assertIn('TGFG.Autoload 0.3.1', text('src/TGFG.Autoload/Bootstrap.cs'))
++
++    def test_preloader_does_not_reference_gameplay_or_unity(self):
++        tree = ET.parse(ROOT/'src/TGFG.Autoload/TGFG.Autoload.csproj')
++        names = {r.get('Include') for r in tree.findall('.//Reference')}
++        self.assertEqual(names, {'BepInEx','Mono.Cecil','BepInEx.Core','BepInEx.Preloader.Core'})
++        self.assertFalse(tree.findall('.//ProjectReference'))
++        for ref in tree.findall('.//Reference'):
++            self.assertEqual(ref.find('Private').text, 'false')
++
++    def test_two_runtime_lifecycles(self):
++        source=text('src/TGFG.Autoload/Patcher.cs')
++        for token in ['BEPINEX_MONO','BEPINEX_IL2CPP','public static void Initialize()',
++                      'IEnumerable<string> TargetDLLs','void Patch(AssemblyDefinition assembly) { }',
++                      'public override void Initialize()', '[PatcherPluginInfo(']:
++            self.assertIn(token,source)
++
++    def test_synchronous_same_abi(self):
++        source=text('src/TGFG.Autoload/Bootstrap.cs')
++        self.assertIn('ExpectedAbi = 0x00030000',source)
++        self.assertIn('Bind<NativeBootstrap>("TGFG_Bootstrap")(IntPtr.Zero)',source)
++        self.assertNotIn('new Thread(',source)
++        self.assertNotIn('Task.Run(',source)
++        self.assertNotIn('CreateRemoteThread(',source)
++        self.assertIn('disable-autoload.txt',source)
++        self.assertIn('NOT that a game swapchain was intercepted or FG works',source)
++
++    def test_build_deploy_from_same_repo(self):
++        source=text('Build.ps1')
++        self.assertIn('src\\TGFrameGeneration\\TGFrameGeneration.csproj',source)
++        self.assertIn('src\\TGFG.Autoload\\bin\\$Configuration\\$framework\\TGFG.Autoload.dll',source)
++        self.assertIn('"-p:TargetFrameworks=$framework"',source)
++        self.assertIn("'-p:DeployToGame=false'",source)
++        self.assertIn("'Package.ps1'",source)
++        self.assertNotIn('$ProjectRoot',source)
++        self.assertIn('TGFG.GameDir.txt',source)
++        self.assertIn('autoload_sha256',source)
++
++    def test_no_launcher_in_default_packaging(self):
++        for path in ['Build.ps1','Package.ps1','tools/Package.Common.ps1','Test-Setup.ps1']:
++            source=text(path)
++            self.assertNotIn('TGFG.Launcher.exe',source,path)
++            self.assertNotIn('Start-Process',source,path)
++            self.assertNotIn('CreateProcess',source,path)
++            self.assertNotIn('& cmake',source,path)
++            self.assertNotIn('launcher_sha256',source,path)
++        source=text('Package.ps1')
++        self.assertIn("'artifacts\\Native'",source)
++        self.assertIn("$nativeManifest.version -ne '0.3.0'",source)
++        self.assertIn('Compress-Archive',source)
++
++    def test_direct_msbuild_deploy_uses_shared_flow(self):
++        tree=ET.parse(ROOT/'src/TGFrameGeneration/TGFrameGeneration.csproj')
++        target=tree.find("Target[@Name='CopyToGame']")
++        self.assertIsNotNone(target)
++        self.assertEqual(target.get('DependsOnTargets'),'WriteTGFGContext')
++        self.assertIn('-StageOnly -Deploy',target.find('Exec').get('Command'))
++        self.assertIsNone(target.find('Copy'))
++
++    def test_manifest_whitelist_and_backups(self):
++        source=text('tools/Package.Common.ps1')
++        for token in ['Get-TgfgOwnedPath','Get-TgfgAllowedPaths','Test-TgfgPayload',
++                      'Install-manifest.json','native_abi','Get-FileHash',
++                      'Assert-TgfgNvidiaSignature','Backups/', 'Could not roll back',
++                      'Duplicate payload entry:']:
++            self.assertIn(token,source)
++        self.assertNotIn('Remove-Item -Recurse',source)
++        self.assertNotIn("Relative='dxgi.dll'",source)
++
++    def test_diagnostics_without_late_loading(self):
++        bridge=text('src/TGFrameGeneration/NativeBridge.cs')
++        diagnostic=text('src/TGFrameGeneration/Diagnostics.cs')
++        self.assertNotIn('Use TGFG.Launcher',bridge)
++        self.assertNotIn('LoadLibrary',bridge)
++        self.assertIn('Autoload.log',bridge)
++        self.assertIn('AppendAutoloadDiagnostic(sb)',diagnostic)
++        self.assertIn('stream.Length - 32768',diagnostic)
++        self.assertIn('may include earlier sessions',diagnostic)
++
++    def test_solution_has_both_projects(self):
++        solution=text('TGFrameGeneration.sln')
++        for path in re.findall(r'"(src\\[^\"]+\.csproj)"',solution):
++            self.assertTrue((ROOT/path.replace('\\','/')).is_file())
++        self.assertIn('TGFG.Autoload.csproj',solution)
++        self.assertIn('TGFrameGeneration.csproj',solution)
++
++    def test_native_version_kept_separate(self):
++        self.assertIn('VERSION 0.3.0',text('CMakeLists.txt'))
++        self.assertIn("version='0.3.0'",text('Build-Native.ps1'))
++        self.assertIn("version='0.3.1'",text('Package.ps1'))
++        self.assertIn("native_version='0.3.0'",text('Package.ps1'))
++        self.assertIn('0x00030000',text('src/TGFrameGeneration/NativeAbi.cs'))
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)
+diff --git a/tools/Package.Common.ps1 b/tools/Package.Common.ps1
+new file mode 100644
+index 0000000..e0e295a
+--- /dev/null
++++ b/tools/Package.Common.ps1
+@@ -0,0 +1,178 @@
++# SPDX-License-Identifier: MIT
++# Shared package checks. Importing this file does not build, copy, or launch anything.
++function Assert-TgfgFile([string]$Path) {
++    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing file: $Path" }
++}
++function Assert-TgfgGameClosed {
++    if (Get-Process -Name 'Fall of Avalon' -ErrorAction SilentlyContinue) {
++        throw 'Close FoA before deployment. Start normally through Steam afterward.'
++    }
++}
++function Get-TgfgFramework([string]$Runtime) {
++    switch ($Runtime) { 'Mono' { 'net472' }; 'IL2CPP' { 'net6.0' }; default { throw "Unknown runtime: $Runtime" } }
++}
++function Get-TgfgRuntimeNames {
++    @('sl.interposer.dll','sl.common.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlssg.dll')
++}
++function Get-TgfgRequiredPaths {
++    @('BepInEx/patchers/TGFG.Autoload.dll',
++      'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll',
++      'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll')
++    foreach ($name in (Get-TgfgRuntimeNames)) { "BepInEx/TGFrameGeneration/Native/Streamline/$name" }
++}
++function Get-TgfgAllowedPaths {
++    Get-TgfgRequiredPaths
++    'BepInEx/TGFrameGeneration/Native/Streamline/nvapi64.dll'
++}
++function Get-TgfgOwnedPath([string]$Root, [string]$Relative) {
++    $relative = $Relative.Replace('\','/')
++    if (@(Get-TgfgAllowedPaths) -notcontains $relative) { throw "Not a TGFG package payload path: $Relative" }
++    Join-Path $Root $relative
++}
++function Assert-TgfgFields($Object, [string[]]$Fields, [string]$Label) {
++    if ($null -eq $Object) { throw "Empty manifest: $Label" }
++    foreach ($field in $Fields) {
++        if ($Object.PSObject.Properties.Name -notcontains $field) { throw "$Label is missing field: $field" }
++    }
++}
++function Assert-TgfgManagedVersion([string]$Path, [string]$Name, [string]$Version) {
++    Assert-TgfgFile $Path
++    # Metadata only: no assembly is loaded into the PowerShell execution context.
++    $identity = [Reflection.AssemblyName]::GetAssemblyName($Path)
++    if ($identity.Name -ne $Name -or $identity.Version.ToString() -ne $Version) {
++        throw "Expected $Name $Version, found $identity at $Path. Rebuild the selected runtime."
++    }
++}
++function Assert-TgfgAmd64([string]$Path) {
++    Assert-TgfgFile $Path
++    $stream = [IO.File]::OpenRead($Path)
++    $reader = New-Object IO.BinaryReader($stream)
++    try {
++        if ($stream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5A4D) { throw "Invalid PE file: $Path" }
++        $stream.Position = 0x3c
++        $offset = $reader.ReadInt32()
++        if ($offset -lt 64 -or $offset -gt ($stream.Length - 6)) { throw "Invalid PE header: $Path" }
++        $stream.Position = $offset
++        if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw "Expected AMD64 image: $Path" }
++    } finally { $reader.Dispose(); $stream.Dispose() }
++}
++function Assert-TgfgNvidiaSignature([string]$Path) {
++    Assert-TgfgAmd64 $Path
++    $signature = Get-AuthenticodeSignature -LiteralPath $Path
++    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
++        $signature.SignerCertificate.Subject -notmatch 'NVIDIA') {
++        throw "Expected a valid NVIDIA production signature: $Path ($($signature.Status))"
++    }
++}
++function Assert-TgfgGame([string]$GameDir, [string]$Runtime) {
++    Assert-TgfgFile (Join-Path $GameDir 'Fall of Avalon.exe')
++    Assert-TgfgFile (Join-Path $GameDir 'UnityPlayer.dll')
++    $core = if ($Runtime -eq 'Mono') { 'BepInEx/core/BepInEx.dll' } else { 'BepInEx/core/BepInEx.Unity.IL2CPP.dll' }
++    Assert-TgfgFile (Join-Path $GameDir $core)
++    # Do not delete alternate copies; they may be local development files.
++    $checks = @(
++        @{Name='TGFG.Autoload.dll'; Expected=(Join-Path $GameDir 'BepInEx/patchers/TGFG.Autoload.dll')},
++        @{Name='TGFrameGeneration.dll'; Expected=(Join-Path $GameDir 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll')}
++    )
++    foreach ($folder in @('BepInEx/patchers','BepInEx/plugins')) {
++        $scan = Join-Path $GameDir $folder
++        if (-not (Test-Path -LiteralPath $scan)) { continue }
++        foreach ($check in $checks) {
++            foreach ($file in @(Get-ChildItem -LiteralPath $scan -Recurse -File -Filter $check.Name)) {
++                if ([IO.Path]::GetFullPath($file.FullName) -ne [IO.Path]::GetFullPath($check.Expected)) {
++                    throw "Duplicate/misplaced TGFG assembly: $($file.FullName). Move it outside patchers/plugins first."
++                }
++            }
++        }
++    }
++}
++function Test-TgfgPayload($Manifest, [string]$Root, [string]$Runtime) {
++    Assert-TgfgFields $Manifest @('version','runtime','framework','native_version','native_abi','files') 'Package manifest'
++    if ($Manifest.version -ne '0.3.1' -or $Manifest.runtime -ne $Runtime -or
++        $Manifest.framework -ne (Get-TgfgFramework $Runtime) -or
++        $Manifest.native_version -ne '0.3.0' -or $Manifest.native_abi -ne '0x00030000') {
++        throw 'Package metadata does not match the selected integrated v0.3.1 / native ABI v3 build.'
++    }
++    $seen = @{}
++    foreach ($entry in @($Manifest.files)) {
++        Assert-TgfgFields $entry @('path','sha256') 'Package file entry'
++        $relative = ([string]$entry.path).Replace('\','/')
++        if ($seen.ContainsKey($relative)) { throw "Duplicate payload entry: $relative" }
++        $seen[$relative] = $true
++        $path = Get-TgfgOwnedPath $Root $relative
++        Assert-TgfgFile $path
++        if ([string]$entry.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
++            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $entry.sha256) {
++            throw "Payload differs from its manifest: $path"
++        }
++    }
++    foreach ($required in (Get-TgfgRequiredPaths)) {
++        if (-not $seen.ContainsKey($required)) { throw "Missing required payload entry: $required" }
++    }
++    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll') 'TGFrameGeneration' '0.3.1.0'
++    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/patchers/TGFG.Autoload.dll') 'TGFG.Autoload' '0.3.1.0'
++    Assert-TgfgAmd64 (Join-Path $Root 'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll')
++    foreach ($entry in @($Manifest.files)) {
++        if ($entry.path.Replace('\','/') -like 'BepInEx/TGFrameGeneration/Native/Streamline/*') {
++            Assert-TgfgNvidiaSignature (Get-TgfgOwnedPath $Root $entry.path)
++        }
++    }
++}
++function Install-TgfgPayload([string]$Stage, [string]$GameDir, [string]$Runtime) {
++    Assert-TgfgGameClosed
++    Assert-TgfgGame $GameDir $Runtime
++    $manifestPath = Join-Path $Stage 'TGFG-Package-manifest.json'
++    Assert-TgfgFile $manifestPath
++    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
++    Test-TgfgPayload $manifest $Stage $Runtime
++    $optional = 'BepInEx/TGFrameGeneration/Native/Streamline/nvapi64.dll'
++    if ((Test-Path -LiteralPath (Join-Path $GameDir $optional)) -and
++        @($manifest.files | ForEach-Object { $_.path.Replace('\','/') }) -notcontains $optional) {
++        throw 'Installed TGFG runtime has nvapi64.dll but the new package does not. Stage the intended matching runtime set or move that TGFG-owned optional DLL aside first.'
++    }
++    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
++    $backup = Join-Path $GameDir "BepInEx/TGFrameGeneration/Backups/$stamp-$Runtime"
++    $plan = @()
++    foreach ($entry in @($manifest.files)) {
++        $relative = $entry.path.Replace('\','/')
++        $plan += @{Source=(Get-TgfgOwnedPath $Stage $relative); Relative=$relative;
++                   Dest=(Get-TgfgOwnedPath $GameDir $relative); Saved=(Join-Path $backup $relative)}
++    }
++    # Installed metadata is written last, so a partial copy never certifies a complete update.
++    $relative = 'BepInEx/TGFrameGeneration/Install-manifest.json'
++    $plan += @{Source=$manifestPath; Relative=$relative; Dest=(Join-Path $GameDir $relative); Saved=(Join-Path $backup $relative)}
++    foreach ($entry in $plan) {
++        $entry.Existed = Test-Path -LiteralPath $entry.Dest -PathType Leaf
++        if ($entry.Existed) {
++            New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Saved) -Force | Out-Null
++            Copy-Item -LiteralPath $entry.Dest -Destination $entry.Saved -Force
++        }
++    }
++    $attempted = New-Object 'System.Collections.Generic.List[object]'
++    try {
++        foreach ($entry in $plan) {
++            $attempted.Add($entry)
++            New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Dest) -Force | Out-Null
++            Copy-Item -LiteralPath $entry.Source -Destination $entry.Dest -Force
++            if ((Get-FileHash -LiteralPath $entry.Dest -Algorithm SHA256).Hash -ne
++                (Get-FileHash -LiteralPath $entry.Source -Algorithm SHA256).Hash) {
++                throw "Deployed file hash mismatch: $($entry.Dest)"
++            }
++        }
++    } catch {
++        $cause = $_
++        for ($i = $attempted.Count - 1; $i -ge 0; $i--) {
++            $entry = $attempted[$i]
++            try {
++                if ($entry.Existed) { Copy-Item -LiteralPath $entry.Saved -Destination $entry.Dest -Force }
++                elseif (Test-Path -LiteralPath $entry.Dest -PathType Leaf) { Remove-Item -LiteralPath $entry.Dest -Force }
++            } catch { Write-Warning "Could not roll back $($entry.Dest); backup: $($entry.Saved)" }
++        }
++        throw $cause
++    }
++    Write-Host "Deployed full $Runtime package. Existing overwritten files were backed up under $backup"
++    if (Test-Path -LiteralPath (Join-Path $GameDir 'BepInEx/TGFrameGeneration/disable-autoload.txt')) {
++        Write-Warning 'disable-autoload.txt still exists: automatic native loading is intentionally disabled. This deployment does not remove it.'
++    }
++    Write-Host 'Press Play in Steam. No TGFG launcher, launch arguments, or app-ID workaround is required by this package.'
++}
+diff --git a/tools/Test-Scripts.ps1 b/tools/Test-Scripts.ps1
+new file mode 100644
+index 0000000..9540f19
+--- /dev/null
++++ b/tools/Test-Scripts.ps1
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: MIT
++# Parse the integrated PowerShell scripts without executing their deployment code.
++[CmdletBinding()]
++param()
++$ErrorActionPreference='Stop'
++Set-StrictMode -Version Latest
++$root=Split-Path -Parent $PSScriptRoot
++$paths=@('Build.ps1','Package.ps1','Test-Setup.ps1','Launch-Game.ps1','tools/Package.Common.ps1',
++         'tools/Test-Scripts.ps1','tests/package_tests.ps1')
++$failures=@()
++foreach($relative in $paths) {
++    $path=Join-Path $root $relative
++    $tokens=$null; $errors=$null
++    $null=[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
++    foreach($errorItem in @($errors)) { $failures += "$relative : $($errorItem.Message) at $($errorItem.Extent.StartLineNumber)" }
++}
++if($failures.Count -gt 0) { throw ($failures -join [Environment]::NewLine) }
++Write-Host "Parsed $($paths.Count) PowerShell scripts. This checks syntax, not Windows/Steam/rendering behavior."
+diff --git a/validation/integration-autoload-checks.txt b/validation/integration-autoload-checks.txt
+new file mode 100644
+index 0000000..22d2e05
+--- /dev/null
++++ b/validation/integration-autoload-checks.txt
+@@ -0,0 +1,17 @@
++test_build_deploy_from_same_repo (__main__.AutoloadIntegration.test_build_deploy_from_same_repo) ... ok
++test_build_only_reference (__main__.AutoloadIntegration.test_build_only_reference) ... ok
++test_diagnostics_without_late_loading (__main__.AutoloadIntegration.test_diagnostics_without_late_loading) ... ok
++test_direct_msbuild_deploy_uses_shared_flow (__main__.AutoloadIntegration.test_direct_msbuild_deploy_uses_shared_flow) ... ok
++test_manifest_whitelist_and_backups (__main__.AutoloadIntegration.test_manifest_whitelist_and_backups) ... ok
++test_matching_versions_and_paths (__main__.AutoloadIntegration.test_matching_versions_and_paths) ... ok
++test_native_version_kept_separate (__main__.AutoloadIntegration.test_native_version_kept_separate) ... ok
++test_no_launcher_in_default_packaging (__main__.AutoloadIntegration.test_no_launcher_in_default_packaging) ... ok
++test_preloader_does_not_reference_gameplay_or_unity (__main__.AutoloadIntegration.test_preloader_does_not_reference_gameplay_or_unity) ... ok
++test_solution_has_both_projects (__main__.AutoloadIntegration.test_solution_has_both_projects) ... ok
++test_synchronous_same_abi (__main__.AutoloadIntegration.test_synchronous_same_abi) ... ok
++test_two_runtime_lifecycles (__main__.AutoloadIntegration.test_two_runtime_lifecycles) ... ok
++
++----------------------------------------------------------------------
++Ran 12 tests in 0.002s
++
++OK
+diff --git a/validation/integration-cmake-build.txt b/validation/integration-cmake-build.txt
+new file mode 100644
+index 0000000..6b2009c
+--- /dev/null
++++ b/validation/integration-cmake-build.txt
+@@ -0,0 +1,6 @@
++[ 25%] Building CXX object CMakeFiles/tgfg_interop_tests.dir/tests/interop_tests.cpp.o
++[ 50%] Building CXX object CMakeFiles/tgfg_policy_tests.dir/tests/policy_tests.cpp.o
++[ 75%] Linking CXX executable tgfg_interop_tests
++[100%] Linking CXX executable tgfg_policy_tests
++[100%] Built target tgfg_interop_tests
++[100%] Built target tgfg_policy_tests
+diff --git a/validation/integration-cmake-configure.txt b/validation/integration-cmake-configure.txt
+new file mode 100644
+index 0000000..e5d8360
+--- /dev/null
++++ b/validation/integration-cmake-configure.txt
+@@ -0,0 +1,15 @@
++-- The C compiler identification is GNU 14.2.0
++-- The CXX compiler identification is GNU 14.2.0
++-- Detecting C compiler ABI info
++-- Detecting C compiler ABI info - done
++-- Check for working C compiler: /usr/bin/cc - skipped
++-- Detecting C compile features
++-- Detecting C compile features - done
++-- Detecting CXX compiler ABI info
++-- Detecting CXX compiler ABI info - done
++-- Check for working CXX compiler: /usr/bin/c++ - skipped
++-- Detecting CXX compile features
++-- Detecting CXX compile features - done
++-- Configuring done (0.3s)
++-- Generating done (0.0s)
++-- Build files have been written to: /mnt/data/work/portable-build
+diff --git a/validation/integration-ctest.txt b/validation/integration-ctest.txt
+new file mode 100644
+index 0000000..81bcf2a
+--- /dev/null
++++ b/validation/integration-ctest.txt
+@@ -0,0 +1,10 @@
++Internal ctest changing into directory: /mnt/data/work/portable-build
++Test project /mnt/data/work/portable-build
++    Start 1: tgfg_policy
++1/2 Test #1: tgfg_policy ......................   Passed    0.00 sec
++    Start 2: tgfg_interop_policy
++2/2 Test #2: tgfg_interop_policy ..............   Passed    0.00 sec
++
++100% tests passed, 0 tests failed out of 2
++
++Total Test time (real) =   0.01 sec
+diff --git a/validation/integration-patch-checks.txt b/validation/integration-patch-checks.txt
+new file mode 100644
+index 0000000..eacfcea
+--- /dev/null
++++ b/validation/integration-patch-checks.txt
+@@ -0,0 +1,7 @@
++PASS: git apply --check and apply on clean supplied v0.3.0 baseline.
++PASS: every changed/added file reproduces the integrated source bytes.
++PASS: git diff --check after application.
++PASS: synthetic local native, camera and Build.Local.props edits survive application unchanged.
++PASS: conflicting build script is rejected; neither --check nor a failed normal apply changes files.
++PASS: patch changes no native sources, CMake project, native build/runtime staging scripts or local props template.
++Boundary: these are local Git/filesystem checks, not Windows compilation, PowerShell execution or game tests.
+diff --git a/validation/integration-portable-checks.txt b/validation/integration-portable-checks.txt
+new file mode 100644
+index 0000000..239e725
+--- /dev/null
++++ b/validation/integration-portable-checks.txt
+@@ -0,0 +1,2 @@
++80 portable ABI/policy/ring checks passed. No Windows/Unity/Streamline rendering test was performed.
++61 interop policy checks passed. No D3D11/D3D12 device or GPU was exercised.
+diff --git a/validation/integration-source-checks.txt b/validation/integration-source-checks.txt
+new file mode 100644
+index 0000000..89c33f9
+--- /dev/null
++++ b/validation/integration-source-checks.txt
+@@ -0,0 +1,19 @@
++test_abi_and_exports (__main__.SourceConsistency.test_abi_and_exports) ... ok
++test_api_separation (__main__.SourceConsistency.test_api_separation) ... ok
++test_cmake_inputs_exist_and_shader_test_is_windows_only (__main__.SourceConsistency.test_cmake_inputs_exist_and_shader_test_is_windows_only) ... ok
++test_direct_sdk_calls (__main__.SourceConsistency.test_direct_sdk_calls) ... ok
++test_hdr_conversion_is_actual_shader (__main__.SourceConsistency.test_hdr_conversion_is_actual_shader) ... ok
++test_installed_preflight (__main__.SourceConsistency.test_installed_preflight) ... ok
++test_interop_synchronization_order (__main__.SourceConsistency.test_interop_synchronization_order) ... ok
++test_launcher_waits_for_entrypoint_then_bootstraps (__main__.SourceConsistency.test_launcher_waits_for_entrypoint_then_bootstraps) ... ok
++test_managed_targets (__main__.SourceConsistency.test_managed_targets) ... ok
++test_no_alternative_fg_dependency (__main__.SourceConsistency.test_no_alternative_fg_dependency) ... ok
++test_optional_hudless_is_not_fabricated (__main__.SourceConsistency.test_optional_hudless_is_not_fabricated) ... ok
++test_reason_enum_matches (__main__.SourceConsistency.test_reason_enum_matches) ... ok
++test_stable_client_buffer_zero (__main__.SourceConsistency.test_stable_client_buffer_zero) ... ok
++test_testing_limits_disclosed (__main__.SourceConsistency.test_testing_limits_disclosed) ... ok
++
++----------------------------------------------------------------------
++Ran 14 tests in 0.003s
++
++OK

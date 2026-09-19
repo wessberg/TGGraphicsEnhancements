@@ -1,0 +1,19 @@
+test_abi_and_exports (__main__.SourceConsistency.test_abi_and_exports) ... ok
+test_api_separation (__main__.SourceConsistency.test_api_separation) ... ok
+test_cmake_inputs_exist_and_shader_test_is_windows_only (__main__.SourceConsistency.test_cmake_inputs_exist_and_shader_test_is_windows_only) ... ok
+test_direct_sdk_calls (__main__.SourceConsistency.test_direct_sdk_calls) ... ok
+test_hdr_conversion_is_actual_shader (__main__.SourceConsistency.test_hdr_conversion_is_actual_shader) ... ok
+test_interop_synchronization_order (__main__.SourceConsistency.test_interop_synchronization_order) ... ok
+test_launch_preflight (__main__.SourceConsistency.test_launch_preflight) ... ok
+test_launcher_waits_for_entrypoint_then_bootstraps (__main__.SourceConsistency.test_launcher_waits_for_entrypoint_then_bootstraps) ... ok
+test_managed_targets (__main__.SourceConsistency.test_managed_targets) ... ok
+test_no_alternative_fg_dependency (__main__.SourceConsistency.test_no_alternative_fg_dependency) ... ok
+test_optional_hudless_is_not_fabricated (__main__.SourceConsistency.test_optional_hudless_is_not_fabricated) ... ok
+test_reason_enum_matches (__main__.SourceConsistency.test_reason_enum_matches) ... ok
+test_stable_client_buffer_zero (__main__.SourceConsistency.test_stable_client_buffer_zero) ... ok
+test_testing_limits_disclosed (__main__.SourceConsistency.test_testing_limits_disclosed) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.004s
+
+OK

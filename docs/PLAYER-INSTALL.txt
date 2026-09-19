@@ -1,0 +1,38 @@
+TGFrameGeneration 0.4.0 - experimental direct Streamline / DX11 bridge
+
+Requires the corresponding existing BepInEx installation:
+  Mono:   BepInEx 5
+  IL2CPP: BepInEx 6 IL2CPP
+Install only ONE runtime package in each game installation.
+
+Close the game. Merge this package's BepInEx folder into the game installation.
+Do not install any launcher, replace a graphics proxy, change Steam launch options,
+or create steam_appid.txt. Press Play in Steam normally after installation.
+The ZIP's TGFG-Package-manifest.json can optionally be placed in the game root for
+Test-Setup.ps1; player startup does not depend on that manifest.
+
+Keep generation Off for the first test. Loading the DLL is not proof of working FG.
+Review these game-local logs:
+  BepInEx/TGFrameGeneration/Autoload.log
+  BepInEx/TGFrameGeneration/Native/TGFG.Native.log
+The diagnostic report (main config: 04 Diagnostics > Write diagnostic report now) includes an autoload log tail.
+
+To disable automatic native loading, close the game and create an empty:
+  BepInEx/TGFrameGeneration/disable-autoload.txt
+Restart normally. Setting Frame Generation to Off in Options > Video is NOT the same as removing the bridge.
+
+Updating by hand from 0.3.x: TGFG now installs NVIDIA's Streamline interposer as
+  BepInEx/TGFrameGeneration/Native/Streamline/TGFG.Streamline.dll
+(the same NVIDIA-signed file under a private name, so DLSS 5 / RenoDX DLSS does not hook it).
+Delete the old BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll; it is no longer used.
+
+For uninstall, close the game and remove only these TGFG files:
+  BepInEx/patchers/TGFG.Autoload.dll
+  BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll
+  BepInEx/TGFrameGeneration/Native/   (TGFG private backend and runtime copies)
+The TGFG config and logs may be kept. Do not remove BepInEx itself or other mods.
+
+This package is not a verified rendering release. Startup ordering, Mono/IL2CPP
+behavior and RenoDX coexistence still require testing. It has not been shown to
+produce correct FG in FoA. No arbitrary DX12 switch is needed by the mod; Unity's
+active renderer must be DX11 for this backend.

@@ -1,0 +1,7 @@
+PASS: git apply --check and apply on clean supplied v0.3.0 baseline.
+PASS: every changed/added file reproduces the integrated source bytes.
+PASS: git diff --check after application.
+PASS: synthetic local native, camera and Build.Local.props edits survive application unchanged.
+PASS: conflicting build script is rejected; neither --check nor a failed normal apply changes files.
+PASS: patch changes no native sources, CMake project, native build/runtime staging scripts or local props template.
+Boundary: these are local Git/filesystem checks, not Windows compilation, PowerShell execution or game tests.

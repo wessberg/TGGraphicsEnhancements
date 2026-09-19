@@ -1,0 +1,2 @@
+80 portable ABI/policy/ring checks passed. No Windows/Unity/Streamline rendering test was performed.
+61 interop policy checks passed. No D3D11/D3D12 device or GPU was exercised.

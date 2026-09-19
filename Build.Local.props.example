@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <GameDirMono>C:\Games\Tainted Grail FoA Mono</GameDirMono>
+    <GameDirIl2Cpp>C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
+    <!-- Override only when your folder names differ. -->
+    <!-- <MonoManagedDir>...</MonoManagedDir> -->
+    <!-- <Il2CppInteropDir>...</Il2CppInteropDir> -->
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,6 @@
+[ 25%] Building CXX object CMakeFiles/tgfg_interop_tests.dir/tests/interop_tests.cpp.o
+[ 50%] Building CXX object CMakeFiles/tgfg_policy_tests.dir/tests/policy_tests.cpp.o
+[ 75%] Linking CXX executable tgfg_interop_tests
+[100%] Linking CXX executable tgfg_policy_tests
+[100%] Built target tgfg_interop_tests
+[100%] Built target tgfg_policy_tests

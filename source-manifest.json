@@ -1,0 +1,293 @@
+{
+  "package": "TGFrameGeneration integrated Steam autoload / unchanged DX11 native backend",
+  "version": "0.3.1",
+  "native_version": "0.3.0",
+  "abi": "0x00030000",
+  "created_utc": "2026-09-18T20:15:01.032499+00:00",
+  "windows_compilation_performed": false,
+  "managed_compilation_performed": false,
+  "powershell_execution_performed": false,
+  "game_gpu_test_performed": false,
+  "validation": {
+    "portable_checks": 141,
+    "portable_ctest_executables": 2,
+    "source_consistency_tests": 26,
+    "git_application_checks_passed": true,
+    "native_source_changes": 0
+  },
+  "note": "Hashes describe the supplied source snapshot, not unuploaded local edits; no runtime certification.",
+  "files": {
+    ".editorconfig": {
+      "bytes": 114,
+      "sha256": "0d6fad3fd4e7046d9f722be4fdfc436466c598c86e4c5e82148f6394c4f17f9c"
+    },
+    ".gitignore": {
+      "bytes": 145,
+      "sha256": "430da692f02c1195eb5ecf4c71acd68fd2af6bfbd4eb64281024794e4c895d45"
+    },
+    "Build-Native.ps1": {
+      "bytes": 2120,
+      "sha256": "bb9918c8924f261ea99afe0a210f66558f45bbe886f28c491ae2b915686db03b"
+    },
+    "Build.Local.props.example": {
+      "bytes": 382,
+      "sha256": "3bf7a827ab654afb358ef44e1640e1de3e9615350a0176c91d284e4bd4cae85c"
+    },
+    "Build.ps1": {
+      "bytes": 3835,
+      "sha256": "f85ef0932e92dd26851671e6636387481851516fe33895f4df4895abcc07b458"
+    },
+    "CHANGELOG.md": {
+      "bytes": 1892,
+      "sha256": "699edcfca30cee02bd993881ec6ee188bf770ba04d5dd88dce44965640e6a50b"
+    },
+    "CMakeLists.txt": {
+      "bytes": 3794,
+      "sha256": "f9d78d4d4d8f62c3bf2f6988b09a1fa5b6b831da0cc0d1929317e3031563a7e6"
+    },
+    "LICENSES/MIT.txt": {
+      "bytes": 1087,
+      "sha256": "024c80cb03726fa244484f1a640c9ef096d64f11e792e267af6f3f9c817ab4ec"
+    },
+    "LICENSES/THIRD_PARTY.md": {
+      "bytes": 1127,
+      "sha256": "6f7ea4d46f02b23c0c1a85f48be42d1d16919441e8e1562455f2caa478823dff"
+    },
+    "Launch-Game.ps1": {
+      "bytes": 763,
+      "sha256": "cdaca17705881b25bec3c53fb4f194a36a5eb046cd370ee3ec8f51bbe0a77ee1"
+    },
+    "Package.ps1": {
+      "bytes": 5748,
+      "sha256": "a3ef56de3beb639988b6a2bda9be5d7f056573d4f6f0a1c8cfffb6cc3643607d"
+    },
+    "README.md": {
+      "bytes": 12739,
+      "sha256": "986476dbcd31c3d2dcda2f419c9cdcaa9c4ab9e8a237f67b9d562536a98925fe"
+    },
+    "Stage-Runtime.ps1": {
+      "bytes": 1609,
+      "sha256": "70b5b2aa6dd6f6acacc4a35a398adf36ffac6060d64feeae021d4d1b7dc702c5"
+    },
+    "TGFrameGeneration.sln": {
+      "bytes": 1474,
+      "sha256": "b50b4cd2732a78c30f6ab61797d35d739d83621a7b7d4aa4a4b710a8cee9970f"
+    },
+    "Test-Setup.ps1": {
+      "bytes": 1529,
+      "sha256": "6feb881f3cc33cf0b4bf580e502441fe00990ce2e189f3104ca067da5f95a758"
+    },
+    "config/TGFG-settings-example.cfg": {
+      "bytes": 495,
+      "sha256": "fb51f818214b22f2d5e5d3c63617f32b97a500888c8f74f0afb61ffe56c458e2"
+    },
+    "docs/ARCHITECTURE.md": {
+      "bytes": 7736,
+      "sha256": "1cdadf6ef8b43bd7a586d48fb815c5acde893bf2d4dd65852289f30e3a051595"
+    },
+    "docs/AUTOLOAD-INTEGRATION.md": {
+      "bytes": 5581,
+      "sha256": "16e403b5ecc9a322527fd48c9a43e6613fd80247730de74b4565f336b06924a4"
+    },
+    "docs/PLAYER-INSTALL.txt": {
+      "bytes": 1717,
+      "sha256": "3f878a6b51729018b27fb10d30dec15dc723e4674b079369883deb15eddbea1e"
+    },
+    "docs/SOURCES.md": {
+      "bytes": 4041,
+      "sha256": "03de31e766a465bcb4161559bdd6a25edb139cbb2533fc7a5549029339a72923"
+    },
+    "docs/TESTING.md": {
+      "bytes": 5010,
+      "sha256": "f8b116cfae63d79929d302294b39baee4fc3fcc8b7e779859aba67b9790c9e59"
+    },
+    "docs/VALIDATION.md": {
+      "bytes": 5260,
+      "sha256": "35cbe715ba37e1258be65a9dac87a18cbbca9bb10a47afbad5f72566d491783f"
+    },
+    "native/include/dx11_bridge.hpp": {
+      "bytes": 890,
+      "sha256": "bd38cf6f10a9b1d7ed4af80f7d065a5e6186e4699c96c98899b16bd8f76c0c84"
+    },
+    "native/include/sl_runtime.hpp": {
+      "bytes": 3562,
+      "sha256": "4ee041c659976bd5d352faeec5a2b5b63202aea731ae91b3c3270d74736bb1c5"
+    },
+    "native/include/tgfg_api.h": {
+      "bytes": 2497,
+      "sha256": "703758e0d8c4db0c58dc6d4be1ecca4561cea8beb897af35b0c684a50375eb3e"
+    },
+    "native/include/tgfg_interop_policy.hpp": {
+      "bytes": 2736,
+      "sha256": "8f4437db1f563cf187c16b0d7b57964d25121955e9f25c969bdaf2273e1e1258"
+    },
+    "native/include/tgfg_policy.hpp": {
+      "bytes": 3522,
+      "sha256": "19e75031cece1d27abb2d6cd30bcfb8a33e01072517cf9c2f5941759f65665fe"
+    },
+    "native/include/tgfg_ring.hpp": {
+      "bytes": 853,
+      "sha256": "0fdbbac41cc0ee2e8032470dd2e0ed6d4f269a4293ed41656402f79df4b6a9eb"
+    },
+    "native/launcher/main.cpp": {
+      "bytes": 12657,
+      "sha256": "927999fc7aea912a22ef1d975adac0d1bfb6c71ea05fb917b1c124e3f3dd3dca"
+    },
+    "native/shaders/interop.hlsl": {
+      "bytes": 1666,
+      "sha256": "0d51a16f1f405be72884fd1472bc3556dc48c81b424b5031867481400d06d5e5"
+    },
+    "native/shaders/interop_shader.hpp.in": {
+      "bytes": 210,
+      "sha256": "c641324adb36fd5a27d0b25985c8b9b349431bb4a5581286b6510c44a3b91135"
+    },
+    "native/src/control.cpp": {
+      "bytes": 12414,
+      "sha256": "6baa7f696ecbf02063c8346f8528bde31f07d56628314c84b55a78fa47d13f40"
+    },
+    "native/src/dx11_bridge.cpp": {
+      "bytes": 43370,
+      "sha256": "705d3fa40f6aa65ff09bf70f2d6d89a2cac1f55bf58ea98bf9da66a6c2abf95f"
+    },
+    "native/src/graphics_hooks.cpp": {
+      "bytes": 8141,
+      "sha256": "56c256d48b343dd04fce40530655691d6854c900190314850eec2fbafb2df6d9"
+    },
+    "native/src/ngx_capture.cpp": {
+      "bytes": 11562,
+      "sha256": "44d26c6ccc7b4f0468d6c4719d86e7335087064c0808918aa38e61769b7fb580"
+    },
+    "native/src/sl_runtime.cpp": {
+      "bytes": 10574,
+      "sha256": "4877d2a932c3c5f31e214d128127bb7fa74d24df5dd41cc1f62f4170fa5453a4"
+    },
+    "src/TGFG.Autoload/Bootstrap.cs": {
+      "bytes": 11200,
+      "sha256": "de343e56d4d2bfeca0d4645645ded78f6cd95ba290b995e2fd928e3ef87a4d2c"
+    },
+    "src/TGFG.Autoload/Patcher.cs": {
+      "bytes": 914,
+      "sha256": "96aeb02a4226bffb6ca0fe632f3257f32e539ed6670af2be6b86eb22bee6488a"
+    },
+    "src/TGFG.Autoload/TGFG.Autoload.csproj": {
+      "bytes": 2454,
+      "sha256": "bcea5b6d3dc0bf6da7cb0b68ffe27828179187f414ce162a9ddc22bbf7eeecec"
+    },
+    "src/TGFrameGeneration/Diagnostics.cs": {
+      "bytes": 7028,
+      "sha256": "4ae847586e67272fa382f4a90f613e3081ded9fa20ab9fa486f4b57acbe8b9b5"
+    },
+    "src/TGFrameGeneration/FrameBridge.cs": {
+      "bytes": 8101,
+      "sha256": "3d8c42cefb387b13cd56dbe23fe3384c6604f3bbf5660c67c6b8e62bc4dd60bf"
+    },
+    "src/TGFrameGeneration/NativeAbi.cs": {
+      "bytes": 5332,
+      "sha256": "eaac849a804a6886f4b3927b0478a0287062c270cb852b6f6643d5155d1e8448"
+    },
+    "src/TGFrameGeneration/NativeBridge.cs": {
+      "bytes": 4000,
+      "sha256": "12996a038625d4e6c619f177610a31100e13ac9e331cd5d34ab7bd0957188377"
+    },
+    "src/TGFrameGeneration/NativeVideoMenu.cs": {
+      "bytes": 13458,
+      "sha256": "f999b9c75089890a14050641675246567e39172f1a3320de3aabe372d6845548"
+    },
+    "src/TGFrameGeneration/Plugin.cs": {
+      "bytes": 1521,
+      "sha256": "acbab5870342502b7e0c8f86a53c65dee83e2378a3f745bb8a02f7096c28fa1c"
+    },
+    "src/TGFrameGeneration/Session.cs": {
+      "bytes": 6115,
+      "sha256": "2c876baca96191c0d4fec735d9b5537876011d1d1a51be6e075ea171f19cd220"
+    },
+    "src/TGFrameGeneration/Settings.cs": {
+      "bytes": 4063,
+      "sha256": "68fe5a5438ec8d46d0bab24d69467bed7a2636a5dae56cd9b73307776b1ba5bf"
+    },
+    "src/TGFrameGeneration/TGFrameGeneration.csproj": {
+      "bytes": 6967,
+      "sha256": "a384a35d16e231939e1debe210bd15c1e7d588d5e8c4931d4fdc2782889d3c77"
+    },
+    "tests/interop_tests.cpp": {
+      "bytes": 2809,
+      "sha256": "57cd86f0100c3adda4c9347c95c2e9273d122164ac159075a175fdd0f4edc05d"
+    },
+    "tests/package_tests.ps1": {
+      "bytes": 4630,
+      "sha256": "c7bc9e2badbd53020363a0f96ff1d9c2d5ab3b84306e874b37769395e340fd83"
+    },
+    "tests/policy_tests.cpp": {
+      "bytes": 5385,
+      "sha256": "8c8c0495e06de2b81e74312e96271bf7d4bf9d162a9d1c4b04d08618dcf3b6e3"
+    },
+    "tests/shader_tests.cpp": {
+      "bytes": 1369,
+      "sha256": "ab6444b6758ec8cf57e081748ae4a63b96192095a73a795db9c2dea43241bf6d"
+    },
+    "tests/source_checks.py": {
+      "bytes": 8763,
+      "sha256": "57ae071e9ed829cc8ab2107f261ed41b51db4bb2a860fd84f0a1f62c0d403275"
+    },
+    "tests/test_autoload_integration.py": {
+      "bytes": 6637,
+      "sha256": "e210dd0344e12d5653fdc67f84981a60ef7fed06ea8f1c41215dcdec541d1c4b"
+    },
+    "tools/Package.Common.ps1": {
+      "bytes": 9907,
+      "sha256": "919c01e1359eddf67d1517f83dd04be6c0e8a1647b2cbe91eff729bbaf0c5336"
+    },
+    "tools/Test-Scripts.ps1": {
+      "bytes": 938,
+      "sha256": "52e928e48d9fd87e909615a58eca7cba2b54e0e8bbdf0a89ec2d49afc10b0834"
+    },
+    "validation/cmake-build.txt": {
+      "bytes": 77,
+      "sha256": "959f2c4445ccab39dbd8c2620f30c69e8a3b550c512fdeecf966091f7e0ad2b9"
+    },
+    "validation/cmake-configure.txt": {
+      "bytes": 120,
+      "sha256": "4fb2c8419a15814ba9581941141f429420d49dd08d4d89958ba6727922da4b87"
+    },
+    "validation/ctest.txt": {
+      "bytes": 390,
+      "sha256": "440e729b2e4cac25d813d94a91aed28fa392da764582c70c9f008cf62dee5f8d"
+    },
+    "validation/integration-autoload-checks.txt": {
+      "bytes": 1395,
+      "sha256": "34e16cb6e2e51629caa71accaf56d8bdb9a638f45fd5c056f8d1e420a1865e32"
+    },
+    "validation/integration-cmake-build.txt": {
+      "bytes": 346,
+      "sha256": "a86ac316e0e2b10c1eb8283b263b15691c4fcc04cb33cb79029d70dadb9c13d5"
+    },
+    "validation/integration-cmake-configure.txt": {
+      "bytes": 625,
+      "sha256": "34c2d26ad10f6c444d5f773c27d3386e122a07766b26d6f5db20319cef646c54"
+    },
+    "validation/integration-ctest.txt": {
+      "bytes": 390,
+      "sha256": "ec7bf76b1e0ee680dd8e898c13f3d1ad241c64e5c404bc9786c03d0f073779e5"
+    },
+    "validation/integration-patch-checks.txt": {
+      "bytes": 605,
+      "sha256": "fedba4a2386a8ce1f3d0fc4e9cc4f9d99c6f4a51ff69e41d3f5ac92f867383a3"
+    },
+    "validation/integration-portable-checks.txt": {
+      "bytes": 178,
+      "sha256": "b3c45c66455477d1bfdffc19d7531b32fcfe430cac4f472a3b55f44d68c39067"
+    },
+    "validation/integration-source-checks.txt": {
+      "bytes": 1499,
+      "sha256": "7853d83d5cc9c3623067584c57aa93b113ed7ae04f9a94f47c4669bd9220d0b6"
+    },
+    "validation/portable-checks.txt": {
+      "bytes": 178,
+      "sha256": "b3c45c66455477d1bfdffc19d7531b32fcfe430cac4f472a3b55f44d68c39067"
+    },
+    "validation/source-checks.txt": {
+      "bytes": 1493,
+      "sha256": "2c539020278bb0df6d7ebf1989a372756ad001328db2a0b379f3459886f05837"
+    }
+  }
+}

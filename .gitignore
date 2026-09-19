@@ -1,0 +1,16 @@
+bin/
+obj/
+artifacts/
+Build.Local.props
+__pycache__/
+*.pyc
+.vs/
+
+# Native build output and local diagnostic captures
+build/
+TGFG-*.log
+TGFG-*.txt
+
+# Third-party SDK downloads and checkouts (fetched locally, see docs/SOURCES.md)
+/*.zip
+/Streamline-*/

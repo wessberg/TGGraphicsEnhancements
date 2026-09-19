@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: MIT
+#include "sl_runtime.hpp"
+#include "dx11_bridge.hpp"
+#include <filesystem>
+#include <algorithm>
+#include <cstring>
+#include <cstdio>
+#include <memory>
+namespace tgfg {
+HMODULE moduleSelf=nullptr;
+namespace {
+void api_error(const sl::APIError& error) {
+    // Called on NVIDIA's presentation thread: no mutex, logging, or GPU work here.
+    state().asyncApiError.store(error.hres,std::memory_order_relaxed);
+}
+void marker(sl::PCLMarker m,Frame* f) {
+    auto& s=state(); if(!f || !f->token || !s.sl.marker) return;
+    SLGuard inside; auto result=s.sl.marker(m,*f->token);
+    if(result!=sl::Result::eOk) {
+        s.status.lastSetOptionsResult=static_cast<int32_t>(result); s.fatal=true;
+        if(!s.diag.markerFailLogged) {
+            s.diag.markerFailLogged=true;
+            log("slPCLSetMarker("+std::to_string(static_cast<int>(m))+") returned "+std::to_string(static_cast<int>(result))+
+                "; frame generation is disabled for the rest of this session");
+        }
+    }
+}
+const char* reason_name(uint32_t r) {
+    static const char* names[]={"Ready","NoClient","WaitingBackend","UnsupportedAPI","Suspended","UserOff",
+        "CapsUnknown","MultiplierUnsupported","DynamicUnsupported","UnsupportedFormat","NativeError","OptionsAccepted",
+        "InputDispatched","ClientTimeout","MissingRenderEvent","NoDlssInputs","StaleFrame","MultipleDlssViews",
+        "UnsupportedQueue","InputContractInvalid","ExistingStreamline","RuntimeNotSupported","CameraInvalid",
+        "PresentFailed","BridgeNotCreated","InteropFailure","UnsupportedColorSpace","SourceDeviceMismatch",
+        "UnsupportedSourceLayout","BridgeReady","VsyncUnsupported"};
+    return r<sizeof(names)/sizeof(names[0])?names[r]:"Unknown";
+}
+std::string hex32(uint32_t v) { char b[16]{}; std::snprintf(b,sizeof(b),"%X",v); return b; }
+std::string n(uint64_t v) { return std::to_string(v); }
+// One line every 5 s: where frames drop out between Unity's frame events, the DLSS SR
+// evaluation, the Present-time readiness check and the DLSS-G options.
+void summarise(uint64_t now) {
+    auto& s=state(); auto& d=s.diag;
+    if(!d.lastSummary) { d.lastSummary=now; return; }
+    if(now-d.lastSummary<5000) return;
+    std::string line="Pipeline "+n((now-d.lastSummary)/1000)+"s: frames="+n(d.framesBegun)+
+        " cameraPackets="+n(d.cameraPackets)+" events0/1/2="+n(d.ev0)+"/"+n(d.ev1)+"/"+n(d.ev2);
+    if(d.evUnknownFrame) line+=" staleEvents="+n(d.evUnknownFrame);
+    line+=" | NGX evals="+n(d.ngxEvals)+" captured="+n(d.captureOk)+
+        " rejected[noFrameId="+n(d.ngxNoFrameId)+" noCamera="+n(d.ngxNoCamera)+" beforeBegin="+n(d.ngxNotBegun)+
+        " afterEnd="+n(d.ngxAfterEnd)+" multi="+n(d.ngxMulti)+" dims="+n(d.ngxDims)+" params="+n(d.ngxParams)+
+        " requestOff="+n(d.ngxRequestOff)+" copyFailed="+n(d.captureFailed)+" evalFailed="+n(d.evalFailed)+"]";
+    line+=" | presents="+n(d.presents)+" withInputs="+n(d.presentsWithInputs)+" tagged="+n(d.tagged);
+    if(d.tagFailed) line+=" tagFailed="+n(d.tagFailed);
+    line+=" ready="+n(d.readyPresents)+" fgOn="+n(d.fgPresents)+" last="+reason_name(d.lastWhy);
+    line+=" | request mode="+n(s.request.mode)+" x"+n(s.request.fixedMultiplier)+" suspend=0x"+hex32(s.request.suspensionMask)+
+        " reflex="+n(s.request.reflexMode)+" | DLSS-G status=0x"+hex32(s.status.dlssgStatus)+
+        " vsyncSupported="+(s.vsyncSupported?"1":"0")+" fatal="+(s.fatal?"1":"0");
+    if(s.sl.reflexState) {
+        // Reflex's own per-frame timestamps (microseconds). PC latency here is simulation start to
+        // the end of GPU rendering on the presenting queue, which in this bridge follows the D3D11
+        // frame, so it covers the game's rendering too. Heap-allocated: the state holds 64 reports.
+        static std::unique_ptr<sl::ReflexState> reflex;
+        if(!reflex) reflex=std::make_unique<sl::ReflexState>();
+        *reflex=sl::ReflexState{};
+        SLGuard inside;
+        if(s.sl.reflexState(*reflex)==sl::Result::eOk) {
+            uint64_t pc=0,render=0,gpu=0; uint32_t count=0;
+            for(const auto& r:reflex->frameReport) {
+                if(!r.frameID || !r.simStartTime || r.gpuRenderEndTime<=r.simStartTime) continue;
+                pc+=r.gpuRenderEndTime-r.simStartTime; gpu+=r.gpuActiveRenderTimeUs; ++count;
+                if(r.renderSubmitStartTime && r.gpuRenderEndTime>r.renderSubmitStartTime) render+=r.gpuRenderEndTime-r.renderSubmitStartTime;
+            }
+            auto ms=[](uint64_t us){ char b[32]{}; std::snprintf(b,sizeof(b),"%.1fms",us/1000.0); return std::string(b); };
+            line+=" | Reflex mode="+n(static_cast<uint32_t>(s.lastReflex.mode))+" lowLatencyAvailable="+(reflex->lowLatencyAvailable?"1":"0")+
+                " reports="+n(count);
+            if(count) line+=" pcLatency="+ms(pc/count)+" renderLatency="+ms(render/count)+" gpuActive="+ms(gpu/count);
+        }
+    }
+    log(line);
+    note_foreign_streamline();
+    const bool markerLogged=d.markerFailLogged, tagLogged=d.tagFailLogged;
+    d=Diag{}; d.lastSummary=now; d.markerFailLogged=markerLogged; d.tagFailLogged=tagLogged;
+}
+// Reflex follows the user setting; DLSS-G additionally requires it, so an active FG request
+// forces at least low-latency mode. Boost is honoured in either case.
+void set_reflex(bool active,bool boost,float limit) {
+    auto& s=state(); if(!s.deviceReady) return;
+    sl::ReflexOptions options{};
+    options.mode=!active?sl::ReflexMode::eOff:boost?sl::ReflexMode::eLowLatencyWithBoost:sl::ReflexMode::eLowLatency;
+    options.frameLimitUs=active?frame_limit_us(limit):0;
+    if(s.haveReflex && s.lastReflex.mode==options.mode && s.lastReflex.frameLimitUs==options.frameLimitUs) return;
+    SLGuard inside; auto result=s.sl.reflexOptions(options);
+    if(result==sl::Result::eOk) { s.lastReflex=options; s.haveReflex=true; }
+    else { s.status.lastSetOptionsResult=static_cast<int32_t>(result); s.fatal=true; log("slReflexSetOptions failed"); }
+}
+void apply_options(Frame* frame,Reason why,const DXGI_SWAP_CHAIN_DESC& description) {
+    auto& s=state(); if(!s.deviceReady) return;
+    bool enabled=why==Reason::Ready;
+    const bool fgRequested=valid(s.request) && s.request.mode!=0 && s.request.sourceGraphicsApi==11 && (s.status.bridgeFlags&1u) &&
+        !s.request.suspensionMask && GetTickCount64()-s.heartbeat<=1000 && !s.fatal;
+    const bool userReflex=valid(s.request) && s.request.reflexMode!=0 && GetTickCount64()-s.heartbeat<=1000 && !s.fatal;
+    set_reflex(fgRequested||userReflex,valid(s.request) && s.request.reflexMode==2,s.request.reflexBaseFpsLimit);
+    if(s.fatal) { enabled=false; why=Reason::NativeError; }
+    sl::DLSSGOptions options{};
+    options.mode=!enabled?sl::DLSSGMode::eOff:s.request.mode==2?sl::DLSSGMode::eDynamic:sl::DLSSGMode::eOn;
+    // Streamline requires a positive frame count even while the mode is eOff. In Dynamic mode the
+    // SDK 2.14.1 guide documents numFramesToGenerate as ignored; it is still sent as the user's
+    // "up to Nx" bound so a runtime that honours it caps generation there.
+    options.numFramesToGenerate=enabled?s.request.fixedMultiplier-1:1;
+    options.dynamicTargetFrameRate=enabled && s.request.mode==2?s.request.dynamicTargetFps:0;
+    options.numBackBuffers=description.BufferCount;
+    options.colorWidth=description.BufferDesc.Width; options.colorHeight=description.BufferDesc.Height;
+    options.colorBufferFormat=static_cast<uint32_t>(description.BufferDesc.Format);
+    options.queueParallelismMode=sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
+    // No fabricated HUD separation. Optional HUD-less tag has its own explicit API.
+    options.enableUserInterfaceRecomposition=sl::eFalse;
+    options.onErrorCallback=api_error;
+    bool changed=!s.haveOptions || s.applied.mode!=options.mode ||
+        s.applied.numFramesToGenerate!=options.numFramesToGenerate ||
+        s.applied.dynamicTargetFrameRate!=options.dynamicTargetFrameRate ||
+        s.applied.colorWidth!=options.colorWidth || s.applied.colorHeight!=options.colorHeight ||
+        s.applied.numBackBuffers!=options.numBackBuffers || s.applied.colorBufferFormat!=options.colorBufferFormat;
+    auto result=sl::Result::eOk;
+    if(changed) { SLGuard inside; result=s.sl.setOptions(s.viewport,options); }
+    s.status.lastSetOptionsResult=static_cast<int32_t>(result);
+    s.status.reason=static_cast<uint32_t>(why);
+    if(result==sl::Result::eOk) {
+        s.applied=options; s.haveOptions=true;
+        s.status.lastAcceptedMode=enabled?s.request.mode:0;
+        if(enabled || s.request.mode==0) s.status.appliedSequence=s.request.sequence;
+        if(enabled) s.status.reason=static_cast<uint32_t>(Reason::OptionsAccepted);
+    } else {
+        s.status.reason=static_cast<uint32_t>(Reason::NativeError);
+        options_off(); s.fatal=true;
+    }
+    if(!enabled) clear_tags(frame);
+}
+void __stdcall render_event(int eventId,void* encodedId) {
+    auto& s=state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    uint32_t id=static_cast<uint32_t>(reinterpret_cast<uintptr_t>(encodedId));
+    auto* frame=s.frames.find(id);
+    if(!s.deviceReady || !frame || !frame->token || GetTickCount64()-frame->born>1000) {
+        if(s.deviceReady) ++s.diag.evUnknownFrame;
+        haveRenderFrame=false; return;
+    }
+    if(eventId==0) ++s.diag.ev0; else if(eventId==1) ++s.diag.ev1; else if(eventId==2) ++s.diag.ev2;
+    if(eventId==0) { // unconditional frame boundary, also supplied in menus
+        haveRenderFrame=true; renderFrameId=id;
+        if(!frame->simEnded) { marker(sl::PCLMarker::eSimulationEnd,frame); frame->simEnded=true; }
+        marker(sl::PCLMarker::eRenderSubmitStart,frame);
+    } else if(eventId==1 && frame->cameraReady) {
+        haveRenderFrame=true; renderFrameId=id;
+        frame->renderBegun=true;
+    } else if(eventId==2 && haveRenderFrame && renderFrameId==id) {
+        frame->renderEnded=true;
+    }
+}
+} // namespace
+void before_present(IDXGISwapChain* chain) {
+    auto& s=state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if(!s.deviceReady) return;
+    auto asyncError=s.asyncApiError.exchange(S_OK,std::memory_order_relaxed);
+    if(FAILED(asyncError)) failure(Reason::PresentFailed,"Asynchronous NVIDIA Present HRESULT="+std::to_string(asyncError),true);
+    auto* frame=haveRenderFrame?s.frames.find(renderFrameId):nullptr;
+    DXGI_SWAP_CHAIN_DESC description{};
+    if(FAILED(chain->GetDesc(&description))) { options_off(); return; }
+    s.status.swapchainFormat=static_cast<uint32_t>(description.BufferDesc.Format);
+    uint64_t now=GetTickCount64();
+    s.status.requestAgeMs=static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX,now-s.heartbeat));
+    Readiness ready{};
+    ready.sdk=s.deviceReady; ready.dx11Bridge=(s.status.bridgeFlags&1u)!=0; ready.caps=(s.status.flags&4u)!=0;
+    // Present itself proves the camera finished rendering. HDRP raises endCameraRendering only
+    // after its final Submit, so the end marker bounds NGX evaluations but is not required here.
+    ready.renderFrame=frame && frame->cameraReady && frame->renderBegun && now-frame->born<=1000;
+    ready.inputs=frame && frame->inputs && frame->inputsSubmitted;
+    ready.inputContract=frame && frame->inputContract;
+    ready.ageMs=s.status.requestAgeMs; ready.maxGenerated=s.status.maxGeneratedFrames;
+    ready.dynamicSupported=s.status.dynamicSupported; ready.format=s.status.swapchainFormat;
+    ready.evalCount=frame?frame->evalCount:0; ready.fatal=s.fatal;
+    auto why=eligibility(s.request,ready);
+    if(!supported_present_format(s.status.swapchainFormat) && s.request.mode) why=Reason::UnsupportedFormat;
+    if(frame && frame->inputs && !frame->inputsSubmitted && why==Reason::NoDlssInputs) why=Reason::UnsupportedQueue;
+    apply_options(frame,why,description);
+    ++s.diag.presents; s.diag.lastWhy=static_cast<uint32_t>(why);
+    if(why==Reason::Ready) ++s.diag.readyPresents;
+    if(s.status.lastAcceptedMode) ++s.diag.fgPresents;
+    marker(sl::PCLMarker::eRenderSubmitEnd,frame);
+    marker(sl::PCLMarker::ePresentStart,frame);
+    // Frames without a corresponding presentation must never retain ring slots
+    // forever. Expire only old CPU records after disabling generation.
+    if(!s.status.lastAcceptedMode) for(auto& slot:s.frames.slots)
+        if(slot.occupied && now-slot.value.born>1000) s.frames.release(slot.id);
+}
+void after_present(HRESULT result) {
+    auto& s=state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    auto* frame=haveRenderFrame?s.frames.find(renderFrameId):nullptr;
+    marker(sl::PCLMarker::ePresentEnd,frame);
+    if(s.deviceReady) update_caps();
+    if(FAILED(result)) { failure(Reason::PresentFailed,"Present failed HRESULT="+std::to_string(result),true); options_off(); }
+    else if(s.status.lastAcceptedMode && s.status.dlssgStatus) {
+        log("DLSS-G runtime reported status flags="+std::to_string(s.status.dlssgStatus));
+        options_off(); s.fatal=true; s.status.reason=uint32_t(Reason::NativeError);
+    }
+    if(haveRenderFrame) s.frames.release(renderFrameId);
+    haveRenderFrame=false;
+    summarise(GetTickCount64());
+}
+} // namespace tgfg
+
+TGFG_EXPORT uint32_t TGFG_CALL TGFG_GetAbiVersion() { return TGFG_ABI; }
+TGFG_EXPORT int32_t TGFG_CALL TGFG_Submit(const TGFG_Request* request) {
+    if(!request || !tgfg::valid(*request)) return -1;
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if(request->sequence<s.request.sequence) return -2;
+    s.request=*request; s.heartbeat=GetTickCount64();
+    s.status.requestedSequence=request->sequence; s.status.requestedMode=request->mode;
+    s.status.requestedDynamicTargetFps=request->dynamicTargetFps;
+    s.status.requestedBaseFpsLimit=request->reflexBaseFpsLimit;
+    return 0;
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_ReadStatus(TGFG_Status* out) {
+    if(!out || out->size!=sizeof(*out) || out->abi!=TGFG_ABI) return -1;
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex); *out=s.status; return 0;
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_BeginSimulation(uint32_t id) {
+    auto& s=tgfg::state(); sl::FrameToken* token=nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s.mutex);
+        if(!s.deviceReady || !(s.status.bridgeFlags&1u) || !s.sl.sleep || !s.sl.marker) return -1;
+        const bool fgRequested=tgfg::valid(s.request) && s.request.mode!=0 && s.request.sourceGraphicsApi==11 && (s.status.bridgeFlags&1u) &&
+            !s.request.suspensionMask && GetTickCount64()-s.heartbeat<=1000 && !s.fatal;
+        const bool userReflex=tgfg::valid(s.request) && s.request.reflexMode!=0 && GetTickCount64()-s.heartbeat<=1000 && !s.fatal;
+        tgfg::set_reflex(fgRequested||userReflex,tgfg::valid(s.request) && s.request.reflexMode==2,s.request.reflexBaseFpsLimit);
+        if(auto* existing=s.frames.find(id)) return existing->token?0:-2;
+        auto* frame=s.frames.acquire(id); if(!frame) return -3;
+        tgfg::SLGuard inside;
+        auto result=s.sl.slGetNewFrameToken(token,&id);
+        if(result!=sl::Result::eOk || !token) { s.frames.release(id); return -4; }
+        frame->token=token; frame->born=GetTickCount64();
+        ++s.diag.framesBegun;
+    }
+    // Sleep is thread-safe and must not hold the state mutex: the presentation
+    // thread must be able to make progress while Reflex waits.
+    tgfg::SLGuard inside;
+    auto sleepResult=s.sl.sleep(*token);
+    auto markerResult=s.sl.marker(sl::PCLMarker::eSimulationStart,*token);
+    if(sleepResult!=sl::Result::eOk || markerResult!=sl::Result::eOk) {
+        tgfg::failure(tgfg::Reason::NativeError,"Reflex simulation marker/sleep failed",true); return -5;
+    }
+    return 0;
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_EndSimulation(uint32_t id) {
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    auto* f=s.frames.find(id); if(!f || !f->token) return -1;
+    if(!f->simEnded) {
+        tgfg::SLGuard inside; auto r=s.sl.marker(sl::PCLMarker::eSimulationEnd,*f->token);
+        if(r!=sl::Result::eOk) return -2; f->simEnded=true;
+    }
+    return 0;
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_SetCamera(const TGFG_Camera* packet) {
+    if(!packet || !tgfg::valid(*packet)) return -1;
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    auto* f=s.frames.find(packet->frameId); if(!f || f->renderBegun) return -2;
+    if(f->cameraReady) return -3; // no two game cameras into the same viewport
+    f->camera=*packet; f->cameraReady=true; ++s.diag.cameraPackets; return 0;
+}
+TGFG_EXPORT void* TGFG_CALL TGFG_GetRenderEvent() { return reinterpret_cast<void*>(tgfg::render_event); }
+TGFG_EXPORT int32_t TGFG_CALL TGFG_CaptureHudlessD3D11(uint32_t id,void* context,void* resource) {
+    // Call only from a verified post-effects/pre-HUD stage on the immediate
+    // rendering context. This export never invents a HUD-less image.
+    return tgfg::capture_dx11_hudless(id,static_cast<ID3D11DeviceContext*>(context),static_cast<ID3D11Resource*>(resource));
+}
+TGFG_EXPORT DWORD WINAPI TGFG_Bootstrap(void*) {
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    s.self=tgfg::moduleSelf; s.status.nativeLoadPid=GetCurrentProcessId();
+    if(s.bootstrapAttempted) return s.initialized?0:1;
+    s.bootstrapAttempted=true;
+    try {
+        s.root=std::filesystem::path(tgfg::module_path(s.self)).parent_path().wstring();
+        tgfg::log("TGFG 0.4.0 DX11-to-DX12 direct Streamline bootstrap; PID="+std::to_string(GetCurrentProcessId()));
+        if(!tgfg::load_runtime() || !tgfg::install_graphics_hooks() || !tgfg::install_ngx_discovery()) return 2;
+        HMODULE pinned=nullptr;
+        if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN|GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(&TGFG_Bootstrap),&pinned)) return 3;
+        return 0;
+    } catch(const std::exception& e) { tgfg::log(std::string("Bootstrap exception: ")+e.what()); return 4; }
+}
+BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,LPVOID) {
+    if(reason==DLL_PROCESS_ATTACH) { tgfg::moduleSelf=module; DisableThreadLibraryCalls(module); }
+    // Never initialize Streamline, MinHook, or shut down the GPU under loader lock.
+    return TRUE;
+}
