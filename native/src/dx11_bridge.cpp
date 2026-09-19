@@ -617,6 +617,7 @@ public:
         generator_.reset();
         if(c11_)c11_->SetPrivateData(kImmediateContextTag,0,nullptr);
     }
+    ID3D11DeviceContext* immediate_context() {return c11_.Get();}
     // True when the context is our immediate context, directly or through a forwarding wrapper.
     bool same_context(ID3D11DeviceContext* context) {
         if(!context) return false;
@@ -808,6 +809,11 @@ bool capture_dx11_inputs(uint32_t id,ID3D11DeviceContext* context,ID3D11Resource
     try{return active->capture(id,context,depth,motion,de,me,constants);}
     catch(const DxError& e){state().status.lastInteropHresult=e.hr;report(std::string(e.what())+" "+hexhr(e.hr));return false;}
     catch(const std::exception& e){report(e.what());return false;}
+}
+bool capture_dx11_inputs_immediate(uint32_t id,ID3D11Resource* depth,ID3D11Resource* motion,
+    RectU de,RectU me,const sl::Constants& constants) {
+    std::lock_guard<std::recursive_mutex> lock(state().mutex);
+    return active && capture_dx11_inputs(id,active->immediate_context(),depth,motion,de,me,constants);
 }
 void finish_dx11_capture(uint32_t id,bool success) {std::lock_guard<std::recursive_mutex> lock(state().mutex);if(active)active->finish(id,success);}
 int capture_dx11_hudless(uint32_t id,ID3D11DeviceContext* context,ID3D11Resource* color) {

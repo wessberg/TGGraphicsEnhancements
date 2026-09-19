@@ -40,6 +40,9 @@
     <Reference Include="Awaken.Utility" Condition="Exists('$(UnityReferenceDir)\Awaken.Utility.dll')"><HintPath>$(UnityReferenceDir)\Awaken.Utility.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UniTask" Condition="Exists('$(UnityReferenceDir)\UniTask.dll')"><HintPath>$(UnityReferenceDir)\UniTask.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.Collections" Condition="Exists('$(UnityReferenceDir)\Unity.Collections.dll')"><HintPath>$(UnityReferenceDir)\Unity.Collections.dll</HintPath><Private>false</Private></Reference>
+    <!-- HDRP custom pass supplying depth and motion vectors when no upscaler does (Mono only). -->
+    <Reference Include="Unity.RenderPipelines.HighDefinition.Runtime"><HintPath>$(UnityReferenceDir)\Unity.RenderPipelines.HighDefinition.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(UnityReferenceDir)\Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
     <Reference Include="BepInEx.Core"><HintPath>$(BepInExCoreDir)\BepInEx.Core.dll</HintPath><Private>false</Private></Reference>

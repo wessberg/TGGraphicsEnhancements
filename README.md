@@ -27,17 +27,17 @@ Tested in game on an RTX 5080:
 XeSS Frame Generation, Intel XeLL and AMD Anti-Lag 2 are built on Intel's and AMD's SDKs but have
 not yet been confirmed in game. IL2CPP builds (BepInEx 6) are untested.
 
-All three technologies take their motion vectors and depth from the game's DLSS upscaler, so frame
-generation needs DLSS selected as the upscaler, and that needs an NVIDIA RTX GPU. RTX 20 and 30
-cards can't run DLSS Frame Generation but can use FSR or XeSS Frame Generation. On AMD and Intel
-GPUs only Anti-Lag 2 and XeLL apply for now; a fallback to HDRP's own motion vectors (TAA, STP)
-is planned.
+When DLSS upscaling is on, frame generation takes its motion vectors and depth from the DLSS
+upscaler. With any other setting (TAA, STP or no anti-aliasing), a custom pass takes HDRP's own depth
+and motion vectors instead, so FSR and XeSS frame generation also work on AMD and Intel GPUs. The
+HDRP path gives the SDKs the same jitter and motion vector scale HDRP gives DLSS, but it has not yet
+been confirmed in game.
 
 ## Settings
 
 | Video tab row | Choices |
 |---|---|
-| Frame Generation | Off, plus each of DLSS, FSR and XeSS whose runtime reports support on this GPU. Greyed out unless DLSS is the selected upscaler. |
+| Frame Generation | Off, plus each of DLSS, FSR and XeSS whose runtime reports support on this GPU. |
 | Frame Generation Mode | DLSS only: Fixed or Dynamic, when the runtime reports Multi Frame Generation and Dynamic support. |
 | Frame Multiplier | 2x up to the selected technology's maximum. Switching technology clamps the value. |
 | Max Frame Multiplier, Target Framerate | DLSS Dynamic only: the upper limit and the framerate to aim for. |
@@ -65,7 +65,8 @@ Settings from 0.4.x and earlier builds of 0.5.0 are migrated on first start.
 ```text
 FoA + ReShade/RenoDX, rendering through D3D11
   ├─ the game's DLSS upscaler calls pass through unchanged
-  ├─ depth and motion vectors are copied at the D3D11 NGX evaluation (the frame generation inputs)
+  ├─ frame generation inputs (depth, motion vectors): copied at the D3D11 NGX evaluation when
+  │  DLSS runs, otherwise from HDRP's buffers by a custom pass before post-processing
   └─ the final image is taken at the D3D11 Present
        ↓ shared textures and GPU fences on the same adapter
 TGFG's private D3D12 device and queue
@@ -92,7 +93,7 @@ TGFG's copy alone.
 | DLSS | Streamline 2.14.1 DLSS-G: fixed multipliers, `eDynamic` with `dynamicTargetFrameRate`, Reflex required. |
 | FSR | AMD's signed loader and frame generation DLLs: FSR 4 ML frame generation on Radeon RX 9000, FSR 3.1 elsewhere. |
 | XeSS | Intel's signed `libxess_fg.dll` and `libxell.dll`; inputs tagged per frame, present IDs are XeLL frame IDs. |
-| Inputs | The DLSS upscaler's depth and motion vectors, copied to shareable R32_FLOAT and R16G16_FLOAT textures, with the NGX jitter, motion vector scale and feature flags. |
+| Inputs | The DLSS upscaler's depth and motion vectors with its jitter, motion vector scale and feature flags. Without DLSS, HDRP's own buffers with HDRP's TAA jitter and the scale HDRP gives DLSS. Both are copied to shareable R32_FLOAT and R16G16_FLOAT textures. |
 | Synchronization | GPU fences between the D3D11 and D3D12 queues. The CPU never reads an image back. |
 | HDR | FP16 scRGB is encoded to RGB10A2 PQ/BT.2020; SDR and HDR10 are copied. FSR and XeSS accept HDR10. |
 | HUD | The UI is interpolated with the scene and can smear on generated frames; the game has no pre-HUD hook. |
@@ -152,7 +153,8 @@ BepInEx/TGFrameGeneration/diagnostics/
 
 At startup the native log lists what each runtime reports: DLSS-G, the FSR providers, the XeSS
 maximum, XeLL and Anti-Lag 2. Every five seconds a `Pipeline 5s:` line counts frame events,
-captured DLSS inputs, presents with inputs and frames with generation on, and names the active
+captured DLSS inputs, HDRP input packets, presents with inputs and frames with generation on, and
+names the active
 output (`standard`, `FSR`, `XeSS`) and latency technology, with Reflex's latency report or the FSR
 and XeSS frame counts. Technology switches are logged as "Presentation switching from ... to ...".
 
@@ -162,7 +164,9 @@ running.
 
 ## Known limits
 
-- Frame generation needs the game's DLSS upscaler as its input source (NVIDIA RTX, DLSS selected).
+- The HDRP input path needs HDRP to render motion vectors for the gameplay camera, which it does
+  with TAA, STP and DLSS; without them the log says so and frame generation stays off. IL2CPP
+  builds take their inputs from DLSS only.
 - The HUD is interpolated with the scene. `TGFG_CaptureHudlessD3D11` can take a HUD-less frame if
   something provides one, but nothing in the game does.
 - FSR and XeSS create their swapchain while the game presents. Whether every overlay (ReShade,

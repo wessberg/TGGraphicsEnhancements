@@ -13,6 +13,8 @@ HRESULT try_create_dx11_bridge(IUnknown* device,IDXGIFactory* clientFactory,HWND
 bool is_game_window(HWND,UINT,UINT);
 bool capture_dx11_inputs(uint32_t,ID3D11DeviceContext*,ID3D11Resource*,ID3D11Resource*,
     RectU,RectU,const sl::Constants&);
+// The same capture on the game device's immediate context, for Unity render-thread events.
+bool capture_dx11_inputs_immediate(uint32_t,ID3D11Resource*,ID3D11Resource*,RectU,RectU,const sl::Constants&);
 void finish_dx11_capture(uint32_t,bool);
 int capture_dx11_hudless(uint32_t,ID3D11DeviceContext*,ID3D11Resource*);
 void shutdown_dx11_bridge();

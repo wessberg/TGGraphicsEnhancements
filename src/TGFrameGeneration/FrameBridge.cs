@@ -129,6 +129,12 @@ namespace TGFrameGeneration
             } catch(Exception ex) { Fail(ex); }
         }
         internal static ulong CamerasQueued { get; private set; }
+        // The frame of the gameplay camera, while that camera renders (between its begin and end markers).
+        internal static bool GameplayFrame(Camera camera, out uint id)
+        {
+            id=frameId;
+            return frameOpen && !failed && cameraQueued && camera!=null && camera.GetInstanceID()==queuedCameraId;
+        }
         private static void EndCamera(ScriptableRenderContext context,Camera camera)
         {
             if(!frameOpen || failed || !cameraQueued || camera==null || camera.GetInstanceID()!=queuedCameraId) return;

@@ -48,6 +48,8 @@ struct Frame {
     bool xell=false; // XeLL slept for this frame, so it receives this frame's markers
     uint32_t evalCount=0;
     bool inputsSubmitted=false;
+    TGFG_HdrpInputs hdrp{};                    // HDRP's own depth and motion vectors for this frame
+    bool hdrpPending=false, hdrpCaptured=false; // packet received; copied at render event 3
     uint64_t born=0;
 };
 // Per-interval pipeline counters. Written under State::mutex and summarised in the native
@@ -58,6 +60,7 @@ struct Diag {
     uint64_t ngxDims=0, ngxParams=0, ngxRequestOff=0, captureFailed=0, captureOk=0, evalFailed=0;
     uint64_t presents=0, presentsWithInputs=0, tagged=0, tagFailed=0, readyPresents=0, fgPresents=0;
     uint64_t sdkPresented=0; // frames an FSR/XeSS swapchain reported presenting (rendered + generated)
+    uint64_t hdrpPackets=0, hdrpCaptured=0, hdrpUpscaler=0, hdrpRejected=0;
     uint32_t lastWhy=0;
     uint64_t lastSummary=0;
     bool markerFailLogged=false, tagFailLogged=false;
@@ -97,6 +100,10 @@ struct State {
     // Create flags of the observed DLSS SR feature: how depth and motion vectors are encoded.
     // Until one is seen, HDRP's defaults (inverted depth, render-resolution vectors) are assumed.
     uint32_t ngxFlags=NVSDK_NGX_DLSS_Feature_Flags_DepthInverted|NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
+    // Last frame whose inputs came from the upscaler (DLSS SR). While the upscaler runs, its inputs
+    // take precedence over HDRP's own.
+    uint32_t lastUpscalerFrame=0;
+    bool upscalerSeen=false;
 };
 State& state();
 extern thread_local bool insideSL;
@@ -117,6 +124,8 @@ bool load_runtime();
 void note_foreign_streamline();
 bool install_graphics_hooks();
 bool install_ngx_discovery();
+// Render event 3: copies the frame's HDRP depth and motion vectors unless the upscaler supplies them.
+void capture_hdrp_inputs(Frame&);
 // DXGI factory straight from the system dxgi.dll, never a Streamline or overlay proxy.
 HRESULT create_native_factory(REFIID,void**);
 void on_device(IUnknown*);

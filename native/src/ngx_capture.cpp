@@ -93,7 +93,7 @@ Capture capture(size_t provider,ID3D11DeviceContext* context,const NVSDK_NGX_Han
     constants.reset=(camera.resetHistory||uint_value(p,NVSDK_NGX_Parameter_Reset)||!s.status.lastAcceptedMode)?sl::eTrue:sl::eFalse;
     SLGuard own;
     if(!capture_dx11_inputs(renderFrameId,context,depth,motion,de,me,constants)){++s.diag.captureFailed;return {};}
-    ++s.diag.captureOk;
+    ++s.diag.captureOk;s.lastUpscalerFrame=renderFrameId;s.upscalerSeen=true;
     return {true,renderFrameId};
 }
 void finish(Capture capture,bool success) {
@@ -162,6 +162,43 @@ FARPROC WINAPI get_proc_hook(HMODULE module,LPCSTR name) {
     if(evalC)return redirect(address,p.evaluateC,evalCThunks[index]);return redirect(address,p.release,releaseThunks[index]);
 }
 } // namespace
+// HDRP's own depth and motion vectors, for frames the game renders without DLSS (TAA, STP, no
+// anti-aliasing). The custom pass runs before post-processing, so before this frame's DLSS pass:
+// while DLSS supplied the previous frame's inputs, it supplies this frame's too.
+void capture_hdrp_inputs(Frame& frame) {
+    auto& s=state();
+    frame.hdrpPending=false;
+    if(s.upscalerSeen && frame.id-s.lastUpscalerFrame<=1u){++s.diag.hdrpUpscaler;return;}
+    if(!valid(s.request)||s.request.mode==0||s.request.sourceGraphicsApi!=11||s.request.suspensionMask||s.fatal||GetTickCount64()-s.heartbeat>1000)return;
+    if(!s.deviceReady || !(s.status.bridgeFlags&1))return;
+    const auto& in=frame.hdrp;const auto& camera=frame.camera;
+    const RectU rect{0,0,in.renderWidth,in.renderHeight};
+    sl::Constants constants{};
+    constants.cameraViewToClip=matrix(camera.viewToClip);constants.clipToCameraView=matrix(camera.clipToView);
+    constants.clipToPrevClip=matrix(camera.clipToPrev);constants.prevClipToClip=matrix(camera.prevToClip);
+    constants.cameraPos=vector(camera.position);constants.cameraUp=vector(camera.up);constants.cameraRight=vector(camera.right);constants.cameraFwd=vector(camera.forward);
+    constants.cameraNear=camera.nearPlane;constants.cameraFar=camera.farPlane;constants.cameraFOV=camera.fovRadians;constants.cameraAspectRatio=camera.aspect;
+    // HDRP's DLSS pass gives NGX the negated TAA jitter and a motion vector scale of minus the render
+    // size, so every frame generation technology gets the same values as from a DLSS frame.
+    constants.jitterOffset={-in.jitterX,-in.jitterY};constants.mvecScale={-1.f,-1.f};
+    constants.cameraPinholeOffset={0.f,0.f};
+    {const float identity[16]={1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};constants.clipToLensClip=matrix(identity);}
+    const bool reversed=(in.flags&1u)!=0;
+    constants.depthInverted=reversed?sl::eTrue:sl::eFalse;
+    constants.cameraMotionIncluded=sl::eTrue;constants.motionVectors3D=sl::eFalse;constants.motionVectorsDilated=sl::eFalse;
+    constants.motionVectorsJittered=sl::eFalse;
+    constants.reset=(camera.resetHistory||!s.status.lastAcceptedMode)?sl::eTrue:sl::eFalse;
+    // How FSR and XeSS read depth and motion vectors: as from a DLSS feature with render-resolution vectors.
+    constexpr uint32_t described=NVSDK_NGX_DLSS_Feature_Flags_DepthInverted|NVSDK_NGX_DLSS_Feature_Flags_MVLowRes|NVSDK_NGX_DLSS_Feature_Flags_MVJittered;
+    s.ngxFlags=(s.ngxFlags&~described)|(reversed?NVSDK_NGX_DLSS_Feature_Flags_DepthInverted:0u)|NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
+    frame.inputContract=true;s.status.flags|=32u;
+    SLGuard own;
+    if(!capture_dx11_inputs_immediate(frame.id,reinterpret_cast<ID3D11Resource*>(in.depth),reinterpret_cast<ID3D11Resource*>(in.motion),rect,rect,constants))
+        {++s.diag.hdrpRejected;return;}
+    finish_dx11_capture(frame.id,true);
+    frame.inputs=true;frame.hdrpCaptured=true;++s.diag.hdrpCaptured;
+    ++s.status.successfulInputDispatches;s.status.reason=uint32_t(Reason::InputDispatched);
+}
 bool install_ngx_discovery() {
     const auto p=GetProcAddress(GetModuleHandleW(L"kernel32.dll"),"GetProcAddress");
     return add_hook(reinterpret_cast<void*>(p),reinterpret_cast<void*>(&get_proc_hook),reinterpret_cast<void**>(&originalGetProcAddress));

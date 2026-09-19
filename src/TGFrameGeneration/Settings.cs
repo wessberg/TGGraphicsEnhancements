@@ -63,8 +63,8 @@ namespace TGFrameGeneration
             var stored = ReadValues(existing ? new[] { file.ConfigFilePath } : new[] { LegacyMainPath, LegacyVideoPath });
             frameGeneration = Row(FrameGenerationKey, FrameGenerationSetting.Off.ToString(), "Frame Generation", 0,
                 Enum.GetNames(typeof(FrameGenerationSetting)), null,
-                "Generates extra frames between the rendered ones with NVIDIA DLSS, AMD FSR or Intel XeSS, as supported by this GPU. " +
-                "Needs DLSS selected as the upscaler: frame generation uses its motion vectors and depth.");
+                "Generates extra frames between the rendered ones with NVIDIA DLSS, AMD FSR or Intel XeSS, as supported by this GPU, " +
+                "from the game's own motion vectors and depth.");
             mode = Row(ModeKey, FrameGenerationMode.Fixed.ToString(), "Frame Generation Mode", 1,
                 Enum.GetNames(typeof(FrameGenerationMode)), null,
                 "Fixed: a constant multiplier. Dynamic: NVIDIA Multi Frame Generation picks the number of generated frames each frame to reach the target framerate.");

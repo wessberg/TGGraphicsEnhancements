@@ -11,10 +11,10 @@ Start the game from Steam as usual. TGFG-Package-manifest.json can go in the gam
 Test-Setup.ps1; the game doesn't need it.
 
 Options > Video gains two rows below the upscaler:
-  Frame Generation  Off, or DLSS, FSR or XeSS as supported by your GPU. It uses the motion
-                    vectors and depth of the game's DLSS upscaling, so select DLSS as the
-                    upscaler first; the row stays greyed out otherwise. That needs an NVIDIA
-                    RTX GPU. RTX 20 and 30 cards can use FSR or XeSS frame generation.
+  Frame Generation  Off, or DLSS, FSR or XeSS as supported by your GPU. It uses the game's
+                    own motion vectors and depth: from DLSS upscaling when that's on, and
+                    straight from the game's renderer with TAA, STP or no anti-aliasing, so
+                    it works on AMD and Intel GPUs too.
   Low Latency       NVIDIA Reflex, Intel XeLL or AMD Anti-Lag 2, as supported. It stays on
                     while frame generation is on: DLSS needs Reflex and XeSS uses XeLL.
 FoA Mod Manager shows the same rows. The settings are saved in
@@ -47,5 +47,6 @@ are next to them: Native/Streamline/LICENSE-*.txt, Native/FidelityFX/LICENSE-Fid
 Native/XeSS/LICENSE-XeSS.txt.
 
 Tested on an RTX 5080: DLSS frame generation (fixed and dynamic, with and without ReShade + RenoDX
-HDR and the RenoDX DLSS addon) and FSR frame generation. XeSS frame generation, XeLL and Anti-Lag 2
-have not yet been confirmed in game. The game must render with Direct3D 11, its default.
+HDR and the RenoDX DLSS addon) and FSR frame generation. XeSS frame generation, XeLL, Anti-Lag 2 and
+frame generation without DLSS upscaling have not yet been confirmed in game. The game must render
+with Direct3D 11, its default.

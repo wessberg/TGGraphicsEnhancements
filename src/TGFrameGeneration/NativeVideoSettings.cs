@@ -105,11 +105,11 @@ namespace TGFrameGeneration
         public override IEnumerable<PrefOption> Options => top;
         protected override bool AutoApplyOnInit => false;
         private FrameGenerationSetting Selected => backends[Mathf.Clamp(fg.OptionInt, 0, backends.Length - 1)];
-        // Frame generation uses the motion vectors and depth of DLSS upscaling, so its rows are usable while
-        // DLSS is selected in the game's upscaler row (also before that choice is applied).
+        // Without TGFG's HDRP custom pass, frame generation has only the DLSS upscaler's motion vectors and
+        // depth, so its rows are usable while DLSS is selected in the upscaler row (also before Apply).
         private bool DlssSelected
         {
-            get { try { return upscaling == null || upscaling.IsDLSSEnabled; } catch { return true; } }
+            get { try { return HdrpInputs.Available || upscaling == null || upscaling.IsDLSSEnabled; } catch { return true; } }
         }
         private bool Usable() => Session.Bridge != null && Session.Bridge.Connected && caps.InputSource && DlssSelected;
         // The game checks a row's interactability when it builds the row. Like its anti-aliasing row does for
@@ -129,9 +129,9 @@ namespace TGFrameGeneration
         private string FrameGenerationTooltip(FrameGenerationSetting selected)
         {
             if (!caps.InputSource)
-                return "Not available on this GPU: frame generation uses the motion vectors and depth of the game's DLSS upscaling, which needs an NVIDIA GPU.";
+                return "Not available on this GPU: without HDRP inputs, frame generation uses the motion vectors and depth of DLSS upscaling, which needs an NVIDIA GPU.";
             if (!DlssSelected)
-                return "Select DLSS as the upscaler to use frame generation. It uses the motion vectors and depth of DLSS upscaling.";
+                return "Select DLSS as the upscaler to use frame generation. Without HDRP inputs it uses the motion vectors and depth of DLSS upscaling.";
             string text;
             switch (selected)
             {
@@ -149,7 +149,7 @@ namespace TGFrameGeneration
                         (backends.Length > 1 ? string.Join(", ", backends.Skip(1).Select(b => VideoCapabilities.Label(b)).ToArray()) : "none") + ".";
                     break;
             }
-            return text + " Uses the motion vectors and depth of DLSS upscaling. Pauses in menus and while the cursor is unlocked." +
+            return text + " Uses the game's own motion vectors and depth, from DLSS upscaling when it's on. Pauses in menus and while the cursor is unlocked." +
                 (Session.Bridge != null && Session.Bridge.Connected ? "" : " The TGFG native backend is not loaded.");
         }
         private string LatencyTooltip()

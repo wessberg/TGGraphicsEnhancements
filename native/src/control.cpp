@@ -57,6 +57,8 @@ void summarise(uint64_t now) {
         " rejected[noFrameId="+n(d.ngxNoFrameId)+" noCamera="+n(d.ngxNoCamera)+" beforeBegin="+n(d.ngxNotBegun)+
         " afterEnd="+n(d.ngxAfterEnd)+" multi="+n(d.ngxMulti)+" dims="+n(d.ngxDims)+" params="+n(d.ngxParams)+
         " requestOff="+n(d.ngxRequestOff)+" copyFailed="+n(d.captureFailed)+" evalFailed="+n(d.evalFailed)+"]";
+    if(d.hdrpPackets) line+=" | HDRP packets="+n(d.hdrpPackets)+" captured="+n(d.hdrpCaptured)+
+        " upscalerFrames="+n(d.hdrpUpscaler)+" rejected="+n(d.hdrpRejected);
     line+=" | presents="+n(d.presents)+" withInputs="+n(d.presentsWithInputs)+" tagged="+n(d.tagged);
     if(d.tagFailed) line+=" tagFailed="+n(d.tagFailed);
     line+=" ready="+n(d.readyPresents)+" fgOn="+n(d.fgPresents)+" last="+reason_name(d.lastWhy);
@@ -166,6 +168,8 @@ void __stdcall render_event(int eventId,void* encodedId) {
         frame->renderBegun=true;
     } else if(eventId==2 && haveRenderFrame && renderFrameId==id) {
         frame->renderEnded=true;
+    } else if(eventId==3 && haveRenderFrame && renderFrameId==id && frame->renderBegun && !frame->renderEnded && frame->hdrpPending) {
+        capture_hdrp_inputs(*frame);
     }
 }
 } // namespace
@@ -180,7 +184,8 @@ Readiness frame_readiness(Frame* frame,uint32_t format,uint32_t maxGenerated,uin
     ready.inputs=frame && frame->inputs && frame->inputsSubmitted;
     ready.inputContract=frame && frame->inputContract;
     ready.ageMs=s.status.requestAgeMs; ready.maxGenerated=maxGenerated; ready.dynamicSupported=dynamicSupported;
-    ready.format=format; ready.evalCount=frame?frame->evalCount:0; ready.fatal=s.fatal;
+    // One input source per frame: the DLSS evaluation, or HDRP's own buffers when DLSS doesn't run.
+    ready.format=format; ready.evalCount=!frame?0u:frame->evalCount?frame->evalCount:frame->hdrpCaptured?1u:0u; ready.fatal=s.fatal;
     return ready;
 }
 void note_generation(Frame*,Reason why,bool enabled) {
@@ -338,6 +343,14 @@ TGFG_EXPORT int32_t TGFG_CALL TGFG_SetCamera(const TGFG_Camera* packet) {
     auto* f=s.frames.find(packet->frameId); if(!f || f->renderBegun) return -2;
     if(f->cameraReady) return -3; // no two game cameras into the same viewport
     f->camera=*packet; f->cameraReady=true; ++s.diag.cameraPackets; return 0;
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_SetHdrpInputs(const TGFG_HdrpInputs* packet) {
+    if(!packet || packet->size!=sizeof(TGFG_HdrpInputs) || packet->abi!=TGFG_ABI || !packet->depth || !packet->motion ||
+       !packet->renderWidth || !packet->renderHeight || !std::isfinite(packet->jitterX) || !std::isfinite(packet->jitterY)) return -1;
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    auto* f=s.frames.find(packet->frameId); if(!f || !f->cameraReady) return -2;
+    if(packet->renderWidth>f->camera.width || packet->renderHeight>f->camera.height) return -3;
+    f->hdrp=*packet; f->hdrpPending=true; ++s.diag.hdrpPackets; return 0;
 }
 TGFG_EXPORT void* TGFG_CALL TGFG_GetRenderEvent() { return reinterpret_cast<void*>(tgfg::render_event); }
 TGFG_EXPORT int32_t TGFG_CALL TGFG_CaptureHudlessD3D11(uint32_t id,void* context,void* resource) {

@@ -27,10 +27,11 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("sizeof(TGFG_Status)==188", header)
         self.assertIn("sizeof(TGFG_Request)==48", header)
         self.assertIn("sizeof(TGFG_Camera)==416", header)
-        self.assertIn("RequestSize = 48, StatusSize = 188, CameraSize = 416", managed)
+        self.assertIn("RequestSize = 48, StatusSize = 188, CameraSize = 416, HdrpInputsSize = 48", managed)
+        self.assertIn("sizeof(TGFG_HdrpInputs)==48", header)
         native = self.text("native/src/control.cpp")
         symbols = re.findall(r"TGFG_CALL\s+(TGFG_\w+)\(", header)
-        self.assertEqual(len(symbols), 8)
+        self.assertEqual(len(symbols), 9)
         for symbol in symbols:
             self.assertIn(symbol + "(", native)
 
@@ -86,11 +87,26 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("select_latency", policy)
         self.assertIn("if(output==Output::XeSS) return c.xell?Latency::XeLL:Latency::Off;", policy)
 
-    def test_frame_generation_needs_dlss_upscaler(self):
+    def test_frame_generation_inputs(self):
+        # Inputs come from the upscaler (DLSS) when it runs and otherwise from HDRP's own buffers.
+        hdrp = self.text("src/TGFrameGeneration/HdrpInputs.cs")
+        for token in ["CustomPassInjectionPoint.BeforePostProcess", "ctx.cameraDepthBuffer", "ctx.cameraMotionVectorsBuffer",
+                      "hd.taaJitter.x", "hd.actualWidth", "FrameSettingsField.MotionVectors", "FrameBridge.GameplayFrame(hd.camera, out uint frameId)",
+                      "IssuePluginEventAndData(bridge.RenderEvent, CaptureEvent"]:
+            self.assertIn(token, hdrp)
+        self.assertIn("private const int CaptureEvent = 3;", hdrp)
+        control = self.text("native/src/control.cpp")
+        self.assertIn("eventId==3 && haveRenderFrame && renderFrameId==id && frame->renderBegun && !frame->renderEnded && frame->hdrpPending", control)
+        self.assertIn("frame->evalCount?frame->evalCount:frame->hdrpCaptured?1u:0u", control)
+        capture = self.text("native/src/ngx_capture.cpp")
+        # The same jitter and motion vector scale HDRP's DLSS pass hands NGX, and the upscaler first.
+        self.assertIn("constants.jitterOffset={-in.jitterX,-in.jitterY};constants.mvecScale={-1.f,-1.f};", capture)
+        self.assertIn("if(s.upscalerSeen && frame.id-s.lastUpscalerFrame<=1u)", capture)
+        self.assertIn("s.lastUpscalerFrame=renderFrameId;s.upscalerSeen=true;", capture)
         rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
-        self.assertIn("upscaling.IsDLSSEnabled", rows)
+        self.assertIn("HdrpInputs.Available || upscaling == null || upscaling.IsDLSSEnabled", rows)
         self.assertIn("upscaling.UpscalingTypeOption.onChange += _ => RefreshInteractability();", rows)
-        self.assertIn("view.UpdateInteractability()", rows)
+        self.assertIn("InputSource = HdrpInputs.Available ||", self.text("src/TGFrameGeneration/VideoCapabilities.cs"))
 
     def test_plugin_identity(self):
         plugin = self.text("src/TGFrameGeneration/Plugin.cs")
@@ -225,7 +241,7 @@ class SourceConsistency(unittest.TestCase):
     def test_testing_limits_disclosed(self):
         readme = " ".join(self.text("README.md").replace("**", "").split())
         for token in ["not yet been confirmed in game", "IL2CPP builds (BepInEx 6) are untested", "The HUD is interpolated with the scene",
-                      "frame generation needs DLSS selected as the upscaler"]:
+                      "HDRP's own depth and motion vectors"]:
             self.assertIn(token, readme)
         self.assertNotIn("requires D3D12 game rendering", readme)
         for path in ["README.md", "docs/PLAYER-INSTALL.txt"]:

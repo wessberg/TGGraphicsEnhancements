@@ -51,6 +51,19 @@ The feature's original evaluation still runs. Captured inputs become valid only
 if that evaluation succeeds. Unsupported/missing data results in no FG request,
 not guessed native resource states or fabricated camera history.
 
+## HDRP inputs when DLSS doesn't run
+
+With TAA, STP or no anti-aliasing there is no NGX evaluation. `HdrpInputs.cs` adds a global HDRP
+custom pass at BeforePostProcess, where the frame's depth and motion vectors are final. For the
+gameplay camera it sends `TGFG_SetHdrpInputs` the native pointers of HDRP's depth and motion vector
+render textures (cached per texture, since `GetNativeTexturePtr` waits for the render thread), the
+camera's render size and `HDCamera.taaJitter`, then queues render event 3 in the pass's command
+buffer. On the render thread that event copies both into the frame's input slot through the same
+path as the NGX capture, on the game device's immediate context. The constants match what HDRP's
+DLSS pass gives NGX: jitter `-taaJitter`, motion vector scale minus the render size (normalized
+-1, -1), unjittered vectors, reversed-Z depth. The pass runs before post-processing and so before
+DLSS: while DLSS supplied the previous frame's inputs, event 3 leaves the frame to the NGX capture.
+
 ## One frame's GPU handoff
 
 1. At the D3D11-facing Present, the source color is already rendered. FP16 scRGB

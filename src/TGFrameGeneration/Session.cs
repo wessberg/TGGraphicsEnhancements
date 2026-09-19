@@ -26,7 +26,7 @@ namespace TGFrameGeneration
         {
             if(!stopped) return;
             Abi.Validate(); Log=log; Settings=new Settings(config); Bridge=new NativeBridge();
-            FrameBridge.Initialize(); stopped=false; nextPoll=nextDiscovery=0;
+            FrameBridge.Initialize(); HdrpInputs.Initialize(); stopped=false; nextPoll=nextDiscovery=0;
             // A monotonic per-session seed avoids collision after a managed reload in the same process.
             sequence=(ulong)DateTime.UtcNow.Ticks;
             width=Screen.width; height=Screen.height;
@@ -115,7 +115,7 @@ namespace TGFrameGeneration
                 var request=MakeRequest(Suspend.Stopping); request.Mode=0; request.Sequence=++sequence;
                 NativeStatus ignored; Bridge.Exchange(ref request,out ignored);
             } catch(Exception ex) { Log?.LogWarning("Native stop request failed: " + ex.Message); }
-            FrameBridge.Dispose();
+            FrameBridge.Dispose(); HdrpInputs.Dispose();
             // Native heartbeat expiry is a secondary stop condition, not a GPU-hang recovery mechanism.
         }
     }

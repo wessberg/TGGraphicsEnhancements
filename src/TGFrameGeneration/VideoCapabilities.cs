@@ -29,8 +29,9 @@ namespace TGFrameGeneration
             XeLLStandalone = status.Supports(LowLatencySetting.XeLL);
             XeLL = XeLLStandalone || status.Has(FrameGenerationSetting.XeSS); // XeSS Frame Generation brings XeLL on any GPU
             AntiLag2 = status.Supports(LowLatencySetting.AntiLag2);
-            // Every technology takes its motion vectors and depth from the game's DLSS upscaler (NVIDIA only).
-            InputSource = status.GpuVendor == 0 || status.GpuVendor == 0x10DE;
+            // Motion vectors and depth come from DLSS upscaling (NVIDIA only) or, when TGFG's HDRP custom
+            // pass is installed, from HDRP itself on any GPU.
+            InputSource = HdrpInputs.Available || status.GpuVendor == 0 || status.GpuVendor == 0x10DE;
         }
         internal int MaxMultiplier(FrameGenerationSetting backend) => backend == FrameGenerationSetting.Off ? 0 : maxMultiplier[(int)backend];
         internal int HighestMultiplier => Technologies.Max(b => MaxMultiplier(b));

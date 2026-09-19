@@ -103,13 +103,23 @@ namespace TGFrameGeneration
         internal float Near, Far, FovRadians, Aspect;
         internal fixed float WorldToView[16];
     }
+    // HDRP's own depth and motion vectors for a frame (see HdrpInputs and TGFG_HdrpInputs).
+    [StructLayout(LayoutKind.Sequential, Pack=4)]
+    internal struct NativeHdrpInputs
+    {
+        internal uint Size, Abi, FrameId, Flags; // Flags: 1 = reversed-Z depth
+        internal ulong Depth, Motion;            // ID3D11Resource* of the camera's render textures
+        internal uint RenderWidth, RenderHeight;
+        internal float JitterX, JitterY;         // HDCamera.taaJitter.xy, render pixels
+    }
     internal static class Abi
     {
         internal const uint Version = 0x00050000;
-        internal const int RequestSize = 48, StatusSize = 188, CameraSize = 416;
+        internal const int RequestSize = 48, StatusSize = 188, CameraSize = 416, HdrpInputsSize = 48;
         internal static void Validate()
         {
-            if (Marshal.SizeOf(typeof(NativeRequest)) != RequestSize || Marshal.SizeOf(typeof(NativeStatus)) != StatusSize || Marshal.SizeOf(typeof(NativeCamera)) != CameraSize)
+            if (Marshal.SizeOf(typeof(NativeRequest)) != RequestSize || Marshal.SizeOf(typeof(NativeStatus)) != StatusSize ||
+                Marshal.SizeOf(typeof(NativeCamera)) != CameraSize || Marshal.SizeOf(typeof(NativeHdrpInputs)) != HdrpInputsSize)
                 throw new InvalidOperationException("Native ABI packing mismatch.");
         }
     }

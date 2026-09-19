@@ -13,8 +13,12 @@
   when the Options screen opened, which undid Video-tab changes.
 - Low Latency can be Off only while frame generation is Off; FSR now runs with Reflex or Anti-Lag
   2. The row is greyed out when only one choice remains (XeSS with XeLL).
-- Frame Generation and its rows are greyed out unless DLSS is the selected upscaler, and follow
-  the upscaler row before Apply.
+- Frame generation no longer needs DLSS upscaling. Without DLSS, a custom pass before
+  post-processing hands the native side HDRP's own depth and motion vectors (TGFG_SetHdrpInputs,
+  render event 3), with HDRP's TAA jitter and the motion vector scale HDRP gives DLSS. DLSS's
+  inputs take precedence while it runs. FSR and XeSS frame generation therefore work on AMD and
+  Intel GPUs. Where the HDRP path is missing (IL2CPP), the rows are greyed out unless DLSS is the
+  selected upscaler.
 - Packages include NVIDIA's license notices next to the Streamline runtime
   (LICENSE-Streamline.txt, LICENSE-NVIDIA-RTX-SDKs.txt, LICENSE-NVIDIA-Reflex.txt), staged from
   the SDK release by Stage-Runtime.ps1.
@@ -25,8 +29,7 @@
   runtime is installed and reports support on the GPU. FSR runs through AMD's FSR API (FSR SDK
   2.3.0: FSR 4 ML frame generation on Radeon RX 9000, FSR 3.1 analytic frame generation elsewhere)
   and AMD's frame generation swapchain. XeSS runs through Intel's XeSS-FG swapchain (XeSS SDK
-  3.0.2). All three use the same inputs, the depth and motion vectors of the game's DLSS upscaler,
-  so DLSS upscaling must be on and AMD/Intel GPUs cannot generate frames in this game.
+  3.0.2). All three use the same inputs (see the HDRP input path above).
 - Frame multipliers come from the runtimes: DLSS from Streamline's numFramesToGenerateMax, XeSS
   from xefgSwapChainGetProperties (up to 4x on Intel Arc, 2x elsewhere). The FSR API has no
   multi-frame control, so FSR is 2x. Frame Multiplier offers up to the highest reported maximum,

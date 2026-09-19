@@ -11,6 +11,7 @@ namespace TGFrameGeneration
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int FrameCall(uint frameId);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int CameraCall(ref NativeCamera camera);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr GetEvent();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int HdrpCall(ref NativeHdrpInputs inputs);
         [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
         private static extern IntPtr GetModuleHandleW(string name);
         [DllImport("kernel32.dll", CharSet=CharSet.Ansi, ExactSpelling=true)]
@@ -19,6 +20,7 @@ namespace TGFrameGeneration
         private Read read;
         private FrameCall begin, end;
         private CameraCall setCamera;
+        private HdrpCall setHdrp; // optional: a native backend without it takes inputs from DLSS only
         internal IntPtr RenderEvent { get; private set; }
         internal bool Connected => submit != null && read != null && RenderEvent!=IntPtr.Zero;
         internal string Detail { get; private set; } = "TGFG.Native.dll not loaded. No FG. Check BepInEx/patchers/TGFG.Autoload.dll and BepInEx/TGFrameGeneration/Autoload.log; start normally through Steam.";
@@ -42,6 +44,7 @@ namespace TGFrameGeneration
                 begin=Bind<FrameCall>(module,"TGFG_BeginSimulation");
                 end=Bind<FrameCall>(module,"TGFG_EndSimulation");
                 setCamera=Bind<CameraCall>(module,"TGFG_SetCamera");
+                try { setHdrp=Bind<HdrpCall>(module,"TGFG_SetHdrpInputs"); } catch(EntryPointNotFoundException) { setHdrp=null; }
                 RenderEvent=Bind<GetEvent>(module,"TGFG_GetRenderEvent")();
                 if(RenderEvent==IntPtr.Zero) throw new InvalidOperationException("No render event callback.");
                 submit=newSubmit; read=newRead;
@@ -63,5 +66,7 @@ namespace TGFrameGeneration
         internal int Begin(uint id) => Connected?begin(id):-100;
         internal int End(uint id) => Connected?end(id):-100;
         internal int SetCamera(ref NativeCamera camera) => Connected?setCamera(ref camera):-100;
+        internal bool CanSetHdrpInputs => Connected && setHdrp!=null;
+        internal int SetHdrpInputs(ref NativeHdrpInputs inputs) => CanSetHdrpInputs?setHdrp(ref inputs):-100;
     }
 }

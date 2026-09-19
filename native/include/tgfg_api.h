@@ -48,16 +48,29 @@ struct TGFG_Camera {
     float nearPlane, farPlane, fovRadians, aspect;
     float worldToView[16]; // Unity worldToCameraMatrix (view space looks down -Z), for XeSS frame constants
 };
+// The gameplay camera's depth and motion vectors straight from HDRP, for frames without an
+// upscaler that exposes them (TAA, STP, no anti-aliasing). The resources are the camera's own
+// render textures (Texture.GetNativeTexturePtr); they are copied on the render thread by render
+// event 3 of the same frame, while HDRP still owns them. Motion vectors follow HDRP: current minus
+// previous position in UV units, without jitter.
+struct TGFG_HdrpInputs {
+    uint32_t size, abi, frameId, flags; // flags: bit 0 = reversed-Z depth
+    uint64_t depth, motion;             // ID3D11Resource*
+    uint32_t renderWidth, renderHeight; // valid region from (0,0): HDCamera.actualWidth/actualHeight
+    float jitterX, jitterY;             // HDCamera.taaJitter.xy, in render pixels
+};
 #pragma pack(pop)
 static_assert(sizeof(TGFG_Request)==48, "request ABI");
 static_assert(sizeof(TGFG_Status)==188, "status ABI");
 static_assert(sizeof(TGFG_Camera)==416, "camera ABI");
+static_assert(sizeof(TGFG_HdrpInputs)==48, "HDRP inputs ABI");
 TGFG_EXPORT uint32_t TGFG_CALL TGFG_GetAbiVersion();
 TGFG_EXPORT int TGFG_CALL TGFG_Submit(const TGFG_Request*);
 TGFG_EXPORT int TGFG_CALL TGFG_ReadStatus(TGFG_Status*);
 TGFG_EXPORT int TGFG_CALL TGFG_BeginSimulation(uint32_t frameId);
 TGFG_EXPORT int TGFG_CALL TGFG_EndSimulation(uint32_t frameId);
 TGFG_EXPORT int TGFG_CALL TGFG_SetCamera(const TGFG_Camera*);
+TGFG_EXPORT int TGFG_CALL TGFG_SetHdrpInputs(const TGFG_HdrpInputs*);
 TGFG_EXPORT void* TGFG_CALL TGFG_GetRenderEvent();
 // Optional game/RenoDX integration point. Must run on the immediate render
 // context after final scene effects and before HUD, for this exact frame.

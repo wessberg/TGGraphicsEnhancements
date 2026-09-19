@@ -33,9 +33,10 @@ namespace TGFrameGeneration
                 sb.AppendLine("Capabilities: " + (s.Capabilities == null ? "not reported yet" :
                     "technologies " + string.Join(",", Array.ConvertAll(s.Capabilities.Backends, b => b.ToString())) +
                     ", low latency " + string.Join(",", Array.ConvertAll(s.Capabilities.Latencies, l => l.ToString())) +
-                    ", DLSS inputs " + (s.Capabilities.InputSource ? "available" : "unavailable (not an NVIDIA GPU)")));
+                    ", frame generation inputs " + (s.Capabilities.InputSource ? "available" : "unavailable: no HDRP inputs and not an NVIDIA GPU")));
                 sb.AppendLine("Bridge: " + Session.Bridge.Detail);
                 sb.AppendLine("Frame bridge: " + FrameBridge.Detail + " | camera markers queued: " + FrameBridge.CamerasQueued);
+                sb.AppendLine("HDRP inputs: " + HdrpInputs.Detail + " | packets: " + HdrpInputs.Packets);
                 sb.AppendLine("Status: " + Session.StatusText);
                 sb.AppendLine("Video tab: " + NativeVideoSettings.Status);
                 AppendAutoloadDiagnostic(sb);
