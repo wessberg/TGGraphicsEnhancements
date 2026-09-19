@@ -65,7 +65,6 @@ As a rule of thumb, if you just installed the game and aren't sure, you're going
 [quote][b]NOTE[/b]: BepInEx 6 (running IL2CPP) is still experimental, and the latest build that is available on nexusmods can crash during story moments or scene transitions. However, there are more recent, more stable builds that I recommend, which is why I've linked to the most recent build as a requirement here instead. I haven't experienced any crashes with that build yet. You can always find the most recent nightly build [url=https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755%2B3fab71a.zip]here[/url]. Always pick the [i]BepInEx Unity (IL2CPP) for Windows (x64) games[/i] build for whatever version you select.[/quote]
 
 
-
 You don't need to download any DLL files yourself. The NVIDIA, AMD and Intel files the mod needs are included in the download, together with their licenses.
 
 For both versions of the mod, this is how the directory should end up looking:
