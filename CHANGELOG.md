@@ -1,5 +1,15 @@
 # Unreleased
 
+- Let a replacement swapchain take over from a live bridge. Unity replaces the swapchain rather than
+  resizing it for some display changes, and it creates the replacement before releasing the old one,
+  so bridge creation was refused because one was already active; the old bridge's destructor then
+  cleared that pointer and the game presented through its own swapchain for the rest of the session,
+  with the native log repeating "D3D11 NGX observed, but the presentation bridge is absent". Any
+  display-mode change permanently disabled frame generation. The previous bridge now retires on the
+  spot: it hands over the shared pipeline, stops presenting and capturing, and releases the immediate
+  context's tag before the replacement sets its own, so however long the game holds its reference it
+  never touches the pipeline again.
+
 - Move the game's own display setting to Borderless Fullscreen when frame generation is turned on, and
   stop offering Exclusive Fullscreen while it is on. Frame generation presents through TGFG's own
   swapchain, and DXGI will not let that swapchain exist on a window that already holds the display

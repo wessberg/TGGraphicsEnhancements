@@ -178,7 +178,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     HWND hwnd_=nullptr;
     UINT virtualIndex_=0,physicalFlags_=0;
     DXGI_COLOR_SPACE_TYPE sourceSpace_=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-    bool broken_=false,registered_=false;
+    bool broken_=false,registered_=false,retired_=false;
 
     void wait_cpu(uint64_t value) {
         if(!value)return;
@@ -852,7 +852,16 @@ public:
             "; frame generation available: DLSS "+((s.status.backendsAvailable&2u)?"yes":"no")+", FSR "+((s.status.backendsAvailable&4u)?"yes":"no")+
             ", XeSS "+((s.status.backendsAvailable&8u)?"up to "+std::to_string(s.status.xessMaxGenerated)+" generated":std::string("no")));
     }
-    ~Dx11Swapchain() {
+    HWND window() const { return hwnd_; }
+    // Give up the shared pipeline now, rather than when the game gets round to releasing this object.
+    // Unity replaces the swapchain instead of resizing it for some display changes, and it creates the
+    // replacement before releasing the old one: without this, the new bridge is refused because one is
+    // already active, and this one's destructor then clears `active`, so the game presents through its
+    // own swapchain for the rest of the session and frame generation never returns. The destructor
+    // calls this too, so the work happens exactly once either way.
+    void retire() {
+        if(retired_) return;
+        retired_=true;
         renoPending.store(false,std::memory_order_relaxed);
         std::lock_guard<std::recursive_mutex> lock(state().mutex);SLGuard own;
         if(registered_) {
@@ -863,12 +872,18 @@ public:
         if(registered_) {
             active=nullptr;state().swapchain=nullptr;state().presentQueue.Reset();state().status.bridgeFlags=0;
             for(auto& slot:state().frames.slots)if(slot.occupied)state().frames.release(slot.id);
+            registered_=false;
         }
+        // Presents and input capture stop here: a retired bridge never touches the pipeline again,
+        // however long the game holds its reference.
+        broken_=true;
         if(output_)output_->SetFullscreenState(FALSE,nullptr);
         for(auto& b:backbuffers_)b.Reset();output_.Reset();
         generator_.reset();
+        // Released before any replacement tags the same context, never after.
         if(c11_)c11_->SetPrivateData(kImmediateContextTag,0,nullptr);
     }
+    ~Dx11Swapchain() { retire(); }
     ID3D11DeviceContext* immediate_context() {return c11_.Get();}
     // True when the context is our immediate context, directly or through a forwarding wrapper.
     bool same_context(ID3D11DeviceContext* context) {
@@ -1215,7 +1230,14 @@ HRESULT try_create_dx11_bridge(IUnknown* device,IDXGIFactory* factory,HWND hwnd,
     if(!out)return E_POINTER;*out=nullptr;
     if(insideSL || !device || !factory || !is_game_window(hwnd,desc.Width,desc.Height))return S_FALSE;
     auto& s=state();std::lock_guard<std::recursive_mutex> lock(s.mutex);
-    if(!s.bridgeAllowed || active)return S_FALSE;
+    if(!s.bridgeAllowed)return S_FALSE;
+    if(active) {
+        // Another window is not ours to take over. The same window means the game is replacing the
+        // swapchain this bridge stands in for, so the bridge steps aside for its replacement.
+        if(active->window()!=hwnd)return S_FALSE;
+        log("The game replaced its swapchain for this window; retiring the previous bridge so the new one can take over");
+        active->retire();
+    }
     if(desc.SampleDesc.Count!=1 || desc.Stereo || desc.BufferCount<1 || desc.BufferCount>16 ||
        desc.SwapEffect==DXGI_SWAP_EFFECT_SEQUENTIAL || !source_format_supported(desc.Format) ||
        (desc.AlphaMode!=DXGI_ALPHA_MODE_UNSPECIFIED && desc.AlphaMode!=DXGI_ALPHA_MODE_IGNORE) ||
