@@ -918,6 +918,11 @@ public:
         bool idle=true;
         try {drain();}catch(const std::exception& e){idle=false;log(std::string("Bridge teardown: ")+e.what());}
         if(registered_ && active==this) {
+            // Say so here rather than only where a replacement asks for it: a bridge also gives this up
+            // when the game releases it, and that path was silent, which left a surrendered bridge with
+            // no successor looking like nothing had happened at all.
+            log("The bridge gave up the presentation swapchain; until the game releases it, calls on it "
+                "are answered without one");
             auto& s=state();
             active=nullptr;s.swapchain=nullptr;s.presentQueue.Reset();s.status.bridgeFlags=0;
             for(auto& slot:s.frames.slots)if(slot.occupied)s.frames.release(slot.id);

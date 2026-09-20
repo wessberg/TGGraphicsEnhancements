@@ -174,6 +174,16 @@ namespace TGFrameGeneration
             hooked = true;
             option.onChange += (Action<ToggleOption>)((ToggleOption ignored) => pending = true);
         }
+        // Once per session. A row this cannot read makes every decision below it a no-op, so the log
+        // has to say whether it was read at all rather than only what was decided.
+        private static bool described;
+        private static void Describe(int entries, int resolved)
+        {
+            if (described) return;
+            described = true;
+            Session.Log.LogInfo("The game's display-mode row has " + entries + " entries, " + resolved +
+                                " of them with a mode TGFG can identify.");
+        }
         private static bool TryMode(ModeMap modes, ToggleOption option, out FullScreenMode mode)
         {
             mode = default(FullScreenMode);
@@ -185,17 +195,24 @@ namespace TGFrameGeneration
         private static void Unforbid(EnumArrowsOption option) =>
             option.SetForbiddenOptions((Il2CppReferenceArray<ToggleOption>)null);
         private static ModeMap Modes(ScreenResolution screen) => screen._fullScreenModes;
+        // Read the row's backing array, which the interop assembly exposes directly. Enumerating the
+        // IEnumerable property instead found nothing in game, and because a row with no Borderless
+        // entry is treated as one that cannot be helped, the whole feature went quiet for the session.
         private static ToggleOption Find(EnumArrowsOption option, ModeMap modes, FullScreenMode wanted)
         {
-            var enumerator = option.Options.GetEnumerator();
-            var cursor = enumerator.Cast<Il2CppSystem.Collections.IEnumerator>();
-            while (cursor.MoveNext())
+            var entries = option._options;
+            if (entries == null) { Describe(0, 0); return null; }
+            ToggleOption found = null;
+            int resolved = 0;
+            for (int i = 0; i < entries.Length; i++)
             {
                 FullScreenMode mode;
-                var toggle = enumerator.Current;
-                if (TryMode(modes, toggle, out mode) && mode == wanted) return toggle;
+                if (!TryMode(modes, entries[i], out mode)) continue;
+                ++resolved;
+                if (mode == wanted && found == null) found = entries[i];
             }
-            return null;
+            Describe(entries.Length, resolved);
+            return found;
         }
 #else
         private static void Forbid(EnumArrowsOption option, ToggleOption entry) => option.SetForbiddenOptions(new[] { entry });
@@ -206,12 +223,18 @@ namespace TGFrameGeneration
         private static ModeMap Modes(ScreenResolution screen) => ModesField != null ? ModesField.GetValue(screen) as ModeMap : null;
         private static ToggleOption Find(EnumArrowsOption option, ModeMap modes, FullScreenMode wanted)
         {
+            ToggleOption found = null;
+            int entries = 0, resolved = 0;
             foreach (var toggle in option.Options)
             {
+                ++entries;
                 FullScreenMode mode;
-                if (TryMode(modes, toggle, out mode) && mode == wanted) return toggle;
+                if (!TryMode(modes, toggle, out mode)) continue;
+                ++resolved;
+                if (mode == wanted && found == null) found = toggle;
             }
-            return null;
+            Describe(entries, resolved);
+            return found;
         }
 #endif
     }
