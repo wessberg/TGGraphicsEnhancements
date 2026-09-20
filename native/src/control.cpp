@@ -90,16 +90,20 @@ void summarise(uint64_t now) {
         *reflex=sl::ReflexState{};
         SLGuard inside;
         if(s.sl.reflexState(*reflex)==sl::Result::eOk) {
-            uint64_t pc=0,render=0,gpu=0; uint32_t count=0;
+            uint64_t pc=0,render=0,gpu=0,present=0; uint32_t count=0,presented=0;
             for(const auto& r:reflex->frameReport) {
                 if(!r.frameID || !r.simStartTime || r.gpuRenderEndTime<=r.simStartTime) continue;
                 pc+=r.gpuRenderEndTime-r.simStartTime; gpu+=r.gpuActiveRenderTimeUs; ++count;
                 if(r.renderSubmitStartTime && r.gpuRenderEndTime>r.renderSubmitStartTime) render+=r.gpuRenderEndTime-r.renderSubmitStartTime;
+                // The same pair of timestamps XeLL reports, so the two latency technologies can be
+                // compared on one measurement instead of on two that end in different places.
+                if(r.presentEndTime>r.simStartTime) { present+=r.presentEndTime-r.simStartTime; ++presented; }
             }
             auto ms=[](uint64_t us){ char b[32]{}; std::snprintf(b,sizeof(b),"%.1fms",us/1000.0); return std::string(b); };
             line+=" | Reflex mode="+n(static_cast<uint32_t>(s.lastReflex.mode))+" lowLatencyAvailable="+(reflex->lowLatencyAvailable?"1":"0")+
                 " reports="+n(count);
             if(count) line+=" pcLatency="+ms(pc/count)+" renderLatency="+ms(render/count)+" gpuActive="+ms(gpu/count);
+            if(presented) line+=" simToPresent="+ms(present/presented);
         }
     }
     // The XeLL equivalent, so DLSS-with-Reflex and XeSS-with-XeLL can be compared with numbers.
