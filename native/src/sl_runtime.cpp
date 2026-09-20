@@ -222,8 +222,12 @@ void update_caps() {
     // which is all this reads.
     auto r=s.sl.getState(s.viewport,g,nullptr);
     s.status.lastGetStateResult=static_cast<int32_t>(r);
+    // Announce the capability set either way. A runtime that refuses to report leaves DLSS-G out of the
+    // choices, which is correct, but it must never leave the plugin waiting for capabilities that will
+    // not arrive: it reads them once, the first time they are announced.
+    s.status.flags|=4u;
     if(r!=sl::Result::eOk) return;
-    s.status.flags|=4u|8u;
+    s.status.flags|=8u;
     s.status.maxGeneratedFrames=g.numFramesToGenerateMax;
     s.status.dynamicSupported=g.bIsDynamicMFGSupported==sl::Boolean::eTrue;
     s.status.dlssgStatus=static_cast<uint32_t>(g.status);

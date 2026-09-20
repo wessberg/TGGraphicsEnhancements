@@ -1,5 +1,14 @@
 # Unreleased
 
+- Fix the DLSS row disappearing from the Video tab. Moving the DLSS-G capability query to the present
+  thread left the bridge announcing "capability probes complete" at creation, before that query had
+  filled the DLSS maxima. The plugin reads the capabilities once, the first time they are announced, so
+  it snapshotted a zero DLSS maximum and dropped the row for the whole session, leaving Off, FSR and
+  XeSS while the configured DLSS setting was still being honoured underneath. The bridge now withholds
+  that announcement while DLSS-G is present and unqueried, and the capability query makes it on the
+  first present whether or not the runtime reports, so a runtime that refuses simply leaves DLSS out
+  instead of stalling the Video tab.
+
 - Skip a ResizeBuffers that asks for the configuration already in effect. FoA issues one at its current
   3840x2160 seven times in a minute of Options use, and each costs a GPU drain, a rebuild of the client
   and presentation buffers, a DLSS-G off/on bracket, and a frame over 100 ms; two of the three frames
