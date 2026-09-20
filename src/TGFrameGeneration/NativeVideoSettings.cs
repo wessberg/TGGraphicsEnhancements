@@ -270,6 +270,7 @@ namespace TGFrameGeneration
                 maxMultiplierOption != null ? maxMultiplierOption.OptionInt + 2 : settings.MaxMultiplier,
                 target != null ? targetValues[Mathf.Clamp(target.OptionInt, 0, targetValues.Length - 1)] : settings.TargetFps,
                 chosen);
+            DisplayMode.ArmFromVideoApply();
             Session.Log.LogInfo("Video settings applied: FG=" + settings.FrameGeneration + " mode=" + settings.Mode +
                 " multiplier=" + settings.Multiplier + "x dynamicMax=" + settings.MaxMultiplier + "x target=" + settings.TargetFps +
                 " lowLatency=" + settings.LowLatency);

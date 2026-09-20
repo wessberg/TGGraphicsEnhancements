@@ -1,5 +1,16 @@
 # Unreleased
 
+- Apply the switch to Borderless Fullscreen on the same Apply that turned frame generation on, instead
+  of needing a second one. Applying the game's display setting also applies its resolution, refresh
+  rate and VSync rows, so it waits until the Options screen is closed rather than committing edits the
+  player has not applied yet. When the change came from the Video tab's own Apply that caution is
+  wrong: the same press has just applied those rows, so the display change now goes through with it.
+
+- Say once if the bridge uses the game's immediate context from more than one thread. The game leaves
+  D3D11 multithread protection off, so the context may only be used by one thread at a time, and the
+  bridge touches it from a present, a resize and a handover. Whether those are the same thread is the
+  game's business; the log now records the answer rather than assuming it.
+
 - Make a bridge safe to hand over while the game is still using it. A bridge that gives up its
   presentation swapchain to a replacement stays alive as long as the game holds its reference, and the
   game does keep calling it: the logs show GetFullscreenState, a fullscreen transition and ResizeBuffers

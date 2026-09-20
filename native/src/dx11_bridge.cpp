@@ -183,7 +183,8 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     HWND hwnd_=nullptr;
     UINT virtualIndex_=0,physicalFlags_=0;
     DXGI_COLOR_SPACE_TYPE sourceSpace_=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-    bool broken_=false,registered_=false,retired_=false;
+    bool broken_=false,registered_=false,retired_=false,reportedContextThreads_=false;
+    DWORD contextThread_=0; // first thread seen using the game's immediate context
 
     void wait_cpu(uint64_t value) {
         if(!value)return;
@@ -194,6 +195,18 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     }
     void drain() {
         if(!queue_ || !shared12_ || !shared11_ || !event_.value || !c11_) return;
+        // The game leaves multithread protection off on its immediate context, so D3D11 does no locking
+        // of its own and only one thread may use it at a time. The bridge touches it here from a
+        // present, a resize and a handover. Whether those are really the same thread is the game's
+        // business, not something the bridge can assume, so say so once if they ever differ.
+        const DWORD thread=GetCurrentThreadId();
+        if(!contextThread_) contextThread_=thread;
+        else if(contextThread_!=thread && !reportedContextThreads_) {
+            reportedContextThreads_=true;
+            log("The bridge used the game's immediate context from thread "+std::to_string(thread)+
+                " having previously used it from thread "+std::to_string(contextThread_)+
+                "; the game has multithread protection off, so this ordering depends on the game");
+        }
         // Includes unpresented D3D11 capture commands as well as D3D12 work.
         const auto produced=timeline_.next();
         check(c11_->Signal(shared11_.Get(),produced),"Signal D3D11 drain");c11_->Flush();

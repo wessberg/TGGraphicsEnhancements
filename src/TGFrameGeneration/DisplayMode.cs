@@ -44,10 +44,16 @@ namespace TGFrameGeneration
         // whichever thread raised the change, read and cleared on the main thread.
         private static volatile bool pending = true;
         private static bool failed, hooked, applyOwed, noBorderless;
+        // Set when the player pressed Apply in the Video tab, the one moment when applying the
+        // display setting cannot disturb anything: the same press has just applied its sibling rows.
+        private static volatile bool fromVideoApply;
         // The option TGFG currently forbids an entry on, and nothing else: the restriction is released
         // through this, so it can be lifted after a failure and at shutdown without finding it again.
         private static EnumArrowsOption blocked;
         internal static void Arm() { pending = true; }
+        // The player just applied the Video tab. Waiting for the Options screen to close would make
+        // them press Apply a second time before the display change took effect.
+        internal static void ArmFromVideoApply() { fromVideoApply = true; pending = true; }
         internal static void Tick()
         {
             if (!pending) return;
@@ -117,8 +123,12 @@ namespace TGFrameGeneration
                     applyOwed = true;
                 }
                 if (!applyOwed) return true;
-                if (NativeVideoSettings.IsSettingsOpen) return false;
+                // Applying the display setting applies its resolution, refresh rate and VSync rows
+                // with it, so it waits for the Options screen to close - unless the player just
+                // pressed Apply there, which applied those same rows and asked for exactly this.
+                if (NativeVideoSettings.IsSettingsOpen && !fromVideoApply) return false;
                 applyOwed = false;
+                fromVideoApply = false;
                 // The game's own apply, which drives Screen.SetResolution with the resolution and
                 // refresh rate this setting already holds.
                 bool needRestart;
