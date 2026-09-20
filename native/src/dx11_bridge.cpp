@@ -806,6 +806,18 @@ public:
         ComPtr<ID3D11DeviceContext> context;game->GetImmediateContext(&context);
         check(context.As(&c11_),"Need ID3D11DeviceContext4 for GPU Signal/Wait");
         {void* self=this;check(c11_->SetPrivateData(kImmediateContextTag,sizeof(self),&self),"Tag the immediate context");}
+        // A D3D11 immediate context may only be used by one thread at a time, and the bridge uses the
+        // game's: drain() signals and flushes on it from a present, a resize and a bridge handover,
+        // which need not be the thread the game renders on. state().mutex serialises the bridge against
+        // itself and says nothing about the game's own calls. Whether that is a hazard here depends on
+        // whether the game turned multithread protection on, so record what it actually did.
+        {
+            ComPtr<ID3D11Multithread> multithread;
+            if(SUCCEEDED(c11_.As(&multithread)))
+                log(std::string("Game D3D11 immediate context multithread protection: ")+
+                    (multithread->GetMultithreadProtected()?"on":"off"));
+            else log("Game D3D11 immediate context does not expose ID3D11Multithread");
+        }
         if(GetModuleHandleW(L"renodx-unityengine.addon64")) {
             auto** dv=*reinterpret_cast<void***>(d11_.Get());
             renoReplay_=add_hook(dv[15],reinterpret_cast<void*>(&reno_create_pixel_shader),reinterpret_cast<void**>(&realCreatePixelShader)) &&
