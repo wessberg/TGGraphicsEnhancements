@@ -17,5 +17,6 @@ bool capture_dx11_inputs(uint32_t,ID3D11DeviceContext*,ID3D11Resource*,ID3D11Res
 bool capture_dx11_inputs_immediate(uint32_t,ID3D11Resource*,ID3D11Resource*,RectU,RectU,const sl::Constants&);
 void finish_dx11_capture(uint32_t,bool);
 int capture_dx11_hudless(uint32_t,ID3D11DeviceContext*,ID3D11Resource*);
+int capture_dx11_hudless_frame(const TGFG_Hudless&);
 void shutdown_dx11_bridge();
 } // namespace tgfg

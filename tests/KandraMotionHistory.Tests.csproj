@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\Build.Local.props" Condition="Exists('..\Build.Local.props')" />
+  <PropertyGroup>
+    <TestRuntime Condition="'$(TestRuntime)' == ''">Mono</TestRuntime>
+    <TargetFramework Condition="'$(TestRuntime)' == 'Mono'">net472</TargetFramework>
+    <TargetFramework Condition="'$(TestRuntime)' == 'IL2CPP'">net6.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <DefineConstants Condition="'$(TestRuntime)' == 'Mono'">BEPINEX_MONO</DefineConstants>
+    <DefineConstants Condition="'$(TestRuntime)' == 'IL2CPP'">BEPINEX_IL2CPP</DefineConstants>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GameDirMono Condition="'$(GameDirMono)' == ''">C:\Games\Tainted Grail FoA Mono</GameDirMono>
+    <GameDirIl2Cpp Condition="'$(GameDirIl2Cpp)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
+    <TestCoreDir Condition="'$(TestRuntime)' == 'Mono'">$(GameDirMono)\BepInEx\core</TestCoreDir>
+    <TestCoreDir Condition="'$(TestRuntime)' == 'IL2CPP'">$(GameDirIl2Cpp)\BepInEx\core</TestCoreDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" Condition="'$(TestRuntime)' == 'Mono'" />
+    <Reference Include="0Harmony"><HintPath>$(TestCoreDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Compile Include="..\src\TGFrameGeneration\KandraMotionHistory.cs" Link="KandraMotionHistory.cs" />
+    <Compile Include="kandra_motion_history_tests.cs" />
+  </ItemGroup>
+</Project>

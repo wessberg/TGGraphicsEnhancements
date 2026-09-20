@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // AMD FSR Frame Generation through the FSR API (FidelityFX SDK 2.x): AMD's signed loader and
 // frame generation DLLs, the frame generation swapchain for presentation and pacing, and the
-// frame generation context fed from the same DLSS SR inputs the Streamline path uses.
+// frame generation context fed from the same inputs the Streamline path uses, including the
+// bridge's HUD-less frame when it has a verified one (FSR then keeps the UI it finds in the back
+// buffer out of the generated frames instead of interpolating it).
 #include "fg_backends.hpp"
 #include <ffx_api.h>
 #include <ffx_api_types.h>
@@ -11,6 +13,7 @@
 #include <filesystem>
 #include <vector>
 #include <cstring>
+#include <cstdio>
 namespace tgfg {
 namespace {
 struct FsrRuntime {
@@ -42,39 +45,63 @@ std::string versions(ID3D12Device* device,uint64_t type,uint64_t& count) {
     for(uint64_t i=0;i<count && i<names.size();++i) { if(!list.empty()) list+=", "; list+=names[size_t(i)]?names[size_t(i)]:"?"; }
     return list;
 }
-// Depth, motion vectors and color as described by the observed DLSS SR feature.
-uint32_t generation_flags(uint32_t ngx,bool hdr) {
+// Depth, motion vectors and color as described by the observed DLSS SR feature. Bit 16 of the
+// plugin's debug flags turns on FSR's own input checker, which reports through the message callback.
+uint32_t generation_flags(uint32_t ngx,bool hdr,uint32_t debug) {
     uint32_t flags=0;
     if(ngx&NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) flags|=FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED;
     if(ngx&NVSDK_NGX_DLSS_Feature_Flags_MVJittered) flags|=FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
     if(!(ngx&NVSDK_NGX_DLSS_Feature_Flags_MVLowRes)) flags|=FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS;
     if(hdr) flags|=FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE;
+    if(debug&16u) flags|=FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING;
     return flags;
 }
+// FSR's debug overlays on generated frames: tear lines, reset indicators, the debug view (motion
+// vectors, depth, masks; only generated frames are presented) and pacing lines.
+uint32_t dispatch_flags(uint32_t debug) {
+    uint32_t flags=0;
+    if(debug&1u) flags|=FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES;
+    if(debug&2u) flags|=FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_RESET_INDICATORS;
+    if(debug&4u) flags|=FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW;
+    if(debug&8u) flags|=FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_PACING_LINES;
+    return flags;
+}
+std::string f2(float v) { char b[32]{}; std::snprintf(b,sizeof b,"%.3f",v); return b; }
 class FsrOutput final : public GeneratorOutput {
     ffxContext swapchainContext_=nullptr, generation_=nullptr;
     ComPtr<IDXGISwapChain4> chain_;
     ID3D12Device* device_=nullptr;
     UINT width_=0, height_=0; DXGI_FORMAT format_=DXGI_FORMAT_UNKNOWN;
+    // The resolution the game renders at, which FSR allocates its render-resolution buffers for and
+    // uses to scale its lookups into them. It is only known once a frame's inputs arrive, so the
+    // context starts at the display size and is rebuilt on the first frame and on every change.
+    UINT maxRenderWidth_=0, maxRenderHeight_=0;
     bool hdr_=false;
+    bool historyHudless_=false, haveHistory_=false;
     uint32_t flags_=0;
     uint64_t frameId_=0; // FSR requires +1 per presented frame; any other step resets generation
+    uint32_t loggedWidth_=0, loggedHeight_=0; bool loggedHudless_=false; // the inputs are logged when they change
     // Called by FSR's swapchain inside Present, on the presenting thread, to record generation.
     static ffxReturnCode_t dispatch(ffxDispatchDescFrameGeneration* params,void* context) {
         return fsr.dispatch(static_cast<ffxContext*>(context),&params->header);
     }
-    ffxReturnCode_t configure(bool enabled) {
+    ffxReturnCode_t configure(bool enabled,ID3D12Resource* hudless=nullptr) {
         ffxConfigureDescFrameGeneration config{}; config.header.type=FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
         config.swapChain=chain_.Get();
         config.frameGenerationCallback=&FsrOutput::dispatch; config.frameGenerationCallbackUserContext=&generation_;
         config.frameGenerationEnabled=enabled; config.allowAsyncWorkloads=false;
-        // No HUD-less image and no UI callback: TGFG has no verified pre-HUD stage for this game.
+        // The HUD-less image has the back buffer's format and size (the context was created without a
+        // separate HUD-less format). Interpolation runs on the game queue, so the bridge may rewrite the
+        // texture once this present's work has retired, which its fence hand-off guarantees. No UI
+        // callback: the game draws its UI into the back buffer, from which FSR extracts it.
+        if(hudless) config.HUDLessColor=ffxApiGetResourceDX12(hudless,FFX_API_RESOURCE_STATE_COMMON);
+        config.flags=dispatch_flags(state().debugFlags);
         config.generationRect={0,0,int32_t(width_),int32_t(height_)}; config.frameID=frameId_;
         return fsr.configure(&generation_,&config.header);
     }
     bool create_generation(std::string& error) {
         ffxCreateContextDescFrameGeneration create{}; create.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-        create.flags=flags_; create.displaySize={width_,height_}; create.maxRenderSize={width_,height_};
+        create.flags=flags_; create.displaySize={width_,height_}; create.maxRenderSize={maxRenderWidth_,maxRenderHeight_};
         create.backBufferFormat=ffxApiGetSurfaceFormatDX12(format_);
         ffxCreateContextDescFrameGenerationVersion version{}; version.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
         version.version=FFX_FRAMEGENERATION_VERSION;
@@ -90,6 +117,7 @@ class FsrOutput final : public GeneratorOutput {
         ffxQueryGetProviderVersion provider{}; provider.header.type=FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
         if(fsr.query(&generation_,&provider.header)==FFX_API_RETURN_OK && provider.versionName)
             log(std::string("AMD FSR frame generation context: ")+provider.versionName+" at "+std::to_string(width_)+"x"+std::to_string(height_)+
+                ", render resolution up to "+std::to_string(maxRenderWidth_)+"x"+std::to_string(maxRenderHeight_)+
                 ", create flags="+std::to_string(flags_));
         return true;
     }
@@ -103,7 +131,8 @@ class FsrOutput final : public GeneratorOutput {
 public:
     bool init(const OutputParams& p,std::string& error) {
         device_=p.device; width_=p.desc.Width; height_=p.desc.Height; format_=p.desc.Format; hdr_=p.hdr;
-        flags_=generation_flags(p.inputFlags,p.hdr);
+        maxRenderWidth_=width_; maxRenderHeight_=height_;
+        flags_=generation_flags(p.inputFlags,p.hdr,state().debugFlags);
         DXGI_SWAP_CHAIN_DESC1 desc=p.desc;
         DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen{}; if(p.fullscreen) fullscreen=*p.fullscreen;
         IDXGISwapChain4* created=nullptr;
@@ -133,21 +162,46 @@ public:
     uint32_t max_generated() const override { return generation_?1u:0u; }
     bool record(ID3D12GraphicsCommandList* list,uint32_t,const GenerationInputs* in,uint32_t) override {
         ++frameId_;
+        // The FSR API asks for the render resolution at context creation; it is only known from the
+        // frame's inputs. Rebuilding the context for it keeps FSR's render-resolution buffers and its
+        // lookups into them at the resolution the game actually renders.
+        const uint32_t wantedFlags=generation_flags(state().ngxFlags,hdr_,state().debugFlags);
+        if(in && generation_ && (in->depthWidth!=maxRenderWidth_ || in->depthHeight!=maxRenderHeight_ || flags_!=wantedFlags)) {
+            destroy_generation();
+            maxRenderWidth_=in->depthWidth; maxRenderHeight_=in->depthHeight;
+            flags_=wantedFlags; haveHistory_=false;
+            std::string error;
+            if(!create_generation(error)) { log("AMD FSR: "+error+"; frame generation stays off"); return false; }
+        }
         if(!generation_) return in==nullptr;
         const bool enabled=in!=nullptr;
-        auto result=configure(enabled);
+        auto result=configure(enabled,enabled?in->hudless:nullptr);
         if(result!=FFX_API_RETURN_OK) { report("ffxConfigure(frame generation)",result); return false; }
-        if(!enabled) return true;
+        if(!enabled) { haveHistory_=false; return true; }
         ffxDispatchDescFrameGenerationPrepareV2 prepare{}; prepare.header.type=FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
-        prepare.frameID=frameId_; prepare.commandList=list;
+        prepare.frameID=frameId_; prepare.commandList=list; prepare.flags=dispatch_flags(state().debugFlags);
         prepare.renderSize={in->depthWidth,in->depthHeight};
         prepare.jitterOffset={in->jitterX,in->jitterY};
-        prepare.motionVectorScale={in->motionScaleX,in->motionScaleY}; // to render-resolution pixels, as NGX
-        prepare.frameTimeDelta=in->frameTimeMs; prepare.reset=in->reset;
+        prepare.motionVectorScale={in->motionScaleX,in->motionScaleY}; // pixels, with HDRP's final Y flip accounted for
+        prepare.frameTimeDelta=in->frameTimeMs;
+        // A verified HUD-less image can appear/disappear mid-session. Its history must never be
+        // blended with the old backbuffer (with UI), nor reused after a disabled frame.
+        prepare.reset=in->reset || !haveHistory_ || historyHudless_!=(in->hudless!=nullptr);
         const auto& camera=*in->camera;
-        // FSR orders near/far itself according to the inverted-depth flag.
-        prepare.cameraNear=camera.nearPlane; prepare.cameraFar=camera.farPlane;
+        // FSR sorts near/far by the inverted-depth flag itself, but its integrations (and its input
+        // checker) pass them swapped for inverted depth, so they are passed that way here too.
+        const bool inverted=(flags_&FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED)!=0;
+        prepare.cameraNear=inverted?camera.farPlane:camera.nearPlane; prepare.cameraFar=inverted?camera.nearPlane:camera.farPlane;
         prepare.cameraFovAngleVertical=camera.fovRadians; prepare.viewSpaceToMetersFactor=1.f; // Unity units are metres
+        if(loggedWidth_!=in->depthWidth || loggedHeight_!=in->depthHeight || loggedHudless_!=(in->hudless!=nullptr)) {
+            loggedWidth_=in->depthWidth; loggedHeight_=in->depthHeight; loggedHudless_=in->hudless!=nullptr;
+            log("AMD FSR inputs: render "+std::to_string(in->depthWidth)+"x"+std::to_string(in->depthHeight)+", motion vectors "+
+                std::to_string(in->motionWidth)+"x"+std::to_string(in->motionHeight)+", display "+std::to_string(width_)+"x"+std::to_string(height_)+
+                ", motion scale ("+f2(in->motionScaleX)+", "+f2(in->motionScaleY)+"), jitter ("+f2(in->jitterX)+", "+f2(in->jitterY)+
+                "), near/far "+f2(prepare.cameraNear)+"/"+f2(prepare.cameraFar)+(inverted?" (inverted depth)":"")+", vertical FOV "+
+                f2(camera.fovRadians*57.29578f)+" deg, frame time "+f2(in->frameTimeMs)+" ms, reset "+(prepare.reset?"1":"0")+
+                ", HUD-less "+(in->hudless?"yes":"no")+", inputs Y-flipped to presentation, create flags "+std::to_string(flags_)+", debug flags "+std::to_string(state().debugFlags));
+        }
         prepare.depth=ffxApiGetResourceDX12(in->depth,FFX_API_RESOURCE_STATE_COMMON);
         prepare.motionVectors=ffxApiGetResourceDX12(in->motion,FFX_API_RESOURCE_STATE_COMMON);
         std::memcpy(prepare.cameraPosition,camera.position,sizeof prepare.cameraPosition);
@@ -157,8 +211,9 @@ public:
         result=fsr.dispatch(&generation_,&prepare.header);
         if(result!=FFX_API_RETURN_OK) {
             report("ffxDispatch(frame generation prepare)",result);
-            configure(false); return false;
+            configure(false); haveHistory_=false; return false;
         }
+        historyHudless_=in->hudless!=nullptr; haveHistory_=true;
         return true;
     }
     void before_present(uint32_t) override { antilag_tag_swapchain(chain_.Get(),state().latency==Latency::AntiLag2); }
@@ -175,9 +230,10 @@ public:
         if(width==width_ && height==height_ && format==format_ && generation_) return;
         // The frame generation context is created for one display size and format.
         destroy_generation(); width_=width; height_=height; format_=format;
+        maxRenderWidth_=width_; maxRenderHeight_=height_;
         std::string error; if(!create_generation(error)) log("AMD FSR: "+error+"; frame generation stays off");
     }
-    bool stale(uint32_t inputFlags) const override { return generation_flags(inputFlags,hdr_)!=flags_; }
+    bool stale(uint32_t inputFlags) const override { return generation_flags(inputFlags,hdr_,state().debugFlags)!=flags_; }
 };
 } // namespace
 void load_fsr_runtime() {

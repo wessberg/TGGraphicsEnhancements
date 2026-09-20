@@ -34,6 +34,7 @@
     <TGRuntime>Mono</TGRuntime>
   </PropertyGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <Reference Include="0Harmony"><HintPath>$(BepInExCoreDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine" Condition="Exists('$(UnityReferenceDir)\UnityEngine.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
@@ -60,6 +61,7 @@
     <Reference Include="UnityEngine.IMGUIModule" Condition="Exists('$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll')"><HintPath>$(UnityReferenceDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <!-- Game settings model for the native Video-tab rows. -->
     <Reference Include="TG.Main"><HintPath>$(UnityReferenceDir)\TG.Main.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Awaken.Kandra"><HintPath>$(UnityReferenceDir)\Awaken.Kandra.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Awaken.Utility" Condition="Exists('$(UnityReferenceDir)\Awaken.Utility.dll')"><HintPath>$(UnityReferenceDir)\Awaken.Utility.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UniTask" Condition="Exists('$(UnityReferenceDir)\UniTask.dll')"><HintPath>$(UnityReferenceDir)\UniTask.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.Collections" Condition="Exists('$(UnityReferenceDir)\Unity.Collections.dll')"><HintPath>$(UnityReferenceDir)\Unity.Collections.dll</HintPath><Private>false</Private></Reference>

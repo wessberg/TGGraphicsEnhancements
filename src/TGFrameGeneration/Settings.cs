@@ -43,8 +43,9 @@ namespace TGFrameGeneration
         private readonly ConfigEntry<float> targetFps;
         // Not in the Video tab; hidden from mod managers.
         internal readonly ConfigEntry<float> BaseLimit;
-        internal readonly ConfigEntry<bool> NativeMenu, SuspendOnCursor, RequireCamera, DumpNow;
-        internal readonly ConfigEntry<KeyCode> EmergencyKey;
+        internal readonly ConfigEntry<bool> NativeMenu, SuspendOnCursor, RequireCamera, DumpNow, HudlessCapture;
+        internal readonly ConfigEntry<int> FsrDebug;
+        internal readonly ConfigEntry<KeyCode> EmergencyKey, FsrCaptureKey;
         // Null until the native side reports what this GPU supports; until then every value is kept.
         internal VideoCapabilities Capabilities { get; private set; }
         // A Video setting changed: in the Video tab, a mod manager, the config file or by a rule.
@@ -76,8 +77,8 @@ namespace TGFrameGeneration
                 "Framerate Dynamic mode aims for. Auto follows the display's refresh rate, as does VSync when it is on.");
             lowLatency = Row(LowLatencyKey, LowLatencySetting.Reflex.ToString(), "Low Latency", 5,
                 Enum.GetNames(typeof(LowLatencySetting)), name => VideoCapabilities.Label(Parse(name, LowLatencySetting.Off)),
-                "Starts each frame just in time, which cuts input delay. Stays on while frame generation is on: DLSS needs NVIDIA Reflex and XeSS always uses Intel XeLL. " +
-                "XeLL on its own needs an Intel GPU, AMD Anti-Lag 2 an AMD GPU.");
+                "Starts each frame just in time, which cuts input delay. DLSS Frame Generation needs NVIDIA Reflex and XeSS Frame Generation always uses Intel XeLL. " +
+                "FSR needs none of them and can run with Off. XeLL on its own needs an Intel GPU, AMD Anti-Lag 2 an AMD GPU.");
             BaseLimit = file.Bind(AdvancedSection, "Base FPS limit", 0f, Hidden(
                 "Optional cap on rendered frames through the active low-latency technology (Reflex, XeLL or Anti-Lag 2). 0 = no cap.",
                 new AcceptableValueRange<float>(0, 1000)));
@@ -89,6 +90,18 @@ namespace TGFrameGeneration
                 "Pauses frame generation while the game has no active main camera."));
             EmergencyKey = file.Bind(AdvancedSection, "Emergency off key", KeyCode.F8, Hidden(
                 "Sets Frame Generation to Off. None disables the key."));
+            FsrDebug = file.Bind(AdvancedSection, "FSR debug flags", 0, Hidden(
+                "Troubleshooting overlays of AMD FSR frame generation, added together: 1 tear lines, 2 reset indicators, 4 debug view " +
+                "(motion vectors, depth and masks; only generated frames are shown), 8 pacing lines, 16 FSR's input checker (messages in the native log), " +
+                "32 save three input frames once camera movement begins (scene images, depth and motion in diagnostics; may briefly hitch). 0 = off.",
+                new AcceptableValueRange<int>(0, 63)));
+            FsrCaptureKey = file.Bind(AdvancedSection, "FSR input capture key", KeyCode.None, Hidden(
+                "Diagnostic only: press during FSR gameplay to save three scene/depth/motion frames after a short delay. " +
+                "May briefly hitch when saving. Each press rearms the capture; None disables the key."));
+            HudlessCapture = file.Bind(AdvancedSection, "Keep the HUD out of frame generation", true, Hidden(
+                "Captures HDRP's current scene color before overlay UI and gives that copy to DLSS, FSR or XeSS as the " +
+                "HUD-less image, so the HUD is not interpolated. The copy is only used once it matches the presented frame except for HUD-sized " +
+                "regions. Off: the HUD is generated with the scene."));
             DumpNow = file.Bind(AdvancedSection, "Write diagnostic report now", false, Hidden(
                 "Set to true to write a report to BepInEx/TGFrameGeneration/diagnostics; resets to false afterwards. Review it before sharing."));
             if (stored != null) Restore(stored, !existing);

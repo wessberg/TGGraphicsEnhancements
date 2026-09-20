@@ -50,6 +50,8 @@ struct Frame {
     bool inputsSubmitted=false;
     TGFG_HdrpInputs hdrp{};                    // HDRP's own depth and motion vectors for this frame
     bool hdrpPending=false, hdrpCaptured=false; // packet received; copied at render event 3
+    TGFG_Hudless hudless{};
+    bool hudlessPending=false; // copied at render event 4, before HDRP recycles the color
     uint64_t born=0;
 };
 // Per-interval pipeline counters. Written under State::mutex and summarised in the native
@@ -61,6 +63,9 @@ struct Diag {
     uint64_t presents=0, presentsWithInputs=0, tagged=0, tagFailed=0, readyPresents=0, fgPresents=0;
     uint64_t sdkPresented=0; // frames an FSR/XeSS swapchain reported presenting (rendered + generated)
     uint64_t hdrpPackets=0, hdrpCaptured=0, hdrpUpscaler=0, hdrpRejected=0;
+    // HUD-less frames: copies at render event 2, comparison results and frames handed to a technology.
+    uint64_t hudlessCaptured=0, hudlessRejected=0, hudlessChecks=0, hudlessTagged=0, hudlessStill=0;
+    uint32_t hudlessDiffPermille=0; int32_t hudlessLastResult=0;
     uint32_t lastWhy=0;
     uint64_t lastSummary=0;
     bool markerFailLogged=false, tagFailLogged=false;
@@ -104,6 +109,11 @@ struct State {
     // take precedence over HDRP's own.
     uint32_t lastUpscalerFrame=0;
     bool upscalerSeen=false;
+    // HUD-less frames: requested by the plugin (it draws the overlay UI after render event 2) and
+    // verified once the presented frames differ from the captures only over HUD-sized regions.
+    bool hudlessRequested=false, hudlessOk=false;
+    uint32_t hudlessGood=0, hudlessBad=0;
+    uint32_t debugFlags=0; // TGFG_SetDebugFlags: SDK debug overlays and checks
 };
 State& state();
 extern thread_local bool insideSL;
@@ -137,6 +147,11 @@ void update_caps();
 // Pipeline bookkeeping shared by the Streamline (DLSS-G) and FSR/XeSS present paths.
 Readiness frame_readiness(Frame*,uint32_t format,uint32_t maxGenerated,uint32_t dynamicSupported,bool backendOk);
 void note_generation(Frame*,Reason,bool enabled);
+// One HUD-less comparison result: sample points where the presented frame differs from the capture
+// before the overlay UI, where that capture differs from the previously presented frame, and where
+// the presented frame itself does. A still image proves nothing and is skipped; a capture that did
+// not change while the frame did is stale. Decides whether the captures reach the technologies.
+void note_hudless_difference(uint32_t differing,uint32_t changed,uint32_t moving,uint32_t samples);
 void present_markers(Frame*,bool start);
 void release_stale_frames(bool generating);
 void summarise(uint64_t now);

@@ -1,3 +1,84 @@
+# Unreleased
+
+- Fix the IL2CPP Options crash by evaluating TGFG's dependent-row visibility
+  through a scoped native-getter hook instead of a converted callback. Build and
+  regression checks pass; the reporter confirms the upscaling/pause/Options retest works.
+
+- Port the hand-history guard to IL2CPP. Intercept the native compute dispatcher because
+  IL2CPP inlines the copy wrapper; preserve one history copy per manager per Unity frame
+  while allowing skinning and other kernels. Native-pointer identity handles multiple
+  managed wrappers. Build and regression checks pass; IL2CPP visual validation is pending.
+
+- Fix HUD flicker with ReShade/RenoDX by replaying its recognized final-output shader
+  and live settings on the HUD-less scene before HDR10 encoding. Observe indexed,
+  instanced and indirect draws without assuming three-vertex geometry: the successful
+  game log identifies a six-index DrawIndexed pass. Reporter confirms success with
+  ReShade and RenoDX DLSS 5, with/without upscaling and the other upscalers tested.
+  Logs confirm replay, pixel verification and HUD-less supply; production draw detours
+  and color conversion also pass WARP tests.
+
+- Accept ReShade's wrapped D3D11 device for HUD-less capture by checking its immediate
+  context against the bridge's existing identity/tag validation. Previously all captures
+  were rejected as device mismatches, bringing HUD flicker back when ReShade/RenoDX was
+  enabled. Verified capture and HUD-less supply now work across all three FG backends.
+
+- Mono: preserve Kandra's previous skinned positions across extra camera-rendering contexts
+  while DLSS, FSR or XeSS FG is selected. The latest capture shows enabling hand material
+  motion passes alone was insufficient. The guard prevents duplicate history copies within
+  one Unity frame, with runtime counters. The reporter confirms hands are much better;
+  the new input capture confirms hand vectors no longer follow camera-only motion.
+  No minimap mod dependency; single-camera history is preserved in regression tests.
+
+- The FSR capture shows first-person hands receiving camera-only motion instead of their own motion.
+  Enable existing disabled motion-vector passes on the first-person Kandra rig's opaque materials
+  for DLSS, FSR and XeSS frame generation, restoring them when FG is Off. The shipped character skin material disables
+  that pass despite having compiled variants. Visual and corrected-input validation are pending.
+
+- FSR: align depth and motion textures with HDRP's Y-flipped presentation color, including vertical
+  motion scale and jitter. Prevent submission across a backend/orientation change. HUD separation
+  is confirmed fixed in-game; the reporter finds hands improved but still flickering during camera movement.
+- Add opt-in FSR debug flag 32 to save three source color/depth/motion frames and metadata once
+  gameplay movement begins, for diagnosing the remaining hand flicker. Copies precede readback;
+  the capture stops automatically and uses at most 384 MiB of image data.
+
+- Replace the stale end-camera swapchain capture with HDRP's current `AfterPostProcess` color,
+  copied on render event 4 before overlay UI composition. Remove the `rendersUIOverlay` override.
+  Handle padded RTHandles, final-blit Y orientation, SDR sRGB and HDR PQ conversion. A verified
+  copy is supplied to DLSS-G, FSR and XeSS for their UI separation paths. The reporter confirms
+  HUD flicker is fixed in SDR; HDR validation remains pending.
+- Keep the present-time freshness and HUD-area checks, including skipping still frames. The native
+  log reports capture/rejection/supply counts, while the managed log reports HDRP color layout and HDR state.
+- The advanced setting "Keep the HUD out of frame generation" (default on) controls the custom
+  pass. Screen-space overlay UI is separated; camera/world-space UI and lens effects already in
+  scene color remain interpolation inputs.
+- FSR resets history when the HUD-less source changes, and recreates its context when input flags
+  change (including enabling/disabling FSR's debug checker).
+- Add a D3D11 WARP regression test for the actual HUD-less color conversion shader.
+- DLSS Frame Generation is told to allocate its user interface recomposition path while a verified
+  HUD-less image is supplied. Streamline only interpolates the HUD-less image separately from the
+  back buffer when that option is on, so the HUD-less tag had nothing to act on before. XeSS already
+  switches its UI composition on with the same condition.
+- Low Latency can be Off while FSR frame generation runs. AMD pairs FSR with Anti-Lag 2, which needs
+  an AMD GPU; on other GPUs the row previously forced NVIDIA Reflex, which only knows about generated
+  frames through Streamline and therefore only for DLSS Frame Generation. DLSS still requires Reflex
+  and XeSS still runs with XeLL.
+- FSR is told the resolution the game renders at instead of the display resolution. The FSR API
+  takes that as maxRenderSize at context creation, allocates its render-resolution buffers for it
+  and scales its lookups into them by renderSize/maxRenderSize. With DLSS or another upscaler on,
+  the two differ (1896x1068 against 3840x2160 at 4K Performance), so the context is now rebuilt for
+  the render resolution of the first frame and whenever it changes.
+- The HUD-less check no longer counts a still image against the capture. A menu, a pause or a
+  loading screen leaves the frame unchanged, which the check read as a stale capture and which
+  reset the streak of good results, so the HUD-less image was never handed to a technology in a
+  normal session. Still frames are skipped and counted separately in the log.
+- FSR: near and far are passed swapped for inverted depth, as FSR's own integrations do; the inputs
+  FSR receives (render and display size, motion vector scale, jitter, near/far, FOV, frame time,
+  reset, HUD-less) are logged once and whenever they change. New advanced setting "FSR debug flags"
+  turns on FSR's overlays (tear lines, reset indicators, the debug view of motion vectors, depth and
+  masks, pacing lines) and FSR's input checker, for troubleshooting from a screenshot and the log.
+- New optional exports TGFG_SetHudlessCapture, TGFG_SetHudless and TGFG_SetDebugFlags; the ABI
+  (0x00050000) and existing structures are unchanged. The new HUD-less packet is 32 bytes.
+
 # v0.5.0 - AMD FSR and Intel XeSS frame generation, one Low Latency selector
 
 - The plugin is now "TG Frame Generation" with the ID com.wessberg.tgframegeneration. Settings

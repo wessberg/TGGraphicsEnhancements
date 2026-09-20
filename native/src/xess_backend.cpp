@@ -20,6 +20,7 @@ struct XessRuntime {
     F(xefgSwapChainSetEnabled); F(xefgSwapChainSetPresentId); F(xefgSwapChainGetLastPresentStatus);
     F(xefgSwapChainSetLoggingCallback); F(xefgSwapChainDestroy); F(xefgSwapChainSetLatencyReduction);
     F(xefgSwapChainGetProperties); F(xefgSwapChainSetNumInterpolatedFrames); F(xefgSwapChainGetVersion);
+    F(xefgSwapChainSetUiCompositionState);
     F(xellD3D12CreateContext); F(xellSetSleepMode); F(xellSleep); F(xellAddMarkerData); F(xellSetLoggingCallback); F(xellGetVersion);
 #undef F
     ID3D12Device* device=nullptr;
@@ -62,7 +63,18 @@ class XessOutput final : public GeneratorOutput {
     xefg_swapchain_handle_t handle_=nullptr;
     ComPtr<IDXGISwapChain4> chain_;
     uint32_t max_=0, generated_=0, flags_=0;
-    bool enabled_=false;
+    bool enabled_=false, composing_=false; // composing: UI composition on, fed by the HUD-less image
+    static const char* label(xefg_swapchain_resource_type_t type) {
+        return type==XEFG_SWAPCHAIN_RES_DEPTH?"TagFrameResource(depth)":type==XEFG_SWAPCHAIN_RES_MOTION_VECTOR?"TagFrameResource(motion vectors)":"TagFrameResource(HUD-less color)";
+    }
+    // UI composition follows the HUD-less image: with one tagged, XeSS interpolates it and extracts
+    // the UI from the back buffer (AUTO picks BACKBUFFER_HUDLESS); without one, the UI is interpolated.
+    void compose(bool want) {
+        if(want==composing_) return;
+        const auto result=xs.xefgSwapChainSetUiCompositionState(handle_,want?XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED:XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_DISABLED);
+        if(ok(result)) { composing_=want; log(std::string("Intel XeSS-FG UI composition ")+(want?"on: interpolating the HUD-less frame, UI from the back buffer":"off: the UI is interpolated")); }
+        else report("SetUiCompositionState",result);
+    }
     bool tag(ID3D12GraphicsCommandList* list,uint32_t id,xefg_swapchain_resource_type_t type,ID3D12Resource* resource,uint32_t width,uint32_t height) {
         xefg_swapchain_d3d12_resource_data_t data{};
         data.type=type;
@@ -72,7 +84,7 @@ class XessOutput final : public GeneratorOutput {
         data.resourceBase={0,0}; data.resourceSize={width,height};
         data.pResource=resource; data.incomingState=D3D12_RESOURCE_STATE_COMMON;
         const auto result=xs.xefgSwapChainD3D12TagFrameResource(handle_,list,id,&data);
-        if(!ok(result)) { report(type==XEFG_SWAPCHAIN_RES_DEPTH?"TagFrameResource(depth)":"TagFrameResource(motion vectors)",result); return false; }
+        if(!ok(result)) { report(label(type),result); return false; }
         return true;
     }
 public:
@@ -86,7 +98,7 @@ public:
         xefg_swapchain_d3d12_init_params_t params{};
         params.maxInterpolatedFrames=XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
         params.initFlags=flags_=init_flags(p.inputFlags);
-        params.uiMode=XEFG_SWAPCHAIN_UI_MODE_AUTO; // UI composition stays disabled: the UI is interpolated
+        params.uiMode=XEFG_SWAPCHAIN_UI_MODE_AUTO; // composition is switched on per frame when a HUD-less image is tagged (compose)
         DXGI_SWAP_CHAIN_DESC1 desc=p.desc;
         result=xs.xefgSwapChainD3D12InitFromSwapChainDesc(handle_,p.hwnd,&desc,p.fullscreen,p.queue,p.factory,&params);
         if(!ok(result)) { error="xefgSwapChainD3D12InitFromSwapChainDesc returned "+std::to_string(result); return false; }
@@ -130,6 +142,12 @@ public:
             if(!ok(result)) { report("TagFrameConstants",result); want=false; refused=true; }
             else if(!tag(list,id,XEFG_SWAPCHAIN_RES_DEPTH,in->depth,in->depthWidth,in->depthHeight) ||
                     !tag(list,id,XEFG_SWAPCHAIN_RES_MOTION_VECTOR,in->motion,in->motionWidth,in->motionHeight)) { want=false; refused=true; }
+            else {
+                // Same format and size as the back buffer (the bridge made it so). A refused tag only
+                // costs this frame's UI composition, never the frame itself.
+                const bool hudless=in->hudless && tag(list,id,XEFG_SWAPCHAIN_RES_HUDLESS_COLOR,in->hudless,in->hudlessWidth,in->hudlessHeight);
+                compose(hudless);
+            }
         }
         if(want!=enabled_) {
             const auto result=xs.xefgSwapChainSetEnabled(handle_,want?1u:0u);
@@ -173,6 +191,7 @@ void load_xess_runtime() {
     F(fg,xefgSwapChainSetEnabled); F(fg,xefgSwapChainSetPresentId); F(fg,xefgSwapChainGetLastPresentStatus);
     F(fg,xefgSwapChainSetLoggingCallback); F(fg,xefgSwapChainDestroy); F(fg,xefgSwapChainSetLatencyReduction);
     F(fg,xefgSwapChainGetProperties); F(fg,xefgSwapChainSetNumInterpolatedFrames); F(fg,xefgSwapChainGetVersion);
+    F(fg,xefgSwapChainSetUiCompositionState);
     F(ll,xellD3D12CreateContext); F(ll,xellSetSleepMode); F(ll,xellSleep); F(ll,xellAddMarkerData); F(ll,xellSetLoggingCallback); F(ll,xellGetVersion);
 #undef F
     if(!complete) { log("Intel XeSS runtime is missing expected exports; XeSS and XeLL unavailable"); xs.xefgSwapChainD3D12CreateContext=nullptr; xs.xellD3D12CreateContext=nullptr; return; }

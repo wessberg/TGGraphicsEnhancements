@@ -12,6 +12,7 @@ namespace TGFrameGeneration
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int CameraCall(ref NativeCamera camera);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr GetEvent();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int HdrpCall(ref NativeHdrpInputs inputs);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int HudlessCall(ref NativeHudless inputs);
         [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
         private static extern IntPtr GetModuleHandleW(string name);
         [DllImport("kernel32.dll", CharSet=CharSet.Ansi, ExactSpelling=true)]
@@ -21,6 +22,9 @@ namespace TGFrameGeneration
         private FrameCall begin, end;
         private CameraCall setCamera;
         private HdrpCall setHdrp; // optional: a native backend without it takes inputs from DLSS only
+        private FrameCall setHudless; // optional: a native backend without it interpolates the HUD
+        private HudlessCall hudlessPacket;
+        private FrameCall setDebug;   // optional: SDK debug overlays
         internal IntPtr RenderEvent { get; private set; }
         internal bool Connected => submit != null && read != null && RenderEvent!=IntPtr.Zero;
         internal string Detail { get; private set; } = "TGFG.Native.dll not loaded. No FG. Check BepInEx/patchers/TGFG.Autoload.dll and BepInEx/TGFrameGeneration/Autoload.log; start normally through Steam.";
@@ -45,6 +49,9 @@ namespace TGFrameGeneration
                 end=Bind<FrameCall>(module,"TGFG_EndSimulation");
                 setCamera=Bind<CameraCall>(module,"TGFG_SetCamera");
                 try { setHdrp=Bind<HdrpCall>(module,"TGFG_SetHdrpInputs"); } catch(EntryPointNotFoundException) { setHdrp=null; }
+                try { setHudless=Bind<FrameCall>(module,"TGFG_SetHudlessCapture"); } catch(EntryPointNotFoundException) { setHudless=null; }
+                try { hudlessPacket=Bind<HudlessCall>(module,"TGFG_SetHudless"); } catch(EntryPointNotFoundException) { hudlessPacket=null; }
+                try { setDebug=Bind<FrameCall>(module,"TGFG_SetDebugFlags"); } catch(EntryPointNotFoundException) { setDebug=null; }
                 RenderEvent=Bind<GetEvent>(module,"TGFG_GetRenderEvent")();
                 if(RenderEvent==IntPtr.Zero) throw new InvalidOperationException("No render event callback.");
                 submit=newSubmit; read=newRead;
@@ -68,5 +75,9 @@ namespace TGFrameGeneration
         internal int SetCamera(ref NativeCamera camera) => Connected?setCamera(ref camera):-100;
         internal bool CanSetHdrpInputs => Connected && setHdrp!=null;
         internal int SetHdrpInputs(ref NativeHdrpInputs inputs) => CanSetHdrpInputs?setHdrp(ref inputs):-100;
+        internal bool CanSetHudless => Connected && setHudless!=null && hudlessPacket!=null;
+        internal int SetHudless(ref NativeHudless packet) => CanSetHudless?hudlessPacket(ref packet):-100;
+        internal int SetHudlessCapture(bool enabled) => Connected && setHudless!=null?setHudless(enabled?1u:0u):-100;
+        internal int SetDebugFlags(uint flags) => Connected && setDebug!=null?setDebug(flags):-100;
     }
 }

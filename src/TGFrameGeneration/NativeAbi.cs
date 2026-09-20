@@ -57,6 +57,9 @@ namespace TGFrameGeneration
         private static readonly string[] OutputNames = { "standard", "?", "FSR", "XeSS" };
         private string Output => ActiveBackend < OutputNames.Length ? OutputNames[ActiveBackend] : "?";
         internal bool CapsKnown => (Flags & 4) != 0;
+        // Bridge flags 16 and 32: the HUD-less image went with the last frame; the captures match the presented frames.
+        internal bool HudlessSupplied => (BridgeFlags & 16) != 0;
+        internal bool HudlessVerified => (BridgeFlags & 32) != 0;
         internal bool RuntimeQueried => (Flags & 8) != 0;
         internal string DescribeBrief()
         {
@@ -80,7 +83,8 @@ namespace TGFrameGeneration
                 " | DLSS-G status 0x" + DlssgStatus.ToString("X") + " | format " + SwapchainFormat +
                 " | captured input pairs " + SuccessfulInputDispatches +
                 " | source DX" + SourceApi + " -> presentation DX" + PresentationApi +
-                " | bridge 0x" + BridgeFlags.ToString("X") + " | interop HRESULT 0x" + LastInteropHresult.ToString("X8") +
+                " | bridge 0x" + BridgeFlags.ToString("X") + " (HUD-less " + (HudlessVerified ? "verified" : "unverified") + (HudlessSupplied ? ", supplied" : "") + ")" +
+                " | interop HRESULT 0x" + LastInteropHresult.ToString("X8") +
                 " | source presents/copies " + SourcePresents + "/" + CopiedFrames +
                 " | NVIDIA-reported output frames " + OutputFramesReported + " (not a display measurement)" +
                 " | NGX calls " + CapturedNgxCalls + " | source/output format " + SourceFormat + "/" + SwapchainFormat +
@@ -112,14 +116,22 @@ namespace TGFrameGeneration
         internal uint RenderWidth, RenderHeight;
         internal float JitterX, JitterY;         // HDCamera.taaJitter.xy, render pixels
     }
+    [StructLayout(LayoutKind.Sequential, Pack=4)]
+    internal struct NativeHudless
+    {
+        internal uint Size, Abi, FrameId, Flags;
+        internal ulong Color;
+        internal uint Width, Height;
+    }
     internal static class Abi
     {
         internal const uint Version = 0x00050000;
-        internal const int RequestSize = 48, StatusSize = 188, CameraSize = 416, HdrpInputsSize = 48;
+        internal const int RequestSize = 48, StatusSize = 188, CameraSize = 416, HdrpInputsSize = 48, HudlessSize = 32;
         internal static void Validate()
         {
             if (Marshal.SizeOf(typeof(NativeRequest)) != RequestSize || Marshal.SizeOf(typeof(NativeStatus)) != StatusSize ||
-                Marshal.SizeOf(typeof(NativeCamera)) != CameraSize || Marshal.SizeOf(typeof(NativeHdrpInputs)) != HdrpInputsSize)
+                Marshal.SizeOf(typeof(NativeCamera)) != CameraSize || Marshal.SizeOf(typeof(NativeHdrpInputs)) != HdrpInputsSize ||
+                Marshal.SizeOf(typeof(NativeHudless)) != HudlessSize)
                 throw new InvalidOperationException("Native ABI packing mismatch.");
         }
     }

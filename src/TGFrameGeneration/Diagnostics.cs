@@ -37,6 +37,7 @@ namespace TGFrameGeneration
                 sb.AppendLine("Bridge: " + Session.Bridge.Detail);
                 sb.AppendLine("Frame bridge: " + FrameBridge.Detail + " | camera markers queued: " + FrameBridge.CamerasQueued);
                 sb.AppendLine("HDRP inputs: " + HdrpInputs.Detail + " | packets: " + HdrpInputs.Packets);
+                sb.AppendLine("HUD-less frame: " + HudlessUi.Detail);
                 sb.AppendLine("Status: " + Session.StatusText);
                 sb.AppendLine("Video tab: " + NativeVideoSettings.Status);
                 AppendAutoloadDiagnostic(sb);

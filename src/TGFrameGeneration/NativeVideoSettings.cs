@@ -315,9 +315,10 @@ namespace TGFrameGeneration
         private SwitchRowsOption(EnumArrowsOption selector, Switch rows, PrefOption[] every) : base(ClassInjector.DerivedConstructorPointer<SwitchRowsOption>())
         {
             ClassInjector.DerivedConstructorBody(this);
-            Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Func_1_Boolean_Il2CppReferenceArray_1_PrefOption_0",
-                selector, (Il2CppSystem.Func<bool>)(Func<bool>)rows.Show, new Il2CppReferenceArray<PrefOption>(rows.Current));
+            Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Il2CppReferenceArray_1_PrefOption_0",
+                selector, new Il2CppReferenceArray<PrefOption>(rows.Current));
             all = new PrefOption[] { selector }.Concat(every).ToArray();
+            Il2CppOptionConditions.Register(this, rows.Show);
         }
         public new bool WasChanged => all.Any(o => o.WasChanged);
         public new bool IsSetToDefault => all.All(o => o.IsSetToDefault);
@@ -392,6 +393,7 @@ namespace TGFrameGeneration
 #if BEPINEX_IL2CPP
                 Il2CppTypes.Register<SwitchRowsOption>();
                 Il2CppTypes.Register<FrameGenerationVideoSetting>(genericBase: true);
+                Il2CppOptionConditions.Clear();
 #endif
                 rows = new VideoRows(Session.Settings, caps ?? new VideoCapabilities(false, default(NativeStatus)), World.Any<UpScaling>());
                 setting = new FrameGenerationVideoSetting(rows);

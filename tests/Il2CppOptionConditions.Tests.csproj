@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <DefineConstants>BEPINEX_IL2CPP</DefineConstants>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GameDirIl2Cpp Condition="'$(GameDirIl2Cpp)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA</GameDirIl2Cpp>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony"><HintPath>$(GameDirIl2Cpp)\BepInEx\core\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Compile Include="..\src\TGFrameGeneration\Il2CppOptionConditions.cs" Link="Il2CppOptionConditions.cs" />
+    <Compile Include="il2cpp_option_conditions_tests.cs" />
+  </ItemGroup>
+</Project>

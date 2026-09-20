@@ -50,9 +50,10 @@ namespace TGFrameGeneration
                 return choices.ToArray();
             }
         }
-        // What may run with a frame generation choice. Low latency stays on while frame generation is on:
-        // DLSS requires Reflex, XeSS runs with XeLL only and FSR with any of them. XeLL on its own needs an
-        // Intel GPU.
+        // What may run with a frame generation choice. DLSS Frame Generation requires Reflex and XeSS
+        // Frame Generation runs with XeLL only, both by their vendor's rule. FSR requires none: AMD pairs
+        // it with Anti-Lag 2, which needs an AMD GPU, so on other GPUs Off is a real choice and the only
+        // way to run FSR without a latency technology that knows nothing of its generated frames.
         internal LowLatencySetting[] AllowedLatencies(FrameGenerationSetting selected)
         {
             var allowed = new List<LowLatencySetting>();
@@ -60,7 +61,7 @@ namespace TGFrameGeneration
             else if (selected == FrameGenerationSetting.XeSS) allowed.Add(LowLatencySetting.XeLL);
             else
             {
-                if (selected == FrameGenerationSetting.Off) allowed.Add(LowLatencySetting.Off);
+                allowed.Add(LowLatencySetting.Off);
                 allowed.AddRange(new[] { LowLatencySetting.Reflex, LowLatencySetting.ReflexBoost, LowLatencySetting.AntiLag2 });
                 if (XeLLStandalone) allowed.Add(LowLatencySetting.XeLL);
             }

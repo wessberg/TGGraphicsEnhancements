@@ -59,6 +59,12 @@ void summarise(uint64_t now) {
         " requestOff="+n(d.ngxRequestOff)+" copyFailed="+n(d.captureFailed)+" evalFailed="+n(d.evalFailed)+"]";
     if(d.hdrpPackets) line+=" | HDRP packets="+n(d.hdrpPackets)+" captured="+n(d.hdrpCaptured)+
         " upscalerFrames="+n(d.hdrpUpscaler)+" rejected="+n(d.hdrpRejected);
+    if(s.hudlessRequested || d.hudlessCaptured) {
+        line+=" | hudless captured="+n(d.hudlessCaptured)+" rejected="+n(d.hudlessRejected);
+        if(d.hudlessLastResult) line+="(last "+std::to_string(d.hudlessLastResult)+")";
+        line+=" supplied="+n(d.hudlessTagged)+" checks="+n(d.hudlessChecks)+" still="+n(d.hudlessStill)+
+            " diff="+n(d.hudlessDiffPermille/10)+"."+n(d.hudlessDiffPermille%10)+"% "+(s.hudlessOk?"verified":"unverified");
+    }
     line+=" | presents="+n(d.presents)+" withInputs="+n(d.presentsWithInputs)+" tagged="+n(d.tagged);
     if(d.tagFailed) line+=" tagFailed="+n(d.tagFailed);
     line+=" ready="+n(d.readyPresents)+" fgOn="+n(d.fgPresents)+" last="+reason_name(d.lastWhy);
@@ -127,14 +133,18 @@ void apply_options(Frame* frame,Reason why,const DXGI_SWAP_CHAIN_DESC& descripti
     options.colorWidth=description.BufferDesc.Width; options.colorHeight=description.BufferDesc.Height;
     options.colorBufferFormat=static_cast<uint32_t>(description.BufferDesc.Format);
     options.queueParallelismMode=sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
-    // No fabricated HUD separation. Optional HUD-less tag has its own explicit API.
-    options.enableUserInterfaceRecomposition=sl::eFalse;
+    // DLSS-G only allocates the path that interpolates the HUD-less image separately from the back
+    // buffer when this is on, so the HUD-less tag does nothing without it. It follows the verified
+    // capture: on while one is supplied, off when the HUD is interpolated with the scene. No HUD
+    // separation is fabricated; the tag still carries a real image or nothing.
+    options.enableUserInterfaceRecomposition=s.hudlessOk?sl::eTrue:sl::eFalse;
     options.onErrorCallback=api_error;
     bool changed=!s.haveOptions || s.applied.mode!=options.mode ||
         s.applied.numFramesToGenerate!=options.numFramesToGenerate ||
         s.applied.dynamicTargetFrameRate!=options.dynamicTargetFrameRate ||
         s.applied.colorWidth!=options.colorWidth || s.applied.colorHeight!=options.colorHeight ||
-        s.applied.numBackBuffers!=options.numBackBuffers || s.applied.colorBufferFormat!=options.colorBufferFormat;
+        s.applied.numBackBuffers!=options.numBackBuffers || s.applied.colorBufferFormat!=options.colorBufferFormat ||
+        s.applied.enableUserInterfaceRecomposition!=options.enableUserInterfaceRecomposition;
     auto result=sl::Result::eOk;
     if(changed) { SLGuard inside; result=s.sl.setOptions(s.viewport,options); }
     s.status.lastSetOptionsResult=static_cast<int32_t>(result);
@@ -170,6 +180,12 @@ void __stdcall render_event(int eventId,void* encodedId) {
         frame->renderEnded=true;
     } else if(eventId==3 && haveRenderFrame && renderFrameId==id && frame->renderBegun && !frame->renderEnded && frame->hdrpPending) {
         capture_hdrp_inputs(*frame);
+    } else if(eventId==4 && haveRenderFrame && renderFrameId==id && frame->renderBegun && !frame->renderEnded && frame->hudlessPending) {
+        frame->hudlessPending=false;
+        if(frame->inputs && s.hudlessRequested) {
+            const int result=capture_dx11_hudless_frame(frame->hudless);
+            if(result==0) ++s.diag.hudlessCaptured; else { ++s.diag.hudlessRejected; s.diag.hudlessLastResult=result; }
+        }
     }
 }
 } // namespace
@@ -196,6 +212,35 @@ void note_generation(Frame*,Reason why,bool enabled) {
     ++s.diag.presents; s.diag.lastWhy=static_cast<uint32_t>(why);
     if(why==Reason::Ready) ++s.diag.readyPresents;
     if(enabled) ++s.diag.fgPresents;
+}
+void note_hudless_difference(uint32_t differing,uint32_t changed,uint32_t moving,uint32_t samples) {
+    auto& s=state(); if(!samples) return;
+    // A still image (menu, pause, loading screen) says nothing about either check, so it is skipped
+    // rather than counted against the captures.
+    if(!moving) { ++s.diag.hudlessStill; return; }
+    const uint32_t permille=static_cast<uint32_t>(uint64_t(differing)*1000/samples);
+    ++s.diag.hudlessChecks; s.diag.hudlessDiffPermille=permille;
+    // A HUD covers part of the frame; more than about a third of the sample points means the presented
+    // frame was redrawn after the capture (a post-process injector at Present) and the technologies
+    // would treat all of it as UI. A capture that did not change while the presented frame did is
+    // stale: the game renders into another buffer (a swapchain proxy such as RenoDX's) and the
+    // bridge's back buffer is only written at Present. Only a fresh, HUD-sized difference is trusted.
+    const bool stale=changed==0, hudSized=permille<=350;
+    const bool good=hudSized && !stale;
+    if(good) { s.hudlessBad=0; if(s.hudlessGood<UINT32_MAX) ++s.hudlessGood; } else { s.hudlessGood=0; if(s.hudlessBad<UINT32_MAX) ++s.hudlessBad; }
+    const std::string percent=std::to_string(permille/10)+"."+std::to_string(permille%10)+"% of the sample points";
+    if(!s.hudlessOk && s.hudlessGood==30) {
+        s.hudlessOk=true; s.status.bridgeFlags|=32u;
+        log("HUD-less frame verified: the presented frame differs from the capture before the overlay UI over "+percent+
+            "; frame generation receives that capture as the HUD-less image");
+    } else if(s.hudlessBad==30) {
+        if(s.hudlessOk) { s.hudlessOk=false; s.status.bridgeFlags&=~32u; }
+        if(stale) log("HUD-less frame withheld: the captured color equals the previously presented frame while the presented frame changes;"
+                      " check the color source and render-event ordering; the HUD is interpolated");
+        else log("HUD-less frame withheld: the presented frame differs from the capture before the overlay UI over "+percent+
+                 ". Something redraws the frame after the gameplay camera (a post-process injector at Present?), so the technologies would treat all of it as UI;"
+                 " the HUD is interpolated until the frames match again");
+    }
 }
 void present_markers(Frame* frame,bool start) {
     if(!start) { latency_marker(sl::PCLMarker::ePresentEnd,frame); return; }
@@ -353,10 +398,38 @@ TGFG_EXPORT int32_t TGFG_CALL TGFG_SetHdrpInputs(const TGFG_HdrpInputs* packet) 
     f->hdrp=*packet; f->hdrpPending=true; ++s.diag.hdrpPackets; return 0;
 }
 TGFG_EXPORT void* TGFG_CALL TGFG_GetRenderEvent() { return reinterpret_cast<void*>(tgfg::render_event); }
+TGFG_EXPORT int32_t TGFG_CALL TGFG_SetHudless(const TGFG_Hudless* packet) {
+    if(!packet || packet->size!=sizeof(TGFG_Hudless) || packet->abi!=TGFG_ABI || !packet->color ||
+       !packet->width || !packet->height || (packet->flags&~15u)) return -1;
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    auto* f=s.frames.find(packet->frameId); if(!f || !f->cameraReady || !s.hudlessRequested) return -2;
+    if(packet->width!=f->camera.width || packet->height!=f->camera.height) return -3;
+    f->hudless=*packet; f->hudlessPending=true; return 0;
+}
 TGFG_EXPORT int32_t TGFG_CALL TGFG_CaptureHudlessD3D11(uint32_t id,void* context,void* resource) {
     // Call only from a verified post-effects/pre-HUD stage on the immediate
     // rendering context. This export never invents a HUD-less image.
     return tgfg::capture_dx11_hudless(id,static_cast<ID3D11DeviceContext*>(context),static_cast<ID3D11Resource*>(resource));
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_SetHudlessCapture(uint32_t enabled) {
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    const bool want=enabled!=0;
+    if(want!=s.hudlessRequested) {
+        s.hudlessRequested=want; s.hudlessOk=false; s.hudlessGood=s.hudlessBad=0; s.status.bridgeFlags&=~(16u|32u);
+        tgfg::log(want?"HUD-less capture on: HDRP AfterPostProcess color, before overlay UI; verified against the presented frames before use"
+                      :"HUD-less capture off: the HUD is interpolated with the scene");
+    }
+    return 0;
+}
+TGFG_EXPORT int32_t TGFG_CALL TGFG_SetDebugFlags(uint32_t flags) {
+    auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if(flags==s.debugFlags) return 0;
+    s.debugFlags=flags;
+    std::string names;
+    const char* bits[]={"tear lines","reset indicators","debug view","pacing lines","input checker","three-frame input capture"};
+    for(unsigned i=0;i<6;++i) if(flags&(1u<<i)) names+=(names.empty()?"":", ")+std::string(bits[i]);
+    tgfg::log("Frame generation debug flags "+std::to_string(flags)+(names.empty()?" (off)":": "+names));
+    return 0;
 }
 TGFG_EXPORT DWORD WINAPI TGFG_Bootstrap(void*) {
     auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);

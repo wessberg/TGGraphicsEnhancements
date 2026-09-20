@@ -120,6 +120,8 @@ namespace TGFrameGeneration
                 // the first Submit of the frame, which precedes the camera's own DLSS pass.
                 Queue(cameraBegin,1); context.ExecuteCommandBuffer(cameraBegin);
                 cameraQueued=true; ++CamerasQueued; queuedCameraId=id;
+                // Enable the HDRP color capture for this gameplay frame.
+                HudlessUi.BeginGameplayCamera();
                 if(id!=lastQueuedCamera)
                 {
                     lastQueuedCamera=id;
@@ -189,6 +191,7 @@ namespace TGFrameGeneration
             if(!initialized) return;
             RenderPipelineManager.beginCameraRendering-=beginHandler;
             RenderPipelineManager.endCameraRendering-=endHandler;
+            HudlessUi.Reset();
             // Unity copies the command buffer when executing it. Native callback
             // pointers remain valid because TGFG.Native is process-pinned.
             boundary?.Release(); cameraBegin?.Release(); cameraEnd?.Release();

@@ -59,7 +59,14 @@ struct TGFG_HdrpInputs {
     uint32_t renderWidth, renderHeight; // valid region from (0,0): HDCamera.actualWidth/actualHeight
     float jitterX, jitterY;             // HDCamera.taaJitter.xy, in render pixels
 };
+// HDRP AfterPostProcess color, still owned by HDRP until render event 4 consumes it.
+struct TGFG_Hudless {
+    uint32_t size, abi, frameId, flags; // 1 flip Y; 2 linear nits; 4 Rec2020 (otherwise Rec709); 8 sRGB SRV
+    uint64_t color;
+    uint32_t width, height; // valid viewport from (0,0), not the RTHandle allocation size
+};
 #pragma pack(pop)
+static_assert(sizeof(TGFG_Hudless)==32, "HUD-less ABI");
 static_assert(sizeof(TGFG_Request)==48, "request ABI");
 static_assert(sizeof(TGFG_Status)==188, "status ABI");
 static_assert(sizeof(TGFG_Camera)==416, "camera ABI");
@@ -71,7 +78,14 @@ TGFG_EXPORT int TGFG_CALL TGFG_BeginSimulation(uint32_t frameId);
 TGFG_EXPORT int TGFG_CALL TGFG_EndSimulation(uint32_t frameId);
 TGFG_EXPORT int TGFG_CALL TGFG_SetCamera(const TGFG_Camera*);
 TGFG_EXPORT int TGFG_CALL TGFG_SetHdrpInputs(const TGFG_HdrpInputs*);
+TGFG_EXPORT int TGFG_CALL TGFG_SetHudless(const TGFG_Hudless*);
 TGFG_EXPORT void* TGFG_CALL TGFG_GetRenderEvent();
 // Optional game/RenoDX integration point. Must run on the immediate render
 // context after final scene effects and before HUD, for this exact frame.
 TGFG_EXPORT int TGFG_CALL TGFG_CaptureHudlessD3D11(uint32_t frameId, void* context, void* colorResource);
+// Enable verification and use of the AfterPostProcess capture supplied at render event 4.
+TGFG_EXPORT int TGFG_CALL TGFG_SetHudlessCapture(uint32_t enabled);
+// Troubleshooting overlays and checks of the frame generation SDKs, from the plugin's advanced config.
+// Bits: 1 tear lines, 2 reset indicators, 4 debug view, 8 pacing lines, 16 the SDK's input checker (FSR),
+// 32 one three-frame color/depth/motion capture after verified HUD separation and camera movement.
+TGFG_EXPORT int TGFG_CALL TGFG_SetDebugFlags(uint32_t flags);

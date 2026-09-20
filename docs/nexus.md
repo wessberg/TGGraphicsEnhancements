@@ -10,6 +10,12 @@ Again, it's [i]native[/i] frame generation that generates frames based on the ga
 
 And, it is fully compatible with both RenoDX HDR and RenoDX DLSS 5!
 
+[size=4][b]Frame generation before the HUD[/b][/size]
+
+DLSS, FSR and XeSS generate frames from the scene captured before the overlay HUD is drawn. The HUD stays separate from scene interpolation, so its text and icons stay stable as you move the camera.
+
+The FSR HUD and first-person hand flicker is now fixed in the tested Mono setups. This has also been tested with ReShade, RenoDX HDR and RenoDX DLSS 5, with and without upscaling, and with the other upscalers available in the tested setup.
+
 [size=4][b]Part of the game's own graphics settings[/b][/size]
 
 All options live in the game's own [i]Video[/i] settings, right below the upscaler. The menu only offers what your graphics card supports, and rows only show up when they apply to your current choices.
@@ -18,7 +24,7 @@ All options live in the game's own [i]Video[/i] settings, right below the upscal
 [*][b]Frame Generation:[/b] Off, DLSS, FSR or XeSS, whichever your card supports.[/*]
 [*][b]Frame Multiplier:[/b] How many frames you see per rendered frame. Up to 6x with DLSS on RTX 50 cards and up to 4x with XeSS on Intel Arc cards. FSR, and XeSS on other cards, add one generated frame per rendered frame (2x). The mod asks each technology what your card supports.[/*]
 [*][b]Frame Generation Mode:[/b] With DLSS on RTX 50 cards, choose [i]Fixed[/i] for a constant multiplier or [i]Dynamic[/i], which picks the number of generated frames each frame to reach your [i]Target Framerate[/i].[/*]
-[*][b]Low Latency:[/b] NVIDIA Reflex (with or without Boost), AMD Anti-Lag 2 or Intel XeLL, whichever your card supports. Generating frames adds a little input delay, so low latency can't be turned off while frame generation is on. DLSS always uses Reflex, and XeSS always uses XeLL.[/*]
+[*][b]Low Latency:[/b] NVIDIA Reflex (with or without Boost), AMD Anti-Lag 2 or Intel XeLL, whichever your card supports. DLSS always uses Reflex, and XeSS always uses XeLL. FSR also lets you leave low latency Off.[/*]
 [/list]
 
 If you use [i]FoA Mod Manager[/i], it shows the same options with the same choices, and a change in one place shows up in the other.
@@ -36,6 +42,8 @@ I'm also looking into a companion mod that adds FSR and XeSS upscaling to the ga
 [*]Works with ReShade.[/*]
 [*]Works with FoA Mod Manager (see above). Avalon Mod Manager doesn't list the mod, since its options are in the Video settings.[/*]
 [/list]
+
+The latest HUD and hand fixes have been verified on the Mono branch with an RTX 5080. The standard IL2CPP build also has a successful reporter retest after fixing an Options-menu crash with upscaling active; the broader compatibility coverage above was tested on Mono.
 
 [size=4][b]Installation[/b][/size]
 
@@ -99,7 +107,7 @@ Frame generation pauses in menus and while the cursor is visible. You can press 
 
 [list]
 [*]Frame generation works best when the game already runs well before generation. AMD recommends at least 60 fps before frame generation for FSR.[/*]
-[*]The game's HUD is part of the picture that gets generated, so fast-moving HUD elements can smear a little on generated frames, depending on the base framerate.[/*]
+[*]HUD separation works with the tested ReShade/RenoDX setup. Other effects that change most of the image after the scene capture may prevent it; the mod checks for this and reports it in the native log.[/*]
 [*]Your settings are saved in [b]BepInEx/config/com.wessberg.tgframegeneration.cfg[/b].[/*]
 [*]If something doesn't work, please include [b]BepInEx/TGFrameGeneration/Autoload.log[/b] and [b]BepInEx/TGFrameGeneration/Native/TGFG.Native.log[/b] when you report it.[/*]
 [/list]

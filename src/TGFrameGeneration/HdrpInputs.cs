@@ -38,6 +38,7 @@ namespace TGFrameGeneration
         // ID: under IL2CPP every property read returns a new wrapper object for the same texture.
         private static readonly Dictionary<int, Cached> pointers = new Dictionary<int, Cached>();
         private static int cachedScreenWidth, cachedScreenHeight, lastResult = int.MinValue;
+        private static int lastMotionFlags = -1;
         internal static bool Available { get; private set; }
         internal static string Detail { get; private set; } = "Not installed.";
         internal static ulong Packets { get; private set; }
@@ -83,6 +84,17 @@ namespace TGFrameGeneration
                 if (bridge == null || !bridge.CanSetHdrpInputs || Session.Settings.FrameGeneration == FrameGenerationSetting.Off) return;
                 var hd = ctx.hdCamera;
                 if (hd == null || !FrameBridge.GameplayFrame(hd.camera, out uint frameId)) return;
+                if (Session.Settings.FrameGeneration != FrameGenerationSetting.Off)
+                {
+                    int motionFlags = (hd.frameSettings.IsEnabled(FrameSettingsField.MotionVectors) ? 1 : 0) |
+                        (hd.frameSettings.IsEnabled(FrameSettingsField.ObjectMotionVectors) ? 2 : 0);
+                    if (motionFlags != lastMotionFlags)
+                    {
+                        lastMotionFlags = motionFlags;
+                        Session.Log.LogInfo("FG HDRP motion passes: camera=" + ((motionFlags & 1) != 0) +
+                            ", objects=" + ((motionFlags & 2) != 0));
+                    }
+                }
                 if (!hd.frameSettings.IsEnabled(FrameSettingsField.MotionVectors)) { Report(-10, "HDRP renders no motion vectors for the gameplay camera."); return; }
                 if (Screen.width != cachedScreenWidth || Screen.height != cachedScreenHeight)
                 {
@@ -112,7 +124,7 @@ namespace TGFrameGeneration
                 Session.Log.LogError("HDRP inputs disabled: " + ex);
             }
         }
-        private static IntPtr Pointer(RTHandle handle)
+        internal static IntPtr Pointer(RTHandle handle)
         {
             var rt = handle?.rt;
             if (rt == null) return IntPtr.Zero;

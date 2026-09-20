@@ -2,6 +2,9 @@
 #include "dx11_bridge.hpp"
 #include "fg_backends.hpp"
 #include "interop_shader.hpp"
+#include "fsr_input_capture.hpp"
+#include "renodx_final_pass.hpp"
+#include "d3d11_draw_observer.hpp"
 #include <d3dcompiler.h>
 #include <filesystem>
 #include <array>
@@ -39,6 +42,15 @@ bool same_object(IUnknown* a,IUnknown* b) {
 // forward private data to the context they wrap, so the tag still identifies the real one.
 // {7C1B5F2E-3D4A-4C61-9F7B-2A6E1D0C9B41}
 const GUID kImmediateContextTag={0x7c1b5f2e,0x3d4a,0x4c61,{0x9f,0x7b,0x2a,0x6e,0x1d,0x0c,0x9b,0x41}};
+const GUID kRenoFinalTag={0xe3fa3158,0x28fa,0x4fa2,{0x94,0xd0,0x7a,0x11,0xce,0x0a,0xa8,0xc7}};
+using CreatePixelShaderFn=HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*,const void*,SIZE_T,ID3D11ClassLinkage*,ID3D11PixelShader**);
+CreatePixelShaderFn realCreatePixelShader=nullptr;
+std::atomic<bool> renoPending{false};
+std::atomic<bool> renoDrawSeen{false};
+std::array<std::atomic<uint64_t>,D3D11DrawObserver::Count> renoDrawCalls{};
+thread_local bool replayingReno=false;
+HRESULT STDMETHODCALLTYPE reno_create_pixel_shader(ID3D11Device*,const void*,SIZE_T,ID3D11ClassLinkage*,ID3D11PixelShader**);
+void reno_after_draw(ID3D11DeviceContext*,D3D11DrawObserver::Call) noexcept;
 struct SharedTexture {
     ComPtr<ID3D11Texture2D> d11;
     ComPtr<ID3D12Resource> d12;
@@ -68,9 +80,13 @@ struct SharedTexture {
     }
     bool matches(UINT w,UINT h,DXGI_FORMAT f)const{return d11 && width==w && height==h && format==f;}
 };
-struct ColorBuffer { SharedTexture source,encoded; };
+struct ColorBuffer {
+    SharedTexture source,encoded;
+    ComPtr<ID3D11ShaderResourceView> compareSrv; // source read as UNORM, like the HUD-less copy of it
+};
 struct InputSlot {
     uint32_t id=0;bool occupied=false,valid=false,hudlessValid=false;
+    bool flipY=false; // FSR reads presentation-oriented inputs; SL/XeSS retain their matrix-described inputs
     SharedTexture depth,motion,hudless;
     sl::Constants constants{};
 };
@@ -81,9 +97,11 @@ struct ContextScope {
     }
     ~ContextScope() {
         // Avoid retaining game input resources in the reusable scratch state.
-        ID3D11ShaderResourceView* emptySRV=nullptr;ID3D11UnorderedAccessView* emptyUAV=nullptr;
-        context->CSSetShaderResources(0,1,&emptySRV);context->PSSetShaderResources(0,1,&emptySRV);
+        ID3D11ShaderResourceView* emptySRV[3]={nullptr,nullptr,nullptr};ID3D11UnorderedAccessView* emptyUAV=nullptr;
+        context->CSSetShaderResources(0,3,emptySRV);context->PSSetShaderResources(0,1,emptySRV);
         context->CSSetUnorderedAccessViews(0,1,&emptyUAV,nullptr);
+        ID3D11Buffer* emptyBuffer=nullptr;ID3D11SamplerState* emptySampler=nullptr;
+        context->PSSetConstantBuffers(13,1,&emptyBuffer);context->PSSetSamplers(0,1,&emptySampler);
         context->OMSetRenderTargets(0,nullptr,nullptr);
         context->SwapDeviceContextState(game.Get(),nullptr);
     }
@@ -131,9 +149,26 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     std::array<uint64_t,3> allocatorRetired_{};
     std::vector<ColorBuffer> colors_;
     std::array<InputSlot,3> inputs_;
-    ComPtr<ID3D11ComputeShader> depthCS_,motionCS_;
-    ComPtr<ID3D11VertexShader> colorVS_;
-    ComPtr<ID3D11PixelShader> hdrPS_;
+    FsrInputCapture inputCapture_;
+    bool renoReplay_=false;
+    uint32_t renoFrameId_=0;
+    uint64_t renoReplays_=0;
+    uint32_t renoSkipReasons_=0;
+    uint64_t renoLastDiagnostic_=0;
+    SharedTexture renoRaw_,renoOutput_; // D3D11 intermediate images; never submitted to FG
+    ComPtr<ID3D11ComputeShader> depthCS_,motionCS_,depthFlipCS_,motionFlipCS_,hudCheckCS_;
+    // HUD-less verification: one counter, copied to a small staging ring and read two presents later.
+    ComPtr<ID3D11Buffer> hudCounter_;
+    ComPtr<ID3D11UnorderedAccessView> hudCounterUAV_;
+    std::array<ComPtr<ID3D11Buffer>,3> hudStaging_;
+    std::array<uint32_t,3> hudStagingSamples_{};
+    size_t hudStagingIndex_=0;
+    // The previously presented frame, kept only to tell a stale capture from a fresh one.
+    ComPtr<ID3D11Texture2D> previous_;
+    ComPtr<ID3D11ShaderResourceView> previousSrv_;
+    UINT previousWidth_=0,previousHeight_=0;DXGI_FORMAT previousFormat_=DXGI_FORMAT_UNKNOWN;bool previousValid_=false;
+    ComPtr<ID3D11VertexShader> colorVS_,renoVS_;
+    ComPtr<ID3D11PixelShader> hdrPS_,hudColorPS_;
     ComPtr<ID3D11Buffer> copyCB_;
     ComPtr<ID3D11RasterizerState> raster_;
     ComPtr<ID3D11DepthStencilState> noDepth_;
@@ -176,11 +211,28 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         check(d11_->CreateComputeShader(d->GetBufferPointer(),d->GetBufferSize(),nullptr,&depthCS_),"Create depth conversion shader");
         auto m=compile("TGFG_MOTION","main","cs_5_0");
         check(d11_->CreateComputeShader(m->GetBufferPointer(),m->GetBufferSize(),nullptr,&motionCS_),"Create motion conversion shader");
+        auto df=compile("TGFG_DEPTH_FLIP","main","cs_5_0"),mf=compile("TGFG_MOTION_FLIP","main","cs_5_0");
+        check(d11_->CreateComputeShader(df->GetBufferPointer(),df->GetBufferSize(),nullptr,&depthFlipCS_),"Create FSR depth orientation shader");
+        check(d11_->CreateComputeShader(mf->GetBufferPointer(),mf->GetBufferSize(),nullptr,&motionFlipCS_),"Create FSR motion orientation shader");
         auto vs=compile("TGFG_HDR","vsMain","vs_5_0"),ps=compile("TGFG_HDR","psMain","ps_5_0");
         check(d11_->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,&colorVS_),"Create conversion VS");
+        auto rvs=compile("TGFG_HDR","vsReno","vs_5_0");
+        check(d11_->CreateVertexShader(rvs->GetBufferPointer(),rvs->GetBufferSize(),nullptr,&renoVS_),"Create RenoDX replay VS");
         check(d11_->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,&hdrPS_),"Create scRGB-to-HDR10 PS");
+        auto hp=compile("TGFG_HUDCOLOR","psMain","ps_5_0");
+        check(d11_->CreatePixelShader(hp->GetBufferPointer(),hp->GetBufferSize(),nullptr,&hudColorPS_),"Create HDRP HUD-less color PS");
+        auto hc=compile("TGFG_HUDCHECK","main","cs_5_0");
+        check(d11_->CreateComputeShader(hc->GetBufferPointer(),hc->GetBufferSize(),nullptr,&hudCheckCS_),"Create HUD-less comparison shader");
         D3D11_BUFFER_DESC cb{};cb.ByteWidth=16;cb.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
         check(d11_->CreateBuffer(&cb,nullptr,&copyCB_),"Create copy constants");
+        // The comparison result is a single counter: the bridge's only CPU readback, never an image.
+        D3D11_BUFFER_DESC counter{};counter.ByteWidth=16;counter.Usage=D3D11_USAGE_DEFAULT;counter.BindFlags=D3D11_BIND_UNORDERED_ACCESS;
+        counter.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;counter.StructureByteStride=4;
+        check(d11_->CreateBuffer(&counter,nullptr,&hudCounter_),"Create HUD-less comparison counter");
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};uav.Format=DXGI_FORMAT_UNKNOWN;uav.ViewDimension=D3D11_UAV_DIMENSION_BUFFER;uav.Buffer.NumElements=4;
+        check(d11_->CreateUnorderedAccessView(hudCounter_.Get(),&uav,&hudCounterUAV_),"Create HUD-less comparison counter view");
+        D3D11_BUFFER_DESC staging{};staging.ByteWidth=16;staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        for(auto& buffer:hudStaging_) check(d11_->CreateBuffer(&staging,nullptr,&buffer),"Create HUD-less comparison readback");
         D3D11_RASTERIZER_DESC raster{};raster.FillMode=D3D11_FILL_SOLID;raster.CullMode=D3D11_CULL_NONE;raster.DepthClipEnable=TRUE;
         check(d11_->CreateRasterizerState(&raster,&raster_),"Create conversion rasterizer");
         D3D11_DEPTH_STENCIL_DESC depth{};depth.DepthEnable=FALSE;depth.StencilEnable=FALSE;
@@ -231,7 +283,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         c11_->CSSetShaderResources(0,1,&source);c11_->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
         c11_->Dispatch((rect.width+7)/8,(rect.height+7)/8,1);
     }
-    void encode_hdr(ID3D11ShaderResourceView* source,SharedTexture& target) {
+    void encode_hdr(ID3D11ShaderResourceView* source,SharedTexture& target,const uint32_t* hudParams=nullptr) {
         ContextScope scope(c11_.Get(),scratch_.Get());
         auto* rtv=target.rtv.Get();c11_->OMSetRenderTargets(1,&rtv,nullptr);
         c11_->OMSetBlendState(nullptr,nullptr,UINT_MAX);c11_->OMSetDepthStencilState(noDepth_.Get(),0);
@@ -240,7 +292,11 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         c11_->IASetInputLayout(nullptr);c11_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         c11_->VSSetShader(colorVS_.Get(),nullptr,0);c11_->GSSetShader(nullptr,nullptr,0);
         c11_->HSSetShader(nullptr,nullptr,0);c11_->DSSetShader(nullptr,nullptr,0);
-        c11_->PSSetShader(hdrPS_.Get(),nullptr,0);c11_->PSSetShaderResources(0,1,&source);c11_->Draw(3,0);
+        if(hudParams) {
+            c11_->UpdateSubresource(copyCB_.Get(),0,nullptr,hudParams,0,0);
+            auto* cb=copyCB_.Get();c11_->PSSetConstantBuffers(0,1,&cb);
+        }
+        c11_->PSSetShader(hudParams?hudColorPS_.Get():hdrPS_.Get(),nullptr,0);c11_->PSSetShaderResources(0,1,&source);c11_->Draw(3,0);
     }
     std::vector<ColorBuffer> make_colors(const DXGI_SWAP_CHAIN_DESC1& d) {
         std::vector<ColorBuffer> colors(virtual_buffer_count(d.BufferCount,d.SwapEffect));
@@ -248,6 +304,11 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             c.source=SharedTexture::make(d11_.Get(),state().device.Get(),d.Width,d.Height,d.Format,D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE);
             if(d.Format==DXGI_FORMAT_R16G16B16A16_FLOAT)
                 c.encoded=SharedTexture::make(d11_.Get(),state().device.Get(),d.Width,d.Height,DXGI_FORMAT_R10G10B10A2_UNORM,D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE);
+            // An sRGB-typed source would read back linearised; the HUD-less copy is UNORM, so compare as UNORM.
+            if(DXGI_FORMAT(unorm_format(d.Format))!=d.Format) {
+                D3D11_SHADER_RESOURCE_VIEW_DESC view{};view.Format=DXGI_FORMAT(unorm_format(d.Format));view.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;view.Texture2D.MipLevels=1;
+                check(d11_->CreateShaderResourceView(c.source.d11.Get(),&view,&c.compareSrv),"Create HUD-less comparison SRV");
+            } else c.compareSrv=c.source.srv;
         }
         return colors;
     }
@@ -258,6 +319,23 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(!(support&DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT)) throw DxError(DXGI_ERROR_UNSUPPORTED,"Output does not support requested color space; no silent HDR-to-SDR fallback");
         check(output_->SetColorSpace1(out),"Set presentation color space");
         state().status.outputColorSpace=out;
+        log_display_luminance(out);
+    }
+    // What FSR uses to turn the presented frame back into linear light: for PQ it scales by
+    // 10000/maxLuminance, so this range decides the whole range its comparisons work in. It comes from
+    // the game's HDR metadata when it sets any, and otherwise from the display. DLSS-G and XeSS are
+    // never given it, which makes it the one colour input only FSR depends on.
+    void log_display_luminance(DXGI_COLOR_SPACE_TYPE space) {
+        std::ostringstream line;
+        line<<"Presentation color space "<<uint32_t(space)<<(space==12?" (HDR10 PQ)":space==1?" (linear scRGB)":" (SDR sRGB)");
+        ComPtr<IDXGIOutput> output; ComPtr<IDXGIOutput6> output6; DXGI_OUTPUT_DESC1 desc{};
+        if(SUCCEEDED(output_->GetContainingOutput(&output)) && SUCCEEDED(output.As(&output6)) && SUCCEEDED(output6->GetDesc1(&desc))) {
+            line<<"; display reports "<<desc.MinLuminance<<" to "<<desc.MaxLuminance<<" nits ("
+                <<desc.MaxFullFrameLuminance<<" full frame), color space "<<uint32_t(desc.ColorSpace)<<", "<<desc.BitsPerColor<<" bits";
+            if(space==12 && desc.MaxLuminance<=0)
+                line<<". The display reports no peak luminance, so AMD FSR falls back to whatever the game's HDR metadata says";
+        } else line<<"; the display's luminance range could not be read";
+        log(line.str());
     }
     void tag_inputs(InputSlot& slot,Frame& frame) {
         auto& s=state();SLGuard guard;
@@ -272,21 +350,22 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         sl::Resource m(sl::ResourceType::eTex2d,slot.motion.d12.Get(),D3D12_RESOURCE_STATE_COMMON);
         sl::Resource h(sl::ResourceType::eTex2d,slot.hudless.d12.Get(),D3D12_RESOURCE_STATE_COMMON);
         sl::Extent he{0,0,clientDesc_.Width,clientDesc_.Height};
+        const bool hudless=slot.hudlessValid && s.hudlessOk; // verified against the presented frames first
         sl::ResourceTag tags[]={
             {&d,sl::kBufferTypeDepth,sl::ResourceLifecycle::eValidUntilPresent,&de},
             {&m,sl::kBufferTypeMotionVectors,sl::ResourceLifecycle::eValidUntilPresent,&me},
-            {slot.hudlessValid?&h:nullptr,sl::kBufferTypeHUDLessColor,sl::ResourceLifecycle::eValidUntilPresent,&he},
+            {hudless?&h:nullptr,sl::kBufferTypeHUDLessColor,sl::ResourceLifecycle::eValidUntilPresent,&he},
             {nullptr,sl::kBufferTypeUIColorAndAlpha,sl::ResourceLifecycle::eValidUntilPresent}};
         // The D3D12 queue already waits on the D3D11 producer signal. Inputs are
         // not reused by D3D11 until the consumer handoff at the end of Present.
         r=s.sl.slSetTagForFrame(*frame.token,s.viewport,tags,4,nullptr);
         frame.inputsSubmitted=r==sl::Result::eOk;
-        if(r==sl::Result::eOk) ++s.diag.tagged;
+        if(r==sl::Result::eOk) { ++s.diag.tagged; if(hudless) ++s.diag.hudlessTagged; }
         else {
             s.status.lastSetOptionsResult=int32_t(r);++s.diag.tagFailed;
             if(!s.diag.tagFailLogged){s.diag.tagFailLogged=true;log("slSetTagForFrame returned "+std::to_string(int(r)));}
         }
-        if(slot.hudlessValid)s.status.bridgeFlags|=16u;else s.status.bridgeFlags&=~16u;
+        if(hudless && r==sl::Result::eOk)s.status.bridgeFlags|=16u;else s.status.bridgeFlags&=~16u;
     }
     static void create_native_device(IDXGIAdapter* adapter) {
         const auto path=std::filesystem::path(system_directory())/L"d3d12.dll";
@@ -381,7 +460,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         bool have=false;
         if(frame && frame->inputs) {
             auto& slot=inputs_[renderFrameId%inputs_.size()];
-            if(slot.occupied && slot.valid && slot.id==renderFrameId) {
+            if(slot.occupied && slot.valid && slot.id==renderFrameId && slot.flipY==(s.output==Output::FSR)) {
                 in.depth=slot.depth.d12.Get(); in.motion=slot.motion.d12.Get();
                 in.depthWidth=slot.depth.width; in.depthHeight=slot.depth.height;
                 in.motionWidth=slot.motion.width; in.motionHeight=slot.motion.height;
@@ -390,6 +469,9 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
                 in.motionScaleX=slot.constants.mvecScale.x*float(slot.motion.width);
                 in.motionScaleY=slot.constants.mvecScale.y*float(slot.motion.height);
                 in.reset=slot.constants.reset==sl::eTrue; in.camera=&frame->camera; in.frameTimeMs=frameMs;
+                if(slot.hudlessValid && s.hudlessOk) { // verified against the presented frames first
+                    in.hudless=slot.hudless.d12.Get(); in.hudlessWidth=slot.hudless.width; in.hudlessHeight=slot.hudless.height;
+                }
                 have=true;
             }
         }
@@ -400,8 +482,92 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         const bool enable=why==Reason::Ready;
         const bool recorded=generator_->record(cmd,presentId,enable?&in:nullptr,generated_frames(s.request,maxGenerated));
         if(enable && !recorded) { why=Reason::BackendFailed; if(frame) frame->inputsSubmitted=false; }
-        if(enable && recorded) ++s.diag.tagged;
+        if(enable && recorded) { ++s.diag.tagged; if(in.hudless) ++s.diag.hudlessTagged; }
+        if(enable && recorded && in.hudless) s.status.bridgeFlags|=16u; else s.status.bridgeFlags&=~16u;
         note_generation(frame,why,enable && recorded);
+    }
+    // Compares the frame about to be presented with the HUD-less capture at a sparse grid, on the
+    // D3D11 context before the hand-off. Only HUD-sized regions may differ: something that redraws the
+    // frame after the camera (a post-process injector at Present) or a stale copy differs everywhere,
+    // and the captures are then withheld from the technologies (note_hudless_difference).
+    void verify_hudless(InputSlot& slot,uint32_t id,ColorBuffer& color,SharedTexture* final) {
+        if(!slot.occupied || slot.id!=id || !slot.hudlessValid || !slot.hudless.matches(final->width,final->height,final->format)) return;
+        constexpr UINT stride=4;
+        const UINT sx=final->width/stride,sy=final->height/stride;
+        if(!sx || !sy) return;
+        // The previously presented frame, as UNORM like the HUD-less copy (CopyResource accepts the sRGB view).
+        const auto compareFormat=DXGI_FORMAT(unorm_format(final->format));
+        if(!previous_ || previousWidth_!=final->width || previousHeight_!=final->height || previousFormat_!=compareFormat) {
+            D3D11_TEXTURE2D_DESC desc{};desc.Width=final->width;desc.Height=final->height;desc.Format=compareFormat;
+            desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+            previous_.Reset();previousSrv_.Reset();
+            check(d11_->CreateTexture2D(&desc,nullptr,&previous_),"Create previous-frame texture");
+            check(d11_->CreateShaderResourceView(previous_.Get(),nullptr,&previousSrv_),"Create previous-frame SRV");
+            previousWidth_=final->width;previousHeight_=final->height;previousFormat_=compareFormat;previousValid_=false;
+        }
+        if(previousValid_) {
+            ContextScope scope(c11_.Get(),scratch_.Get());
+            const UINT zero[4]{};c11_->ClearUnorderedAccessViewUint(hudCounterUAV_.Get(),zero);
+            const uint32_t constants[]={stride,0,sx,sy};
+            c11_->UpdateSubresource(copyCB_.Get(),0,nullptr,constants,0,0);
+            ID3D11ShaderResourceView* views[]={final==&color.encoded?color.encoded.srv.Get():color.compareSrv.Get(),slot.hudless.srv.Get(),previousSrv_.Get()};
+            auto* cb=copyCB_.Get();auto* uav=hudCounterUAV_.Get();
+            c11_->CSSetShader(hudCheckCS_.Get(),nullptr,0);c11_->CSSetConstantBuffers(0,1,&cb);
+            c11_->CSSetShaderResources(0,3,views);c11_->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
+            c11_->Dispatch((sx+7)/8,(sy+7)/8,1);
+            c11_->CopyResource(hudStaging_[hudStagingIndex_].Get(),hudCounter_.Get());
+            hudStagingSamples_[hudStagingIndex_]=sx*sy;
+        }
+        c11_->CopyResource(previous_.Get(),final->d11.Get());previousValid_=true;
+        // The result submitted two presents ago; one still in flight is skipped, never waited for.
+        const size_t oldest=(hudStagingIndex_+1)%hudStaging_.size();
+        if(hudStagingSamples_[oldest]) {
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            const HRESULT hr=c11_->Map(hudStaging_[oldest].Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&mapped);
+            if(SUCCEEDED(hr)) {
+                const auto* counters=static_cast<const uint32_t*>(mapped.pData);
+                const uint32_t differing=counters[0],changed=counters[1],moving=counters[2];
+                c11_->Unmap(hudStaging_[oldest].Get(),0);
+                note_hudless_difference(differing,changed,moving,hudStagingSamples_[oldest]);
+            }
+            if(hr!=DXGI_ERROR_WAS_STILL_DRAWING) hudStagingSamples_[oldest]=0;
+        }
+        hudStagingIndex_=oldest;
+    }
+    void capture_fsr_inputs(float frameMs) {
+        auto& s=state();
+        const bool armed=(s.debugFlags&32u)!=0;
+        if(!armed) { inputCapture_.tick(d11_.Get(),c11_.Get(),false,0,nullptr,nullptr,nullptr,"");return; }
+        if(!inputCapture_.wants_frame() && !inputCapture_.started()) return;
+        InputSlot* slot=nullptr;
+        std::ostringstream metadata;metadata.precision(9);
+        auto* frame=haveRenderFrame?s.frames.find(renderFrameId):nullptr;
+        if(armed && inputCapture_.wants_frame() && s.output==Output::FSR &&
+           s.request.mode && !s.request.suspensionMask && s.status.lastAcceptedMode &&
+           frame && frame->inputs && !frame->camera.resetHistory && s.hudlessOk) {
+            auto& candidate=inputs_[renderFrameId%inputs_.size()];
+            float movement=0.f;
+            for(size_t i=0;i<16;++i)
+                movement=std::max(movement,std::abs(frame->camera.clipToPrev[i]-(i%5==0?1.f:0.f)));
+            if(candidate.occupied && candidate.valid && candidate.id==renderFrameId && candidate.flipY &&
+               candidate.hudlessValid && (inputCapture_.started() || movement>0.001f)) {
+                slot=&candidate;
+                const auto& c=slot->constants;
+                metadata<<"\"frameTimeMs\":"<<frameMs<<",\"ngxInputs\":"<<(s.upscalerSeen && s.lastUpscalerFrame==renderFrameId?"true":"false")
+                    <<",\"ngxFlags\":"<<s.ngxFlags<<",\"outputColorSpace\":"<<s.status.outputColorSpace
+                    <<",\"motionScaleUv\":["<<c.mvecScale.x<<","<<c.mvecScale.y<<"]"
+                    <<",\"jitterPixels\":["<<c.jitterOffset.x<<","<<c.jitterOffset.y<<"]"
+                    <<",\"depthInverted\":"<<(c.depthInverted==sl::eTrue?"true":"false")
+                    <<",\"motionJittered\":"<<(c.motionVectorsJittered==sl::eTrue?"true":"false")
+                    <<",\"near\":"<<frame->camera.nearPlane<<",\"far\":"<<frame->camera.farPlane
+                    <<",\"fovRadians\":"<<frame->camera.fovRadians<<",\"clipToPrevBeforeYFlip\":[";
+                for(size_t i=0;i<16;++i) { if(i) metadata<<",";metadata<<frame->camera.clipToPrev[i]; }
+                metadata<<"]";
+            }
+        }
+        inputCapture_.tick(d11_.Get(),c11_.Get(),armed,slot?slot->id:0,
+            slot?slot->hudless.d11.Get():nullptr,slot?slot->depth.d11.Get():nullptr,
+            slot?slot->motion.d11.Get():nullptr,metadata.str());
     }
     HRESULT present(UINT sync,UINT flags,const DXGI_PRESENT_PARAMETERS* params) {
         SLGuard own; // private D3D12 calls are never rediscovered as game calls
@@ -417,6 +583,14 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(flags&DXGI_PRESENT_DO_NOT_WAIT) return DXGI_ERROR_WAS_STILL_DRAWING;
         if(params && (params->DirtyRectsCount || params->pScrollRect || params->pScrollOffset))
             return DXGI_ERROR_UNSUPPORTED;
+        if(renoReplay_ && renoPending.load(std::memory_order_relaxed) && GetTickCount64()-renoLastDiagnostic_>=5000) {
+            renoLastDiagnostic_=GetTickCount64();
+            std::ostringstream message;
+            message<<"RenoDX replay still pending; observed draw/indexed/instanced/indexedInstanced/indirect/indexedIndirect/commandLists=";
+            for(size_t i=0;i<renoDrawCalls.size();++i)message<<(i?"/":"")<<renoDrawCalls[i].load(std::memory_order_relaxed);
+            message<<"; recognized draw seen="<<renoDrawSeen.load(std::memory_order_relaxed);
+            log(message.str());
+        }
         auto& s=state();
         if(!source_color_supported(clientDesc_.Format,sourceSpace_)) return DXGI_ERROR_UNSUPPORTED;
         const auto want=desired_output();
@@ -434,6 +608,8 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(clientDesc_.Format==DXGI_FORMAT_R16G16B16A16_FLOAT) {
             encode_hdr(color.source.srv.Get(),color.encoded);final=&color.encoded;
         }
+        if(haveRenderFrame && s.hudlessRequested) verify_hudless(inputs_[renderFrameId%inputs_.size()],renderFrameId,color,final);
+        capture_fsr_inputs(frameMs);
         const auto produced=timeline_.next();
         check(c11_->Signal(shared11_.Get(),produced),"Signal D3D11 producer");c11_->Flush();
         check(queue_->Wait(shared12_.Get(),produced),"D3D12 wait for DX11 frame");
@@ -458,7 +634,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(generator_) record_generation(cmd,frame,presentId,frameMs);
         else if(frame && frame->inputs) {
             auto& slot=inputs_[renderFrameId%inputs_.size()];
-            if(s.dlssReady && frame->token && slot.occupied && slot.valid && slot.id==renderFrameId) tag_inputs(slot,*frame);
+            if(s.dlssReady && frame->token && slot.occupied && slot.valid && slot.id==renderFrameId && !slot.flipY) tag_inputs(slot,*frame);
             else frame->inputsSubmitted=false;
         }
         check(cmd->Close(),"Close bridge command list");
@@ -545,6 +721,13 @@ public:
         ComPtr<ID3D11DeviceContext> context;game->GetImmediateContext(&context);
         check(context.As(&c11_),"Need ID3D11DeviceContext4 for GPU Signal/Wait");
         {void* self=this;check(c11_->SetPrivateData(kImmediateContextTag,sizeof(self),&self),"Tag the immediate context");}
+        if(GetModuleHandleW(L"renodx-unityengine.addon64")) {
+            auto** dv=*reinterpret_cast<void***>(d11_.Get());
+            renoReplay_=add_hook(dv[15],reinterpret_cast<void*>(&reno_create_pixel_shader),reinterpret_cast<void**>(&realCreatePixelShader)) &&
+                D3D11DrawObserver::install(c11_.Get(),add_hook,reno_after_draw);
+            log(renoReplay_?"RenoDX Unity HUD-less final-pass replay installed; awaiting a recognized output shader":
+                "RenoDX Unity HUD-less final-pass hooks unavailable");
+        }
         const auto level=game->GetFeatureLevel();D3D_FEATURE_LEVEL chosen{};
         check(d11_->CreateDeviceContextState(0,&level,1,D3D11_SDK_VERSION,__uuidof(ID3D11Device),&chosen,&scratch_),"Create isolated D3D11 pipeline state");
         ComPtr<IDXGIDevice> dxgi;check(game->QueryInterface(IID_PPV_ARGS(&dxgi)),"Get game DXGI device");
@@ -602,6 +785,7 @@ public:
             ", XeSS "+((s.status.backendsAvailable&8u)?"up to "+std::to_string(s.status.xessMaxGenerated)+" generated":std::string("no")));
     }
     ~Dx11Swapchain() {
+        renoPending.store(false,std::memory_order_relaxed);
         std::lock_guard<std::recursive_mutex> lock(state().mutex);SLGuard own;
         if(registered_) {
             if(generator_) generator_->quiesce();
@@ -625,6 +809,59 @@ public:
         void* tag=nullptr; UINT size=sizeof(tag);
         return SUCCEEDED(context->GetPrivateData(kImmediateContextTag,&size,&tag)) && size==sizeof(tag) && tag==this;
     }
+    void replay_reno_final(ID3D11DeviceContext* context,ID3D11PixelShader* shader) {
+        if(!renoReplay_ || !renoPending.load(std::memory_order_relaxed))return;
+        // Report each rejected condition once, without per-draw log spam. A recognized
+        // shader alone does not prove that the replay actually reaches a valid frame.
+        const auto skipped=[this](uint32_t bit,const char* reason) {
+            if(!(renoSkipReasons_&bit)) {
+                renoSkipReasons_|=bit;
+                log(std::string("RenoDX HUD-less final pass skipped: ")+reason);
+            }
+        };
+        if(!same_context(context)) {skipped(1,"different immediate context");return;}
+        auto& s=state();
+        auto& slot=inputs_[renoFrameId_%inputs_.size()];
+        if(!s.hudlessRequested || !haveRenderFrame || renderFrameId!=renoFrameId_ ||
+           !slot.occupied || !slot.valid || slot.id!=renoFrameId_) {skipped(2,"no matching current frame inputs");return;}
+        ComPtr<ID3D11RenderTargetView> target;context->OMGetRenderTargets(1,&target,nullptr);
+        if(!target) {skipped(4,"no render target");return;}
+        ComPtr<ID3D11Resource> resource;target->GetResource(&resource);
+        bool backbuffer=false;
+        for(auto& color:colors_)backbuffer|=same_object(resource.Get(),color.source.d11.Get());
+        if(!backbuffer) {skipped(8,"render target is not the source backbuffer");return;}
+        UINT count=1;D3D11_VIEWPORT viewport{};context->RSGetViewports(&count,&viewport);
+        if(count!=1 || viewport.TopLeftX!=0 || viewport.TopLeftY!=0 ||
+           viewport.Width!=float(clientDesc_.Width) || viewport.Height!=float(clientDesc_.Height)) {
+            skipped(16,"viewport does not cover the source backbuffer");return;
+        }
+        ComPtr<ID3D11Buffer> constants;UINT firstConstant=0,numConstants=0;
+        c11_->PSGetConstantBuffers1(13,1,&constants,&firstConstant,&numConstants);
+        ComPtr<ID3D11SamplerState> sampler;context->PSGetSamplers(0,1,&sampler);
+        if(!constants || !numConstants || !sampler) {skipped(32,"missing live b13 constants or s0 sampler");return;}
+        // Preserve the game's live constants (including preset, gamma, brightness and
+        // gamut) by binding the exact buffer used by RenoDX's output draw. No CPU readback.
+        ensure(renoOutput_,clientDesc_.Width,clientDesc_.Height,DXGI_FORMAT_R16G16B16A16_FLOAT,
+            D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET);
+        {
+            ContextScope scope(c11_.Get(),scratch_.Get());
+            auto* rtv=renoOutput_.rtv.Get();c11_->OMSetRenderTargets(1,&rtv,nullptr);
+            c11_->OMSetBlendState(nullptr,nullptr,UINT_MAX);c11_->OMSetDepthStencilState(noDepth_.Get(),0);
+            c11_->RSSetViewports(1,&viewport);c11_->RSSetState(raster_.Get());
+            c11_->IASetInputLayout(nullptr);c11_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            c11_->VSSetShader(renoVS_.Get(),nullptr,0);c11_->GSSetShader(nullptr,nullptr,0);
+            c11_->HSSetShader(nullptr,nullptr,0);c11_->DSSetShader(nullptr,nullptr,0);
+            c11_->PSSetShader(shader,nullptr,0);
+            auto* cb=constants.Get();c11_->PSSetConstantBuffers1(13,1,&cb,&firstConstant,&numConstants);
+            auto* smp=sampler.Get();c11_->PSSetSamplers(0,1,&smp);
+            auto* view=renoRaw_.srv.Get();c11_->PSSetShaderResources(0,1,&view);
+            c11_->Draw(3,0);
+        }
+        encode_hdr(renoOutput_.srv.Get(),slot.hudless);
+        slot.hudlessValid=true;renoPending.store(false,std::memory_order_relaxed);
+        if(++renoReplays_==1 || renoReplays_%600==0)
+            log("RenoDX Unity HUD-less final pass replayed "+std::to_string(renoReplays_)+" times; frame "+std::to_string(renoFrameId_));
+    }
     bool capture(uint32_t id,ID3D11DeviceContext* context,ID3D11Resource* depth,ID3D11Resource* motion,
                  RectU de,RectU me,const sl::Constants& constants) {
         if(broken_) return false;
@@ -644,20 +881,98 @@ public:
         // the standard DLSS-G motion format. R32G32_FLOAT is not NT-handle shareable on NVIDIA's D3D11
         // driver (CreateTexture2D returns E_INVALIDARG), which blocked every capture before.
         ensure(slot.motion,me.width,me.height,DXGI_FORMAT_R16G16_FLOAT,D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS);
-        copy_input(dv.Get(),slot.depth,de,depthCS_.Get());copy_input(mv.Get(),slot.motion,me,motionCS_.Get());
-        slot.constants=constants;return true;
+        // HDRP renders into Y-inverted RTs. Its final blit (and our HUD-less color copy) flips
+        // those to display orientation. FSR 3.1 receives FOV/near/far, not the projection matrix,
+        // so it cannot describe that inversion: depth and motion must follow the color here.
+        // Choose the requested output because switching occurs later, in Present. The consumers
+        // reject an orientation mismatch if the request changes again before that Present.
+        slot.flipY=desired_output()==Output::FSR;
+        copy_input(dv.Get(),slot.depth,de,slot.flipY?depthFlipCS_.Get():depthCS_.Get());
+        copy_input(mv.Get(),slot.motion,me,slot.flipY?motionFlipCS_.Get():motionCS_.Get());
+        slot.constants=constants;
+        if(slot.flipY) {
+            slot.constants.mvecScale.y=-slot.constants.mvecScale.y;
+            slot.constants.jitterOffset.y=-slot.constants.jitterOffset.y;
+        }
+        return true;
     }
     void finish(uint32_t id,bool success) {auto& slot=inputs_[id%inputs_.size()];if(slot.occupied&&slot.id==id)slot.valid=success;}
-    int hudless(uint32_t id,ID3D11DeviceContext* context,ID3D11Resource* color) {
-        if(!same_context(context) || !color)return -1;
+    // The frame's HUD-less image, in the client's size and format, copied (scRGB: PQ-encoded) into the
+    // slot's shareable texture, which has the output swapchain's format like the presented frame.
+    int hudless(uint32_t id,ID3D11Texture2D* texture) {
         auto& slot=inputs_[id%inputs_.size()];if(!slot.occupied || slot.id!=id || !slot.valid)return -2;
-        ComPtr<ID3D11Texture2D> texture;check(color->QueryInterface(IID_PPV_ARGS(&texture)),"HUD-less texture type");
         D3D11_TEXTURE2D_DESC d{};texture->GetDesc(&d);
-        if(d.Width!=clientDesc_.Width || d.Height!=clientDesc_.Height || d.Format!=clientDesc_.Format || d.SampleDesc.Count!=1 || d.ArraySize!=1 || d.MipLevels!=1)return -3;
+        if(d.Width!=clientDesc_.Width || d.Height!=clientDesc_.Height || unorm_format(d.Format)!=unorm_format(clientDesc_.Format) ||
+           d.SampleDesc.Count!=1 || d.ArraySize!=1 || d.MipLevels!=1)return -3;
         ensure(slot.hudless,d.Width,d.Height,DXGI_FORMAT(output_format(d.Format)),D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET);
         if(d.Format==DXGI_FORMAT_R16G16B16A16_FLOAT) {
-            ComPtr<ID3D11ShaderResourceView> view;check(d11_->CreateShaderResourceView(texture.Get(),nullptr,&view),"HUD-less SRV");encode_hdr(view.Get(),slot.hudless);
-        } else c11_->CopyResource(slot.hudless.d11.Get(),texture.Get());
+            ComPtr<ID3D11ShaderResourceView> view;check(d11_->CreateShaderResourceView(texture,nullptr,&view),"HUD-less SRV");encode_hdr(view.Get(),slot.hudless);
+        } else c11_->CopyResource(slot.hudless.d11.Get(),texture);
+        slot.hudlessValid=true;return 0;
+    }
+    int hudless(uint32_t id,ID3D11DeviceContext* context,ID3D11Resource* color) {
+        if(!same_context(context) || !color)return -1;
+        ComPtr<ID3D11Texture2D> texture;check(color->QueryInterface(IID_PPV_ARGS(&texture)),"HUD-less texture type");
+        return hudless(id,texture.Get());
+    }
+    // Render event 4 is embedded in HDRP's AfterPostProcess pass, while its color is still alive.
+    // Match the final blit's viewport, Y flip and transfer function before comparing or tagging it.
+    int hudless_frame(const TGFG_Hudless& packet) {
+        if(broken_)return -1;
+        auto& slot=inputs_[packet.frameId%inputs_.size()];
+        if(!slot.occupied || slot.id!=packet.frameId || !slot.valid)return -2;
+        slot.hudlessValid=false;
+        auto* resource=reinterpret_cast<ID3D11Resource*>(uintptr_t(packet.color));
+        ComPtr<ID3D11Device> device;resource->GetDevice(&device);
+        if(!same_object(device.Get(),d11_.Get())) {
+            // ReShade makes resource->GetDevice return its proxy device, whose COM
+            // identity differs from the underlying presentation device. Resolve its
+            // immediate context and use the same forwarded private-data identity as
+            // the working NGX depth/motion capture. An unrelated device still fails.
+            ComPtr<ID3D11DeviceContext> context;
+            if(device)device->GetImmediateContext(&context);
+            if(!same_context(context.Get()))return -4;
+        }
+        ComPtr<ID3D11Texture2D> texture;check(resource->QueryInterface(IID_PPV_ARGS(&texture)),"HDRP color texture type");
+        D3D11_TEXTURE2D_DESC d{};texture->GetDesc(&d);
+        if(packet.width!=clientDesc_.Width || packet.height!=clientDesc_.Height ||
+           !fits({0,0,packet.width,packet.height},d.Width,d.Height) || d.SampleDesc.Count!=1 || d.ArraySize!=1)return -3;
+        const bool pq=output_color_space(clientDesc_.Format,sourceSpace_)==12;
+        if((packet.flags&2u) && !pq)return -5; // don't mistake HDR nits for SDR linear light
+        DXGI_FORMAT format=d.Format;
+        // Unity uses typeless resources with typed views; preserve its sRGB decode when applicable.
+        switch(format) {
+        case DXGI_FORMAT_R16G16B16A16_TYPELESS: format=DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+        case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+        case DXGI_FORMAT_R8G8B8A8_UNORM:
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+            format=(packet.flags&8u)?DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:DXGI_FORMAT_R8G8B8A8_UNORM; break;
+        case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+        case DXGI_FORMAT_B8G8R8A8_UNORM:
+        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+            format=(packet.flags&8u)?DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:DXGI_FORMAT_B8G8R8A8_UNORM; break;
+        case DXGI_FORMAT_R16G16B16A16_FLOAT:
+        case DXGI_FORMAT_R11G11B10_FLOAT: break;
+        default:return -6;
+        }
+        D3D11_SHADER_RESOURCE_VIEW_DESC desc{};desc.Format=format;
+        desc.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;desc.Texture2D.MipLevels=1;
+        ComPtr<ID3D11ShaderResourceView> view;check(d11_->CreateShaderResourceView(resource,&desc,&view),"HDRP color SRV");
+        ensure(slot.hudless,packet.width,packet.height,DXGI_FORMAT(output_format(clientDesc_.Format)),D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET);
+        if(renoReplay_ && pq && !(packet.flags&2u)) {
+            // RenoDX Unity finishes its output conversion during ReShade's final
+            // backbuffer copy, after HDRP's pre-UI capture. Retain scene color until
+            // that draw supplies its actual shader and live settings, then PQ encode.
+            ensure(renoRaw_,packet.width,packet.height,DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET);
+            const uint32_t rawParams[]={packet.flags&1u,4u,packet.width,packet.height};
+            encode_hdr(view.Get(),renoRaw_,rawParams);
+            renoFrameId_=packet.frameId;renoPending.store(true,std::memory_order_relaxed);
+            return 0;
+        }
+        const uint32_t mode=!pq?0u:!(packet.flags&2u)?1u:(packet.flags&4u)?3u:2u;
+        const uint32_t params[]={packet.flags&1u,mode,packet.width,packet.height};
+        encode_hdr(view.Get(),slot.hudless,params);
         slot.hudlessValid=true;return 0;
     }
     // D3D11-facing swapchain methods, with a stable logical buffer zero. Unsupported
@@ -762,10 +1077,58 @@ public:
         return guarded([&]{
             const auto hr=output_->SetHDRMetaData(type,size,data);
             if(SUCCEEDED(hr)) { const auto* bytes=static_cast<const uint8_t*>(data); hdrType_=type; hdrMetadata_.assign(bytes,bytes+(data?size:0)); }
+            // AMD FSR takes its maximum luminance from this when the game sets it, and divides by it.
+            if(type==DXGI_HDR_METADATA_TYPE_HDR10 && data && size>=sizeof(DXGI_HDR_METADATA_HDR10)) {
+                const auto& m=*static_cast<const DXGI_HDR_METADATA_HDR10*>(data);
+                log("The game set HDR10 metadata: mastering luminance "+std::to_string(m.MinMasteringLuminance)+" to "+
+                    std::to_string(m.MaxMasteringLuminance)+" (0.0001 nit / 1 nit units), max content light level "+
+                    std::to_string(m.MaxContentLightLevel)+", frame average "+std::to_string(m.MaxFrameAverageLightLevel)+
+                    ". AMD FSR linearises the frame against the maximum"+
+                    (m.MaxMasteringLuminance==0?"; it is zero, which leaves FSR without a usable range":""));
+            } else if(SUCCEEDED(hr)) log("The game set HDR metadata of type "+std::to_string(uint32_t(type))+", "+std::to_string(size)+" bytes");
             return hr;
         });
     }
 };
+HRESULT STDMETHODCALLTYPE reno_create_pixel_shader(ID3D11Device* device,const void* code,SIZE_T size,
+    ID3D11ClassLinkage* linkage,ID3D11PixelShader** out) {
+    const auto hr=realCreatePixelShader(device,code,size,linkage,out);
+    if(SUCCEEDED(hr) && out && *out && is_renodx_final_pass(code,size)) {
+        const UINT tag=1;const auto tagged=(*out)->SetPrivateData(kRenoFinalTag,sizeof(tag),&tag);
+        log(SUCCEEDED(tagged)?"Recognized RenoDX Unity final-output shader for HUD-less replay":
+            "Recognized RenoDX Unity shader, but attaching its replay tag failed");
+    }
+    return hr;
+}
+void reno_after_draw(ID3D11DeviceContext* context,D3D11DrawObserver::Call call) noexcept {
+    if(replayingReno)return;
+    renoDrawCalls[call.kind].fetch_add(1,std::memory_order_relaxed);
+    // ExecuteCommandList may restore arbitrary old state, so count it for diagnostics
+    // but never infer the executed shader from its post-call pipeline bindings.
+    if(call.kind==D3D11DrawObserver::Execute)return;
+    if(!renoPending.load(std::memory_order_relaxed) && renoDrawSeen.load(std::memory_order_relaxed))return;
+    try {
+        ComPtr<ID3D11PixelShader> shader;context->PSGetShader(&shader,nullptr,nullptr);
+        UINT tag=0,size=sizeof(tag);
+        if(!shader || FAILED(shader->GetPrivateData(kRenoFinalTag,&size,&tag)) || size!=sizeof(tag) || tag!=1)return;
+        if(!renoDrawSeen.exchange(true,std::memory_order_relaxed)) {
+            log("Observed RenoDX final-output draw: kind="+std::to_string(call.kind)+" count="+std::to_string(call.count)+
+                " instances="+std::to_string(call.instances)+" contextType="+std::to_string(context->GetType())+
+                " capturePending="+std::to_string(renoPending.load(std::memory_order_relaxed)));
+        }
+        // Fullscreen copies can use a triangle, quad, indexed mesh, or indirect draw.
+        // The recognized pixel shader and full backbuffer/viewport identify the pass;
+        // the replay uses its own fullscreen triangle, independently of game geometry.
+        if(call.kind<=D3D11DrawObserver::IndexedInstanced && (!call.count || call.instances!=1))return;
+        replayingReno=true;
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        if(active)active->replay_reno_final(context,shader.Get());
+    } catch(const std::exception& e) {
+        renoPending.store(false,std::memory_order_relaxed);
+        log_throttled(std::string("RenoDX HUD-less final-pass replay failed: ")+e.what());
+    } catch(...) {renoPending.store(false,std::memory_order_relaxed);}
+    replayingReno=false;
+}
 } // namespace
 
 bool is_game_window(HWND window,UINT width,UINT height) {
@@ -819,6 +1182,10 @@ void finish_dx11_capture(uint32_t id,bool success) {std::lock_guard<std::recursi
 int capture_dx11_hudless(uint32_t id,ID3D11DeviceContext* context,ID3D11Resource* color) {
     std::lock_guard<std::recursive_mutex> lock(state().mutex);if(!active)return -10;
     try{return active->hudless(id,context,color);}catch(const std::exception& e){log(e.what());return -11;}
+}
+int capture_dx11_hudless_frame(const TGFG_Hudless& packet) {
+    std::lock_guard<std::recursive_mutex> lock(state().mutex);if(!active)return -10;
+    try{return active->hudless_frame(packet);}catch(const std::exception& e){log_throttled(std::string("HUD-less capture failed: ")+e.what());return -11;}
 }
 void shutdown_dx11_bridge() { // Explicit off, no unsafe live DLL unload.
     std::lock_guard<std::recursive_mutex> lock(state().mutex);options_off();

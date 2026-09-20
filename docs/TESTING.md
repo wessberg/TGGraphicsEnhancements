@@ -12,6 +12,88 @@ and runs tests including compilation of the exact embedded HLSL. Preserve the
 first compiler error rather than only the final MSBuild summary if it fails.
 The Linux preparation tests do not establish any of those Windows outcomes.
 
+The Mono Kandra history regression uses the production Harmony hook and the installed
+Harmony runtime, with a stand-in skinning manager (no game launch or GPU):
+
+```powershell
+dotnet build tests/KandraMotionHistory.Tests.csproj -c Release
+$gameRoot = (Get-Content src/TGFrameGeneration/bin/Release/net472/TGFG.GameDir.txt -Raw).Trim()
+& ./tests/bin/Release/net472/KandraMotionHistory.Tests.exe "$gameRoot/BepInEx/core"
+```
+
+It checks all FG backends, consecutive single-camera frames, repeated cameras, separate managers, frame gaps, Off/on,
+copy failure/retry, and unpatch/reinstall. In-game, check the history guard installation
+and `FG Kandra motion history: prevented ...` counters with the minimap camera active.
+Use a fresh F6 capture during a camera turn to verify hand reprojection; these unit checks
+do not establish Unity GPU ordering or that the hand flicker is fixed.
+
+For the IL2CPP guard branch, using the installed IL2CPP game's Harmony runtime:
+
+```powershell
+dotnet build tests/KandraMotionHistory.Tests.csproj -c Release -p:TestRuntime=IL2CPP
+$gameRoot = (Get-Content src/TGFrameGeneration/bin/Release/net6.0/TGFG.GameDir.txt -Raw).Trim()
+dotnet tests/bin/Release/net6.0/KandraMotionHistory.Tests.dll "$gameRoot/BepInEx/core"
+```
+
+This patches a stand-in compute dispatcher with the production prefix/finalizer. Additional
+cases cover native-pointer aliases, live copy-kernel IDs, unrelated/skinning dispatches,
+overlapping kernel IDs, and copy versus skinning failure recovery. It does not load the game's
+native IL2CPP runtime. In game, the installed guard must name `RunComputeKernel`; the inspected
+native render loop bypasses the inlined `RunCopyPrevious` wrapper. Check duplicate-copy counters
+and hand motion visually with FG on and an extra camera active.
+
+For IL2CPP dependent-option visibility routing:
+
+```powershell
+dotnet build tests/Il2CppOptionConditions.Tests.csproj -c Release
+$gameRoot = (Get-Content src/TGFrameGeneration/bin/Release/net6.0/TGFG.GameDir.txt -Raw).Trim()
+dotnet tests/bin/Release/net6.0/Il2CppOptionConditions.Tests.dll "$gameRoot/BepInEx/core"
+```
+
+This uses a stand-in getter and the production Harmony prefix to check owned/unowned
+routing, native-pointer aliases, changing/nested conditions, exception isolation, owner
+retention through GC, clearing, and unpatch/reinstall. It does not run native IL2CPP.
+In game, enable upscaling, open Pause then Options repeatedly, and check both TGFG
+dependent-option hook installation and evaluation messages. Change FG modes and verify
+their dependent rows, Apply/Undo, and returning to gameplay. The reported Options crash
+is not considered resolved solely because these stand-in tests pass.
+
+The `tgfg_hudless_color` test executes the capture shader on D3D11 WARP and compares
+120 output channels against reference SDR/scRGB/HDR encodings and linear passthrough, with padded input textures and
+both Y orientations. Another 120 comparisons cover depth/motion input orientation, offset
+subrects, signed FP16 motion and dispatch bounds. This validates conversion, not HDRP timing
+or vendor interpolation.
+
+The RenoDX shader-recognition test has positive/negative binding fixtures. To additionally
+check an installed RenoDX Unity add-on without loading the DLL, run:
+
+```powershell
+& ./build/native/tgfg_renodx_final_pass_tests.exe "$gameRoot/renodx-unityengine.addon64" build/renodx-final-installed.dxbc
+& ./build/native/tgfg_hudless_color_tests.exe build/renodx-final-installed.dxbc
+```
+
+The optional WARP check executes the extracted supported shader for 288 comparisons using
+both `Draw` and `DrawInstanced`, across
+brightness/gamma changes, constant-buffer range offsets and image orientation. It does not
+exercise ReShade's runtime draw hooks. In-game, verify shader recognition, final-pass replay,
+HUD-less pixel verification and increasing supply counts, then assess HUD stability visually.
+
+The `tgfg_draw_observer` WARP test installs the production MinHook detours through Context4
+and invokes all six draw APIs through the base context. It verifies callback delivery while
+the pixel shader is still bound, GPU results after forwarding nonzero draw/argument offsets,
+four-vertex and indexed geometry, and command-list observation. It does not simulate the
+complete RenoDX add-on or Unity's capture timing. Pending-replay diagnostics in game report
+draw counts and the first recognized draw's geometry/context/capture state.
+
+For the FSR flicker regression, move the camera with visible HUD and first-person hands in SDR,
+then HDR. Check `HUD-less HDRP color` in the managed log, followed by `HUD-less frame verified`,
+`HUD-less yes` and increasing `supplied` in the native log. Compare FSR with DLSS-G and XeSS;
+API success and a verified capture alone do not establish that the visual flicker is fixed.
+Also test FG off/on, loading, resolution/upscaler changes, and HUD capture off/on.
+The FSR input line should identify `inputs Y-flipped to presentation`, with positive Y motion
+scale (`+1068` for the observed 1896x1068 render size). Test vertical and horizontal camera motion,
+hands/weapons and world edges. Also compare DLSS upscaling with TAA/STP to exercise both input sources.
+
 `Test-Setup.ps1` checks expected files, the managed assembly version and the installed package
 manifest hashes without loading the native DLL into PowerShell. It cannot
 check runtime hook ordering or whether interpolation will work.
@@ -78,9 +160,37 @@ BepInEx/TGFrameGeneration/Native in the game installation. Include whether this
 was Off, Fixed 2× or Dynamic and whether the capture was in gameplay or a menu.
 Compare managed and native PIDs with the current session in Autoload.log.
 
+FSR in HDR: the log prints the presentation colour space with the display's luminance range, and
+any HDR metadata the game sets. FSR converts the presented frame back to linear light using the
+maximum of those, so a wrong or zero maximum puts every comparison FSR makes on the wrong scale.
+DLSS-G and XeSS are never given that range, so it is the one colour input only FSR depends on.
+
+FSR: the native log prints "AMD FSR inputs:" when generation starts and whenever the render
+size or the HUD-less state changes. The advanced setting "FSR debug flags" (sum of 1 tear lines,
+2 reset indicators, 4 debug view, 8 pacing lines, 16 input checker) draws FSR's own overlays on
+generated frames; with 4 only generated frames are shown, with motion vectors, depth and masks,
+so a screenshot shows whether the inputs line up. Reset indicators flashing every frame mean the
+reset flag or the frame ID is wrong.
+
+Add debug flag 32 for a single three-frame source-input capture. After FSR and HUD separation
+are active, move the camera with hands visible. The native log reports the saved directory under
+`BepInEx/TGFrameGeneration/diagnostics/fsr-inputs-*`. It contains scene images, raw depth/motion
+and JSON dimensions, formats, motion scales and jitter. All three GPU copies are queued before
+readback; saving may briefly hitch. The files contain source frames, not interpolated frames.
+Disable bit 32 after collecting evidence; toggling it off/on or restarting rearms it. Allocation
+is limited to 384 MiB. The WARP input-capture test checks frame identity, row-pitch removal and
+the one-shot lifecycle independently of the game.
+
+For a specific scene, leave bit 32 off and assign the advanced `FSR input capture key` (default
+None). Press it while turning with hands visible. It rearms the same capture after 0.3 seconds;
+each subsequent press captures another set. This avoids spending the capture on camera bob
+or a transition before the hands appear.
+
 Bridge flags: 1 active, 2 shared-texture path created, 4 shared-fence path created,
-8 scRGB-to-HDR10 output path, 16 explicit HUD-less tag supplied for the last tagged
-frame. Output counter is NVIDIA-reported, not independently measured. No counters
+8 scRGB-to-HDR10 output path, 16 HUD-less image supplied with the last frame, 32 HUD-less
+captures verified against the presented frames. The "Pipeline 5s" line's "hudless" group
+shows captures, rejections, supplied frames and the last differing fraction: a few percent
+means the HUD alone differs; 100% means something redraws the frame at Present. Output counter is NVIDIA-reported, not independently measured. No counters
 or flags are hardcoded to pretend frame generation succeeded.
 
 ## Rollback

@@ -9,6 +9,7 @@
 namespace tgfg {
 // One frame's generation inputs in NGX/DLSS conventions: depth and motion vectors copied into
 // shareable textures (D3D12 state COMMON) and a motion scale to render-resolution pixels.
+// For FSR these are converted to presentation Y orientation, including motion scale and jitter.
 struct GenerationInputs {
     ID3D12Resource* depth=nullptr; ID3D12Resource* motion=nullptr;
     uint32_t depthWidth=0, depthHeight=0, motionWidth=0, motionHeight=0;
@@ -16,6 +17,9 @@ struct GenerationInputs {
     bool reset=false;
     const TGFG_Camera* camera=nullptr;
     float frameTimeMs=0;
+    // The frame without the HUD, in the output swapchain's format and size (state COMMON); null when
+    // the bridge has none or has not verified it yet.
+    ID3D12Resource* hudless=nullptr; uint32_t hudlessWidth=0, hudlessHeight=0;
 };
 struct OutputParams {
     HWND hwnd=nullptr;

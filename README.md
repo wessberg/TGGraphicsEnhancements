@@ -10,6 +10,11 @@ such as AMD Fluid Motion Frames or NVIDIA Smooth Motion, only sees finished fram
 the motion from them. TGFG calls each vendor's SDK directly, with no OptiScaler or other wrapper
 in between.
 
+Frame generation uses the scene captured before the overlay HUD is drawn, keeping the HUD
+out of interpolation with DLSS, FSR and XeSS. The HUD and first-person hand flicker reported
+with FSR is resolved in the tested Mono setups, including ReShade, RenoDX HDR and RenoDX
+DLSS 5, with and without upscaling.
+
 The game renders with Direct3D 11. TGFG copies each finished frame to a private Direct3D 12 device
 and generates frames there with NVIDIA Streamline for DLSS Frame Generation, AMD's FSR API
 (FidelityFX SDK 2.3) or Intel XeSS-FG (XeSS SDK 3.0).
@@ -23,12 +28,17 @@ Tested in game on an RTX 5080 with the Mono build:
 
 - DLSS Frame Generation, fixed 2x to 6x and Dynamic Multi Frame Generation, with and without
   ReShade + RenoDX HDR, and together with the RenoDX DLSS addon ("DLSS 5").
-- FSR Frame Generation with NVIDIA Reflex, and switching technology while playing.
-- XeSS Frame Generation with Intel XeLL.
+- FSR Frame Generation with NVIDIA Reflex, including stable HUD and first-person hands
+  during camera movement, and switching technology while playing.
+- XeSS Frame Generation with Intel XeLL, with verified HUD-less input.
 - DLSS, FSR and XeSS Frame Generation with DLSS upscaling off, on HDRP's own motion vectors.
+- The HUD fix with ReShade and RenoDX DLSS 5 enabled, with and without upscaling and with
+  the other upscalers tested by the reporter. Logs confirm HUD-less input reaches all three FG backends.
 
-AMD Anti-Lag 2 (AMD GPUs) and Intel XeLL on its own (Intel GPUs) have not yet been confirmed in
-game, and neither has the IL2CPP build.
+The standard IL2CPP build also has a successful reporter retest after fixing a crash when
+opening Pause → Options with upscaling active. The broader compatibility coverage above
+was tested on Mono. AMD Anti-Lag 2 (AMD GPUs) and Intel XeLL on its own (Intel GPUs) have
+not yet been confirmed in game.
 
 When DLSS upscaling is on, frame generation takes its motion vectors and depth from the DLSS
 upscaler. With any other setting (TAA, STP or no anti-aliasing), a custom pass takes HDRP's own depth
@@ -43,7 +53,7 @@ HDRP path gives the SDKs the same jitter and motion vector scale HDRP gives DLSS
 | Frame Generation Mode | DLSS only: Fixed or Dynamic, when the runtime reports Multi Frame Generation and Dynamic support. |
 | Frame Multiplier | 2x up to the selected technology's maximum. Switching technology clamps the value. |
 | Max Frame Multiplier, Target Framerate | DLSS Dynamic only: the upper limit and the framerate to aim for. |
-| Low Latency | Off, NVIDIA Reflex, NVIDIA Reflex + Boost, Intel XeLL, AMD Anti-Lag 2, as supported. Off is blocked while frame generation is on. DLSS needs Reflex; XeSS always runs with XeLL, which greys the row out. |
+| Low Latency | Off, NVIDIA Reflex, NVIDIA Reflex + Boost, Intel XeLL, AMD Anti-Lag 2, as supported. DLSS needs Reflex and XeSS always runs with XeLL, which greys the row out. FSR requires none, so Off stays available with it. |
 
 The maxima come from the runtimes: DLSS-G's `numFramesToGenerateMax` (up to 6x on RTX 50) and
 XeSS's `maxSupportedInterpolations` (up to 4x on Intel Arc, 2x elsewhere). The FSR API has no
@@ -98,7 +108,7 @@ TGFG's copy alone.
 | Inputs | The DLSS upscaler's depth and motion vectors with its jitter, motion vector scale and feature flags. Without DLSS, HDRP's own buffers with HDRP's TAA jitter and the scale HDRP gives DLSS. Both are copied to shareable R32_FLOAT and R16G16_FLOAT textures. |
 | Synchronization | GPU fences between the D3D11 and D3D12 queues. The CPU never reads an image back. |
 | HDR | FP16 scRGB is encoded to RGB10A2 PQ/BT.2020; SDR and HDR10 are copied. FSR and XeSS accept HDR10. |
-| HUD | The UI is interpolated with the scene and can smear on generated frames; the game has no pre-HUD hook. |
+| HUD | Scene color is captured after HDRP post-processing and before overlay UI. DLSS-G, FSR and XeSS receive that HUD-less image after pixel verification. For the supported RenoDX Unity output shader, the same live color conversion is applied to the capture so HDR processing preserves HUD separation. |
 | Loading | BepInEx preloader. No launcher, and no replaced `winhttp.dll`, `dxgi.dll` or `version.dll`. |
 
 ## Building
@@ -173,10 +183,13 @@ running.
 
 - The HDRP input path needs HDRP to render motion vectors for the gameplay camera, which it does
   with TAA, STP and DLSS; without them the log says so and frame generation stays off.
-- The HUD is interpolated with the scene. `TGFG_CaptureHudlessD3D11` can take a HUD-less frame if
-  something provides one, but nothing in the game does.
-- FSR and XeSS create their swapchain while the game presents. Whether every overlay (ReShade,
-  capture tools) handles that the way it handles the Streamline swapchain needs more testing.
+- The HUD-less frame relies on the HUD being screen-space overlay UI (or drawn by a later camera).
+  A canvas rendered by the gameplay camera stays part of the interpolated image. The tested
+  ReShade/RenoDX setup preserves HUD separation. Other effects that change most of the image
+  after capture can still cause verification to fail; TGFG then withholds the HUD-less input
+  and reports this in the native log. RenoDX shader recognition covers the validated revision.
+- FSR and XeSS create their swapchain while the game presents. ReShade/RenoDX has been tested;
+  other overlays and capture tools may need separate compatibility testing.
 - One window, one adapter and one stable D3D11 back buffer. No stereo, MSAA swapchain, GDI
   composition, dirty-rect or scroll Present1, non-blocking Present, several presenting windows,
   device-loss recovery or unloading the native DLL while the game runs.
@@ -191,6 +204,8 @@ running.
 
 `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/SOURCES.md` and `docs/AUTOLOAD-INTEGRATION.md`
 cover the implementation, the test plan and the primary sources.
+`docs/FSR-FLICKER-INVESTIGATION.md` records the resolved HUD/hand flicker investigation,
+including confirmed ReShade/RenoDX results and runtime evidence. Read it before changing the FSR path.
 
 ## License
 

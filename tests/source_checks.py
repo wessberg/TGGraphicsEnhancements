@@ -31,7 +31,7 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("sizeof(TGFG_HdrpInputs)==48", header)
         native = self.text("native/src/control.cpp")
         symbols = re.findall(r"TGFG_CALL\s+(TGFG_\w+)\(", header)
-        self.assertEqual(len(symbols), 9)
+        self.assertEqual(len(symbols), 12)
         for symbol in symbols:
             self.assertIn(symbol + "(", native)
 
@@ -81,8 +81,11 @@ class SourceConsistency(unittest.TestCase):
         self.assertNotIn('"NVIDIA Reflex", 1, "Off", "On"', rows)
         for label in ['"NVIDIA Reflex"', '"NVIDIA Reflex + Boost"', '"Intel XeLL"', '"AMD Anti-Lag 2"']:
             self.assertIn(label, caps)
-        # Low latency may be Off only while frame generation is Off; a single choice greys the row out.
-        self.assertIn("if (selected == FrameGenerationSetting.Off) allowed.Add(LowLatencySetting.Off);", caps)
+        # DLSS requires Reflex and XeSS requires XeLL; FSR requires neither, so Off stays available with
+        # it. A single remaining choice greys the row out.
+        self.assertIn("if (selected == FrameGenerationSetting.DLSS) allowed.AddRange(new[] { LowLatencySetting.Reflex, LowLatencySetting.ReflexBoost });", caps)
+        self.assertIn("else if (selected == FrameGenerationSetting.XeSS) allowed.Add(LowLatencySetting.XeLL);", caps)
+        self.assertIn("allowed.Add(LowLatencySetting.Off);", caps)
         self.assertIn("latency.SetInteractabilityFunction((Func<bool>)(() => caps.AllowedLatencies(Selected).Length > 1));", rows)
         self.assertIn("select_latency", policy)
         self.assertIn("if(output==Output::XeSS) return c.xell?Latency::XeLL:Latency::Off;", policy)
@@ -117,7 +120,8 @@ class SourceConsistency(unittest.TestCase):
             self.assertNotIn("#if BEPINEX_MONO", source)
             self.assertNotIn("only implemented for the Mono runtime", source)
         self.assertIn('Il2CppTypes.Construct(this, typeof(Setting), "NativeMethodInfoPtr__ctor_Protected_Void_0");', rows)
-        self.assertIn('Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Func_1_Boolean_Il2CppReferenceArray_1_PrefOption_0",', rows)
+        self.assertIn('Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Il2CppReferenceArray_1_PrefOption_0",', rows)
+        self.assertIn("Il2CppOptionConditions.Register(this, rows.Show);", rows)
         self.assertIn("Il2CppTypes.Register<SwitchRowsOption>();", rows)
         # Tooltips must not return managed strings through Il2CppInterop's delegate bridge (game crash in String.Trim).
         self.assertIn("new Func<IntPtr>(() => IL2CPP.ManagedStringToIl2Cpp(text()))", rows)
@@ -150,8 +154,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertEqual([int(o) for _, o in names], list(range(6)))
         for name, _ in names:
             self.assertIn('"' + name + '"', rows)
-        self.assertEqual(len(re.findall(r"file\.Bind\(AdvancedSection", settings)), 6)
-        self.assertEqual(len(re.findall(r"Hidden\(\n?\s*\"", settings)), 6)
+        self.assertEqual(len(re.findall(r"file\.Bind\(AdvancedSection", settings)), 9)
+        self.assertEqual(len(re.findall(r"Hidden\(\n?\s*\"", settings)), 9)
         self.assertNotIn("VideoSettings.cfg\")", self.text("src/TGFrameGeneration/Diagnostics.cs"))
         self.assertIn("ModManagers.Tick();", self.text("src/TGFrameGeneration/Session.cs"))
 
@@ -209,16 +213,39 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("OpenSharedHandle", code)
         self.assertIn("OpenSharedFence", code)
         self.assertIn("SwapDeviceContextState(game.Get(),nullptr)", code)
-        self.assertNotIn("D3D11_USAGE_STAGING", code)
+        # The only CPU readback is the HUD-less comparison counter: a 16-byte buffer, never an image, never waited for.
+        self.assertEqual(code.count("D3D11_USAGE_STAGING"), 1)
+        self.assertIn("staging.ByteWidth=16;staging.Usage=D3D11_USAGE_STAGING", code)
+        self.assertIn("D3D11_MAP_FLAG_DO_NOT_WAIT", code)
 
     def test_optional_hudless_is_not_fabricated(self):
         managed = self.text("src/TGFrameGeneration/FrameBridge.cs")
         self.assertNotIn("CaptureHudless", managed)
         self.assertNotIn("TGFG_TagHudless", managed)
         bridge = self.text("native/src/dx11_bridge.cpp")
-        self.assertIn("slot.hudlessValid?&h:nullptr", bridge)
+        # The HUD-less image is a real copy of HDRP color before the overlay UI and reaches a technology
+        # only after the presented frames confirmed that just HUD-sized regions differ.
+        self.assertIn("hudless?&h:nullptr", bridge)
+        self.assertIn("slot.hudlessValid && s.hudlessOk", bridge)
         self.assertIn("slot.hudlessValid=true", bridge)
+        self.assertNotIn("colors_.at(virtualIndex_).source.d11.Get()", bridge)
         self.assertIn("frameId, void* context, void* colorResource", self.text("native/include/tgfg_api.h"))
+        self.assertIn("TGFG_SetHudlessCapture", self.text("native/src/control.cpp"))
+        self.assertIn("TGFG_SetHudlessCapture", self.text("src/TGFrameGeneration/NativeBridge.cs"))
+        # The color comes from the graph's current frame, not the stale swapchain at camera end.
+        hudless = self.text("src/TGFrameGeneration/HudlessUi.cs")
+        self.assertIn("CustomPassInjectionPoint.AfterPostProcess", hudless)
+        self.assertIn("ctx.cameraColorBuffer", hudless)
+        self.assertNotIn("rendersUIOverlay = false", hudless)
+        self.assertIn("HUDLessColor=ffxApiGetResourceDX12", self.text("native/src/fsr_backend.cpp"))
+        # DLSS-G ignores the HUD-less tag unless its recomposition path is on, and only while one is supplied.
+        self.assertIn("options.enableUserInterfaceRecomposition=s.hudlessOk?sl::eTrue:sl::eFalse;", self.text("native/src/control.cpp"))
+        self.assertIn("XEFG_SWAPCHAIN_RES_HUDLESS_COLOR", self.text("native/src/xess_backend.cpp"))
+        self.assertIn("TGFG_HUDCHECK", self.text("native/shaders/interop.hlsl"))
+        # A still image proves nothing about the capture and must not count against it.
+        self.assertIn("if(!moving) { ++s.diag.hudlessStill; return; }", self.text("native/src/control.cpp"))
+        # FSR is told the resolution the game renders at, not the display resolution.
+        self.assertIn("create.maxRenderSize={maxRenderWidth_,maxRenderHeight_}", self.text("native/src/fsr_backend.cpp"))
 
     def test_hdr_conversion_is_actual_shader(self):
         shader = self.text("native/shaders/interop.hlsl")
@@ -263,7 +290,7 @@ class SourceConsistency(unittest.TestCase):
 
     def test_testing_limits_disclosed(self):
         readme = " ".join(self.text("README.md").replace("**", "").split())
-        for token in ["not yet been confirmed in game", "and neither has the IL2CPP build", "The HUD is interpolated with the scene",
+        for token in ["not yet been confirmed in game", "and neither has the IL2CPP build", "A canvas rendered by the gameplay camera stays part of the interpolated image",
                       "HDRP's own depth and motion vectors"]:
             self.assertIn(token, readme)
         self.assertNotIn("requires D3D12 game rendering", readme)

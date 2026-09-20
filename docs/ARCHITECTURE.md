@@ -74,7 +74,7 @@ DLSS: while DLSS supplied the previous frame's inputs, event 3 leaves the frame 
    The allocator's previous retirement fence is checked before reset.
 4. A D3D12 command list transitions/copies final color to the actual output buffer
    and returns the shared source resource to COMMON and output to PRESENT.
-5. The captured frame's constants/depth/motion and optional explicit HUD-less
+5. The captured frame's constants/depth/motion and, once verified, the HUD-less
    texture are tagged `eValidUntilPresent`. `before_present` applies requested
    options only if all readiness conditions pass. Otherwise it requests Off and
    clears the frame's tags.
@@ -162,15 +162,45 @@ configured suspension/heartbeat checks fail. Reported NVIDIA output frames are
 summed from getState deltas; they are not inferred from copy counts and are not
 a physical display measurement.
 
-## HUD hook boundary
+## HUD-less frame
 
-`TGFG_CaptureHudlessD3D11(frameId, immediateContext, colorResource)` implements a
-real copy/conversion into the frame's protected shared HUD-less texture. The
-caller must invoke it after scene effects but before HUD for that exact frame,
-after the selected NGX evaluation succeeded. It must use the source resolution
-and color format. The generic managed adapter does not call this export because
-no verified FoA post-RenoDX/pre-HUD stage has been identified. Default operation
-therefore has final color, depth and motion, but no promised HUD reconstruction.
+For FSR, depth and motion copies are Y-flipped within their source subrect to follow HDRP's final
+color blit. Vertical motion scale and jitter are negated too. FSR 3.1 receives scalar FOV/near/far
+rather than the original projection matrix. DLSS-G and XeSS retain their existing input convention.
+Each input slot records its orientation, so a backend switch between capture and Present cannot
+submit inputs prepared for a different orientation.
+
+`HudlessUi` installs a global `AfterPostProcess` custom pass. Its presence makes HDRP
+render post-processing into `postProcessDest`, an intermediate color texture, before the final
+blit and overlay UI composition. We no longer change `rendersUIOverlay`. Capturing the swapchain
+at `endCameraRendering` was one frame late because Unity had not written it yet.
+
+`TGFG_SetHudless` submits a 32-byte optional ABI packet containing the current frame ID,
+color resource, viewport size, and color/orientation flags. Render event 4 executes inside the
+custom pass, before HDRP can recycle the resource. The native shader reads only the valid
+viewport, flips Y like HDRP's final blit, and writes the output swapchain's format: sRGB for SDR
+or PQ for HDR. HDRP HDR color is linear nits in the output primaries; scRGB output with Unity HDR
+inactive follows the bridge's existing 80-nit convention. Unknown HDR gamuts are withheld.
+The native side checks device identity, viewport bounds, dimensions and texture layout.
+
+At Present a compute shader compares, at every fourth pixel, the presented frame with that copy and
+the copy with the previously presented frame, and the presented frame with its predecessor;
+three counters are read back two presents later without waiting. The copy is trusted only when
+it differs from the presented frame over at most
+about a third of the sample points (HUD-sized) and is not identical to the previous frame (a stale
+copy or incorrect render-event ordering). Still frames are skipped. After 30 consecutive trusted results the capture is
+supplied (DLSS-G `kBufferTypeHUDLessColor`; FSR `HUDLessColor` in the per-frame configure; XeSS
+`XEFG_SWAPCHAIN_RES_HUDLESS_COLOR` with UI composition switched on, AUTO mode). Thirty untrusted
+results withdraw it again, with a log line naming which check failed; the HUD is then interpolated
+with the scene. FSR resets interpolation history when the HUD-less source changes and rebuilds
+its context when input encoding flags change, including enabling its debug checker.
+
+The color remains after lens/post-processing effects. Moving capture before those effects alone
+would make FSR mistake the effects for UI. Applying them after FG requires rendering them on each
+generated presentation, which the current D3D11-to-D3D12 bridge does not implement.
+
+`TGFG_CaptureHudlessD3D11(frameId, immediateContext, colorResource)` remains for an external
+caller with its own pre-HUD stage; it feeds the same texture and the same verification.
 
 ## Frame-latency object
 
@@ -184,10 +214,19 @@ are created without the flag and throttle through a blocking Present.
 - ReShade 6 wraps the game's D3D11 device and context. NVIDIA's Unity plugin evaluates DLSS on
   that proxy context while the swapchain hook sees the real device, so the bridge tags the real
   immediate context with private data (ReShade forwards private data) instead of comparing COM
-  identities.
+  identities. HUD-less capture likewise checks the resource device's immediate context when
+  `GetDevice` returns a different COM identity; a ReShade proxy must not be mistaken for a
+  different GPU device. Unknown contexts still fail validation.
 - TGFG's private D3D12 device and swapchain are created inside the game's own swapchain creation
   call, where ReShade does not attach, so ReShade and RenoDX only process the D3D11 swapchain.
   RenoDX upgrades it to scRGB FP16; the bridge encodes that to HDR10 for the D3D12 output.
+- For the supported RenoDX Unity final-output shader, the bridge retains HUD-less scene color
+  as FP16 until RenoDX's full-screen backbuffer draw, observing direct, indexed and indirect
+  draw entry points without assuming three-vertex game geometry. It replays the actual shader, sampler and
+  b13 constant-buffer range onto that scene, then encodes PQ. Two additional full-size FP16
+  intermediates are used only for this path. Pixel verification still gates all FG consumers.
+  The installed stripped shader is identified explicitly; arbitrary ReShade effect chains and
+  unknown stripped shader revisions are not covered by this replay.
 - The RenoDX DLSS addon ("DLSS 5") calls `GetModuleHandleW(L"sl.interposer.dll")`, detours that
   module's `D3D12CreateDevice`/`CreateDXGIFactory*` exports and patches the returned factory's
   `CreateSwapChain*` slots. Its detour releases the new swapchain and returns `E_UNEXPECTED`
