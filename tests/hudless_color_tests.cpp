@@ -50,11 +50,15 @@ static unsigned test_inputs(ID3D11Device* device,ID3D11DeviceContext* ctx) {
     auto* view=srv.Get();ctx->CSSetShaderResources(0,1,&view);
     D3D11_BUFFER_DESC bd{};bd.ByteWidth=16;bd.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     ComPtr<ID3D11Buffer> cb;check(device->CreateBuffer(&bd,nullptr,&cb));
-    const unsigned params[]={1,2,3,2};ctx->UpdateSubresource(cb.Get(),0,nullptr,params,0,0);
     auto* buffer=cb.Get();ctx->CSSetConstantBuffers(0,1,&buffer);
     unsigned checks=0;
-    for(unsigned motion=0;motion<2;++motion)for(unsigned flip=0;flip<2;++flip) {
-        const char* macro=motion?(flip?"TGFG_MOTION_FLIP":"TGFG_MOTION"):(flip?"TGFG_DEPTH_FLIP":"TGFG_DEPTH");
+    // The copies always mirror rows inside the valid subrect. An odd height is covered too: its
+    // middle row must map to itself, which an off-by-one in the row expression would not preserve.
+    const unsigned subrects[2][4]={{1,2,3,2},{0,1,4,3}}; // origin x/y, extent width/height
+    for(unsigned motion=0;motion<2;++motion)for(const auto& rect:subrects) {
+        const char* macro=motion?"TGFG_MOTION":"TGFG_DEPTH";
+        const unsigned ox=rect[0],oy=rect[1],ew=rect[2],eh=rect[3];
+        ctx->UpdateSubresource(cb.Get(),0,nullptr,rect,0,0);
         auto code=compile(macro,"main","cs_5_0");
         ComPtr<ID3D11ComputeShader> shader;check(device->CreateComputeShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&shader));
         d.Width=5;d.Height=4;d.Format=motion?DXGI_FORMAT_R16G16_FLOAT:DXGI_FORMAT_R32_FLOAT;
@@ -72,9 +76,9 @@ static unsigned test_inputs(ID3D11Device* device,ID3D11DeviceContext* ctx) {
         for(unsigned y=0;y<4;++y)for(unsigned x=0;x<5;++x)for(unsigned c=0;c<(motion?2u:1u);++c) {
             const auto* row=static_cast<const char*>(mapped.pData)+y*mapped.RowPitch;
             const float actual=motion?half_float(reinterpret_cast<const uint16_t*>(row)[2*x+c]):reinterpret_cast<const float*>(row)[x];
-            const float expected=x<3 && y<2?pixels[2+(flip?1-y:y)][1+x][c]:0;
+            const float expected=x<ew && y<eh?pixels[oy+eh-1-y][ox+x][c]:0;
             ++checks;
-            if(actual!=expected) {passed=false;std::cerr<<macro<<" ("<<x<<","<<y<<","<<c<<") expected "<<expected<<" got "<<actual<<"\n";}
+            if(actual!=expected) {passed=false;std::cerr<<macro<<" subrect "<<ox<<","<<oy<<" "<<ew<<"x"<<eh<<" ("<<x<<","<<y<<","<<c<<") expected "<<expected<<" got "<<actual<<"\n";}
         }
         ctx->Unmap(staging.Get(),0);
         ID3D11UnorderedAccessView* empty=nullptr;ctx->CSSetUnorderedAccessViews(0,1,&empty,nullptr);

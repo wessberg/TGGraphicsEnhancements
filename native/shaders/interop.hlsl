@@ -5,25 +5,22 @@ cbuffer CopyParameters : register(b0) {
     uint2 origin; uint2 extent;
 };
 Texture2D<float4> sourceTexture : register(t0);
-#if defined(TGFG_DEPTH) || defined(TGFG_DEPTH_FLIP)
+// Both copies mirror rows inside the valid subrect. HDRP's render targets are Y-inverted against
+// the frame every generation runtime interpolates, and no SDK can be told that a tagged texture is
+// upside down, so the rows follow the color. See native/include/camera_orientation.hpp.
+#if defined(TGFG_DEPTH)
 RWTexture2D<float> targetTexture : register(u0);
 [numthreads(8,8,1)] void main(uint3 id:SV_DispatchThreadID) {
     if(any(id.xy>=extent)) return;
-    uint2 p=id.xy;
-#if defined(TGFG_DEPTH_FLIP)
-    p.y=extent.y-1-p.y;
-#endif
+    const uint2 p=uint2(id.x,extent.y-1-id.y);
     targetTexture[id.xy]=sourceTexture.Load(int3(origin+p,0)).x;
 }
-#elif defined(TGFG_MOTION) || defined(TGFG_MOTION_FLIP)
+#elif defined(TGFG_MOTION)
 RWTexture2D<float2> targetTexture : register(u0);
 [numthreads(8,8,1)] void main(uint3 id:SV_DispatchThreadID) {
     if(any(id.xy>=extent)) return;
-    uint2 p=id.xy;
-#if defined(TGFG_MOTION_FLIP)
-    p.y=extent.y-1-p.y;
-#endif
-    // Reorder rows here; the matching Y-vector and jitter signs are changed in the constants.
+    // The matching Y motion scale and jitter signs are changed in the constants.
+    const uint2 p=uint2(id.x,extent.y-1-id.y);
     targetTexture[id.xy]=sourceTexture.Load(int3(origin+p,0)).xy;
 }
 #elif defined(TGFG_HDR) || defined(TGFG_HUDCOLOR)

@@ -31,6 +31,9 @@ Tested in game on an RTX 5080 with the Mono build:
 - FSR Frame Generation with NVIDIA Reflex, including stable HUD and first-person hands
   during camera movement, and switching technology while playing.
 - XeSS Frame Generation with Intel XeLL, with verified HUD-less input.
+- DLSS, FSR and XeSS judged equally good side by side after the input-orientation fix, switching
+  between them while playing. Before it, only FSR received presentation-oriented depth and motion
+  vectors and the other two visibly warped during camera movement.
 - DLSS, FSR and XeSS Frame Generation with DLSS upscaling off, on HDRP's own motion vectors.
 - The HUD fix with ReShade and RenoDX DLSS 5 enabled, with and without upscaling and with
   the other upscalers tested by the reporter. Logs confirm HUD-less input reaches all three FG backends.
@@ -156,7 +159,7 @@ the preloader, the native backend, the vendor runtimes with their license notice
 from Steam as usual.
 
 `Test-Setup.ps1 -GameDir <game folder> -Runtime Mono` (or `IL2CPP`) checks an installed copy without starting
-the game. Native builds also run the portable ABI, policy and interop tests and compile the HLSL;
+the game. Native builds also run the portable ABI, policy, interop and camera-orientation tests and compile the HLSL;
 `tests/source_checks.py`, `tests/test_autoload_integration.py` and `tests/package_tests.ps1` check
 sources and packaging. `docs/TESTING.md` has the in-game test sequence.
 

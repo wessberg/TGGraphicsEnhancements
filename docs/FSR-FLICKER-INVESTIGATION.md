@@ -1,9 +1,61 @@
 # Resolved in tested setups: FSR frame generation HUD and hand flicker
 
 Status: reporter confirms HUD/hand results are now correct, including ReShade and
-RenoDX DLSS 5, with and without upscaling, and the other upscalers tested.
+RenoDX DLSS 5, with and without upscaling, and the other upscalers tested. The follow-up
+below extended the input-orientation fix from FSR to DLSS-G and XeSS-FG, and the reporter
+confirms all three now look equally good.
 Last worked 2026-09-20. Changes are **uncommitted**. Mono visual verification is complete;
 the IL2CPP hand-history port below is awaiting in-game verification. Read this before touching the FSR path.
+
+## The orientation fix was general, not FSR-specific (2026-09-20)
+
+After the FSR work landed, the reporter said FSR now looks better than **both** DLSS Frame
+Generation and XeSS-FG: DLSS has a wobble during movement that FSR does not. That points back at the
+one change made for FSR alone.
+
+The earlier reasoning was that DLSS-G and XeSS "retain their existing inputs and projection
+matrices" because FSR 3.1 reconstructs from scalar FOV/near/far and so cannot describe the
+inversion. That does not hold. A projection matrix describes a sign convention, not the row order of
+a texture. Streamline and XeSS sample depth and motion at the coordinates of the frame they
+interpolate, which is the presented back buffer, and neither exposes any way to say a tagged texture
+is upside down.
+
+That the presented frame really is mirrored against HDRP's render targets is already measured by
+this build, not assumed: the HUD-less copy is taken from HDRP's `AfterPostProcess` color, Y-flipped
+by `HudlessUi`'s flag 1, and then compared against the presented frame at every Present. It verifies
+at 2-6% differing sample points in gameplay. The depth and motion vectors come from the same HDRP
+render targets, so DLSS-G and XeSS-FG were reprojecting the presented frame from mirrored vectors.
+
+Why that reads as a wobble rather than a broken image: on an RTX 5080 DLSS-G blends its own optical
+flow with the supplied vectors, so wrong game vectors degrade the result instead of destroying it,
+and a horizontal pan produces a roughly uniform horizontal vector field whose mirrored rows are
+close to correct. Local and vertical motion, and near geometry, are where it shows. XeSS-FG has less
+to fall back on, which matches the reporter putting FSR ahead of it too.
+
+**Change:** depth and motion copies are flipped for all three backends, the vertical motion scale and
+jitter are negated with them, and `TGFG_SetCamera` turns the camera's four clip-space matrices by
+`F = diag(1,-1,1,1)` so the camera describes the same space. FSR was unaffected by the matrix part -
+FI 3.1.6 does not read them - which is why the FSR-only fix worked without it. The per-slot
+orientation flag and the unflipped copy shaders are gone; there is one orientation in the codebase.
+See `native/include/camera_orientation.hpp` and the "Input orientation" section of
+`docs/ARCHITECTURE.md`.
+
+**Validation:** `tests/camera_orientation_tests.cpp` builds reference matrices in both orientations
+and derives the presentation forms through an independent matrix inverse, then checks the conversion
+against them, checks that a world point reprojects correctly through the converted `clipToPrev`, and
+checks that the conversion is its own inverse. The WARP copy test now covers an odd subrect height as
+well. Eight native tests and the build pass.
+
+**Confirmed in game** (Mono, RTX 5080, 2026-09-20): the reporter finds DLSS, FSR and XeSS equally
+good afterwards, where DLSS and XeSS were visibly wobblier than FSR before. Note that the first
+attempt at this retest ran the previous binary - the game folder's `TGFG.Native.dll` was a Vortex
+symlink and the deploy had not been run - and produced "exactly like before". Check the deployed
+file's hash against `artifacts/Native` before trusting a null result.
+
+The log for the confirming run shows HUD-less input supplied on every steady gameplay frame for all
+three backends (`supplied` equals `captured`, `diff` 2.4-3.1%), `fgOn` equal to `frames`, and no
+errors. The gaps that do appear are the verification warm-up and menu screens, where the whole frame
+is redrawn and the capture is correctly withheld.
 
 ## IL2CPP pause / Options crash: reporter confirms fix (2026-09-20)
 

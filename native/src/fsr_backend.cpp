@@ -200,7 +200,7 @@ public:
                 ", motion scale ("+f2(in->motionScaleX)+", "+f2(in->motionScaleY)+"), jitter ("+f2(in->jitterX)+", "+f2(in->jitterY)+
                 "), near/far "+f2(prepare.cameraNear)+"/"+f2(prepare.cameraFar)+(inverted?" (inverted depth)":"")+", vertical FOV "+
                 f2(camera.fovRadians*57.29578f)+" deg, frame time "+f2(in->frameTimeMs)+" ms, reset "+(prepare.reset?"1":"0")+
-                ", HUD-less "+(in->hudless?"yes":"no")+", inputs Y-flipped to presentation, create flags "+std::to_string(flags_)+", debug flags "+std::to_string(state().debugFlags));
+                ", HUD-less "+(in->hudless?"yes":"no")+", create flags "+std::to_string(flags_)+", debug flags "+std::to_string(state().debugFlags));
         }
         prepare.depth=ffxApiGetResourceDX12(in->depth,FFX_API_RESOURCE_STATE_COMMON);
         prepare.motionVectors=ffxApiGetResourceDX12(in->motion,FFX_API_RESOURCE_STATE_COMMON);

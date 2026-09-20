@@ -1,5 +1,19 @@
 # Unreleased
 
+- Give DLSS Frame Generation and Intel XeSS-FG the same presentation-oriented depth and motion
+  vectors FSR already gets. HDRP renders into Y-inverted targets and flips the image in its final
+  blit, so the frame all three runtimes interpolate is mirrored against the buffers HDRP produced.
+  No SDK can be told a tagged texture is upside down, and the projection matrix DLSS-G and XeSS
+  receive does not describe row order, so both were reprojecting from mirrored vectors; DLSS-G's
+  optical flow hid most of it, leaving the image warping during movement. The copies now flip for
+  every backend and `TGFG_SetCamera` turns the camera's clip-space matrices to match, so the camera
+  describes the space the buffers are in. The reporter's own account - FSR looking cleaner than both
+  DLSS and XeSS after the FSR-only fix - is what this follows up. Build, eight native tests and the
+  Python checks pass. Confirmed in game on Mono, RTX 5080: the reporter finds all three technologies
+  equally good afterwards, where DLSS and XeSS were visibly worse than FSR before. The run's log
+  shows HUD-less input supplied on every steady gameplay frame for all three, differing from the
+  presented frame over 2.4-3.1% of sample points in each case.
+
 - Fix the IL2CPP Options crash by evaluating TGFG's dependent-row visibility
   through a scoped native-getter hook instead of a converted callback. Build and
   regression checks pass; the reporter confirms the upscaling/pause/Options retest works.

@@ -86,7 +86,7 @@ struct ColorBuffer {
 };
 struct InputSlot {
     uint32_t id=0;bool occupied=false,valid=false,hudlessValid=false;
-    bool flipY=false; // FSR reads presentation-oriented inputs; SL/XeSS retain their matrix-described inputs
+    // Depth and motion are always presentation-oriented; see camera_orientation.hpp.
     SharedTexture depth,motion,hudless;
     sl::Constants constants{};
 };
@@ -156,7 +156,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     uint32_t renoSkipReasons_=0;
     uint64_t renoLastDiagnostic_=0;
     SharedTexture renoRaw_,renoOutput_; // D3D11 intermediate images; never submitted to FG
-    ComPtr<ID3D11ComputeShader> depthCS_,motionCS_,depthFlipCS_,motionFlipCS_,hudCheckCS_;
+    ComPtr<ID3D11ComputeShader> depthCS_,motionCS_,hudCheckCS_;
     // HUD-less verification: one counter, copied to a small staging ring and read two presents later.
     ComPtr<ID3D11Buffer> hudCounter_;
     ComPtr<ID3D11UnorderedAccessView> hudCounterUAV_;
@@ -208,12 +208,9 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     }
     void shaders() {
         auto d=compile("TGFG_DEPTH","main","cs_5_0");
-        check(d11_->CreateComputeShader(d->GetBufferPointer(),d->GetBufferSize(),nullptr,&depthCS_),"Create depth conversion shader");
+        check(d11_->CreateComputeShader(d->GetBufferPointer(),d->GetBufferSize(),nullptr,&depthCS_),"Create depth orientation shader");
         auto m=compile("TGFG_MOTION","main","cs_5_0");
-        check(d11_->CreateComputeShader(m->GetBufferPointer(),m->GetBufferSize(),nullptr,&motionCS_),"Create motion conversion shader");
-        auto df=compile("TGFG_DEPTH_FLIP","main","cs_5_0"),mf=compile("TGFG_MOTION_FLIP","main","cs_5_0");
-        check(d11_->CreateComputeShader(df->GetBufferPointer(),df->GetBufferSize(),nullptr,&depthFlipCS_),"Create FSR depth orientation shader");
-        check(d11_->CreateComputeShader(mf->GetBufferPointer(),mf->GetBufferSize(),nullptr,&motionFlipCS_),"Create FSR motion orientation shader");
+        check(d11_->CreateComputeShader(m->GetBufferPointer(),m->GetBufferSize(),nullptr,&motionCS_),"Create motion orientation shader");
         auto vs=compile("TGFG_HDR","vsMain","vs_5_0"),ps=compile("TGFG_HDR","psMain","ps_5_0");
         check(d11_->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,&colorVS_),"Create conversion VS");
         auto rvs=compile("TGFG_HDR","vsReno","vs_5_0");
@@ -460,7 +457,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         bool have=false;
         if(frame && frame->inputs) {
             auto& slot=inputs_[renderFrameId%inputs_.size()];
-            if(slot.occupied && slot.valid && slot.id==renderFrameId && slot.flipY==(s.output==Output::FSR)) {
+            if(slot.occupied && slot.valid && slot.id==renderFrameId) {
                 in.depth=slot.depth.d12.Get(); in.motion=slot.motion.d12.Get();
                 in.depthWidth=slot.depth.width; in.depthHeight=slot.depth.height;
                 in.motionWidth=slot.motion.width; in.motionHeight=slot.motion.height;
@@ -549,7 +546,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             float movement=0.f;
             for(size_t i=0;i<16;++i)
                 movement=std::max(movement,std::abs(frame->camera.clipToPrev[i]-(i%5==0?1.f:0.f)));
-            if(candidate.occupied && candidate.valid && candidate.id==renderFrameId && candidate.flipY &&
+            if(candidate.occupied && candidate.valid && candidate.id==renderFrameId &&
                candidate.hudlessValid && (inputCapture_.started() || movement>0.001f)) {
                 slot=&candidate;
                 const auto& c=slot->constants;
@@ -560,7 +557,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
                     <<",\"depthInverted\":"<<(c.depthInverted==sl::eTrue?"true":"false")
                     <<",\"motionJittered\":"<<(c.motionVectorsJittered==sl::eTrue?"true":"false")
                     <<",\"near\":"<<frame->camera.nearPlane<<",\"far\":"<<frame->camera.farPlane
-                    <<",\"fovRadians\":"<<frame->camera.fovRadians<<",\"clipToPrevBeforeYFlip\":[";
+                    <<",\"fovRadians\":"<<frame->camera.fovRadians<<",\"clipToPrev\":[";
                 for(size_t i=0;i<16;++i) { if(i) metadata<<",";metadata<<frame->camera.clipToPrev[i]; }
                 metadata<<"]";
             }
@@ -634,7 +631,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(generator_) record_generation(cmd,frame,presentId,frameMs);
         else if(frame && frame->inputs) {
             auto& slot=inputs_[renderFrameId%inputs_.size()];
-            if(s.dlssReady && frame->token && slot.occupied && slot.valid && slot.id==renderFrameId && !slot.flipY) tag_inputs(slot,*frame);
+            if(s.dlssReady && frame->token && slot.occupied && slot.valid && slot.id==renderFrameId) tag_inputs(slot,*frame);
             else frame->inputsSubmitted=false;
         }
         check(cmd->Close(),"Close bridge command list");
@@ -881,19 +878,18 @@ public:
         // the standard DLSS-G motion format. R32G32_FLOAT is not NT-handle shareable on NVIDIA's D3D11
         // driver (CreateTexture2D returns E_INVALIDARG), which blocked every capture before.
         ensure(slot.motion,me.width,me.height,DXGI_FORMAT_R16G16_FLOAT,D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS);
-        // HDRP renders into Y-inverted RTs. Its final blit (and our HUD-less color copy) flips
-        // those to display orientation. FSR 3.1 receives FOV/near/far, not the projection matrix,
-        // so it cannot describe that inversion: depth and motion must follow the color here.
-        // Choose the requested output because switching occurs later, in Present. The consumers
-        // reject an orientation mismatch if the request changes again before that Present.
-        slot.flipY=desired_output()==Output::FSR;
-        copy_input(dv.Get(),slot.depth,de,slot.flipY?depthFlipCS_.Get():depthCS_.Get());
-        copy_input(mv.Get(),slot.motion,me,slot.flipY?motionFlipCS_.Get():motionCS_.Get());
+        // HDRP renders into Y-inverted RTs. Its final blit (and our HUD-less color copy) flips those
+        // to display orientation. Every runtime samples depth and motion at the coordinates of the
+        // frame it interpolates, which is the presented one, and none of them can be told that a
+        // tagged texture is upside down - a projection matrix describes a sign convention, not
+        // texture row order. So the rows follow the color for DLSS-G, FSR and XeSS alike, with the
+        // vertical motion scale and jitter negated to match. TGFG_SetCamera turns the clip-space
+        // matrices the same way, so the camera describes the space these buffers are in.
+        copy_input(dv.Get(),slot.depth,de,depthCS_.Get());
+        copy_input(mv.Get(),slot.motion,me,motionCS_.Get());
         slot.constants=constants;
-        if(slot.flipY) {
-            slot.constants.mvecScale.y=-slot.constants.mvecScale.y;
-            slot.constants.jitterOffset.y=-slot.constants.jitterOffset.y;
-        }
+        slot.constants.mvecScale.y=-slot.constants.mvecScale.y;
+        slot.constants.jitterOffset.y=-slot.constants.jitterOffset.y;
         return true;
     }
     void finish(uint32_t id,bool success) {auto& slot=inputs_[id%inputs_.size()];if(slot.occupied&&slot.id==id)slot.valid=success;}

@@ -162,13 +162,28 @@ configured suspension/heartbeat checks fail. Reported NVIDIA output frames are
 summed from getState deltas; they are not inferred from copy counts and are not
 a physical display measurement.
 
-## HUD-less frame
+## Input orientation
 
-For FSR, depth and motion copies are Y-flipped within their source subrect to follow HDRP's final
-color blit. Vertical motion scale and jitter are negated too. FSR 3.1 receives scalar FOV/near/far
-rather than the original projection matrix. DLSS-G and XeSS retain their existing input convention.
-Each input slot records its orientation, so a backend switch between capture and Present cannot
-submit inputs prepared for a different orientation.
+HDRP renders into Y-inverted render targets and flips the image back in its final blit, so the frame
+every runtime interpolates - the presented back buffer, and the HUD-less copy verified against it at
+each Present - is vertically mirrored against the depth and motion vectors HDRP produced. No frame
+generation SDK can be told that a tagged texture is upside down: Streamline, the FSR API and XeSS all
+sample depth and motion at the coordinates of the frame they interpolate, and a projection matrix
+describes a sign convention rather than texture row order.
+
+Depth and motion copies are therefore Y-flipped within their source subrect for DLSS-G, FSR and XeSS
+alike, and the vertical motion scale and jitter are negated with them. `TGFG_SetCamera` turns the
+camera's four clip-space matrices the same way, so the camera describes the space those buffers are
+in. That turn is `F = diag(1,-1,1,1)`: `F*P` for a projection and `F*C*F` for a transform between two
+clip spaces, which on the packet's transposed row-vector storage is a negated row 1, a negated
+column 1, or both. `native/include/camera_orientation.hpp` holds it, with the derivation.
+`worldToView`, the camera basis and the scalar frustum are outside clip space and unchanged.
+
+`tests/camera_orientation_tests.cpp` checks the turn against reference matrices built in both
+orientations through an independent matrix inverse, and `tests/hudless_color_tests.cpp` runs the
+depth and motion copies on WARP over even and odd subrect heights.
+
+## HUD-less frame
 
 `HudlessUi` installs a global `AfterPostProcess` custom pass. Its presence makes HDRP
 render post-processing into `postProcessDest`, an intermediate color texture, before the final

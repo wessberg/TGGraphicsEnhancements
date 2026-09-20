@@ -77,7 +77,7 @@ public:
             for(size_t n=0;n<frames_.size();++n) {
                 const auto& frame=frames_[n];
                 std::ostringstream json;json.precision(9);
-                json<<"{\"version\":1,\"frameId\":"<<frame.id<<","<<frame.metadata<<",\"textures\":{";
+                json<<"{\"version\":2,\"frameId\":"<<frame.id<<","<<frame.metadata<<",\"textures\":{";
                 for(size_t i=0;i<frame.textures.size();++i) {
                     const auto& t=frame.textures[i];
                     const std::string filename=std::to_string(n)+"-"+names[i]+".bin";

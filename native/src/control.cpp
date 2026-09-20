@@ -2,6 +2,7 @@
 #include "sl_runtime.hpp"
 #include "dx11_bridge.hpp"
 #include "fg_backends.hpp"
+#include "camera_orientation.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -387,7 +388,12 @@ TGFG_EXPORT int32_t TGFG_CALL TGFG_SetCamera(const TGFG_Camera* packet) {
     auto& s=tgfg::state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
     auto* f=s.frames.find(packet->frameId); if(!f || f->renderBegun) return -2;
     if(f->cameraReady) return -3; // no two game cameras into the same viewport
-    f->camera=*packet; f->cameraReady=true; ++s.diag.cameraPackets; return 0;
+    f->camera=*packet;
+    // The plugin describes the camera as HDRP rendered it, into Y-inverted targets. Depth, motion
+    // vectors and the HUD-less frame all reach the runtimes in presentation orientation, so the
+    // clip-space matrices are turned here, once, for every consumer of this packet.
+    tgfg::to_presentation_clip(f->camera);
+    f->cameraReady=true; ++s.diag.cameraPackets; return 0;
 }
 TGFG_EXPORT int32_t TGFG_CALL TGFG_SetHdrpInputs(const TGFG_HdrpInputs* packet) {
     if(!packet || packet->size!=sizeof(TGFG_HdrpInputs) || packet->abi!=TGFG_ABI || !packet->depth || !packet->motion ||

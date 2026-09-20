@@ -12,6 +12,16 @@ and runs tests including compilation of the exact embedded HLSL. Preserve the
 first compiler error rather than only the final MSBuild summary if it fails.
 The Linux preparation tests do not establish any of those Windows outcomes.
 
+`tgfg_camera_orientation` is portable arithmetic and runs on any host: it builds reference
+projection and clip-to-previous matrices in both HDRP's render-target orientation and the
+presentation orientation, deriving the latter through an independent matrix inverse, and checks
+that `to_presentation_clip` turns one into the other, that a world point reprojects correctly
+through the converted `clipToPrev`, and that the turn is its own inverse. It says nothing about
+what the runtimes do with those matrices; that was established by an in-game comparison of DLSS,
+FSR and XeSS. When repeating such a comparison, check that the deployed `TGFG.Native.dll` hashes
+equal to `artifacts/Native/TGFG.Native.dll` first: a mod manager may have left a symlink to an
+older build in place, which makes a real change look like no change at all.
+
 The Mono Kandra history regression uses the production Harmony hook and the installed
 Harmony runtime, with a stand-in skinning manager (no game launch or GPU):
 
