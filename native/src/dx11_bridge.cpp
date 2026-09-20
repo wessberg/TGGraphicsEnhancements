@@ -795,11 +795,7 @@ public:
             if(s.slReady) s.bridgeDeviceProxy=proxyDevice_; else proxyDevice_.Reset();
             s.deviceReady=true;
             probe_vendor_backends(s.device.Get(),ad.VendorId);
-            // DLSS-G's maxima come from slDLSSGGetState, which has to run on the present thread, so
-            // with DLSS-G present the capability set is only complete once the first present has filled
-            // it. Announcing it here would let the plugin snapshot a zero DLSS maximum, which drops the
-            // DLSS row from the Video tab for the rest of the session: it reads the capabilities once.
-            if(!s.dlssReady) s.status.flags|=4u; // capability probes complete
+            s.status.flags|=4u; // capability probes complete
         }
         D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
         if(proxyDevice_) {

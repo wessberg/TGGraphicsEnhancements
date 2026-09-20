@@ -200,10 +200,11 @@ void on_device(IUnknown* object) {
         if(!s.dlssReady) log("DLSS-G feature functions (or the Reflex it requires) are missing; DLSS-G unavailable");
     }
     if(s.reflexReady) s.status.latencyAvailable|=(1u<<uint32_t(Latency::Reflex))|(1u<<uint32_t(Latency::ReflexBoost));
-    // No capability query here: slDLSSGGetState must be called on the present thread, and this runs
-    // on whichever thread created the bridge. The bridge always starts on the standard swapchain, so
-    // after_present fills the capabilities on the very first present instead.
-    if(s.dlssReady) { s.status.backendsAvailable|=1u<<uint32_t(Backend::DLSS); options_off(); }
+    // The capabilities are read here, before any present, because the plugin reads them once and the
+    // Video tab's rows depend on them. Streamline warns that slDLSSGGetState should be called on the
+    // present thread; that concerns the inputs-processing completion fence, which does not exist yet at
+    // this point. Two attempts at deferring this to the first present each broke the Video tab.
+    if(s.dlssReady) { s.status.backendsAvailable|=1u<<uint32_t(Backend::DLSS); options_off(); update_caps(); }
     log(std::string("Streamline bound to the private D3D12 presentation device: DLSS-G ")+(s.dlssReady?"available":"unavailable")+
         ", Reflex "+(s.reflexReady?"available":"unavailable")+". FG remains Off until valid render inputs and a user request.");
 }
@@ -222,12 +223,8 @@ void update_caps() {
     // which is all this reads.
     auto r=s.sl.getState(s.viewport,g,nullptr);
     s.status.lastGetStateResult=static_cast<int32_t>(r);
-    // Announce the capability set either way. A runtime that refuses to report leaves DLSS-G out of the
-    // choices, which is correct, but it must never leave the plugin waiting for capabilities that will
-    // not arrive: it reads them once, the first time they are announced.
-    s.status.flags|=4u;
     if(r!=sl::Result::eOk) return;
-    s.status.flags|=8u;
+    s.status.flags|=4u|8u;
     s.status.maxGeneratedFrames=g.numFramesToGenerateMax;
     s.status.dynamicSupported=g.bIsDynamicMFGSupported==sl::Boolean::eTrue;
     s.status.dlssgStatus=static_cast<uint32_t>(g.status);
