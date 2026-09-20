@@ -102,6 +102,14 @@ void summarise(uint64_t now) {
             if(count) line+=" pcLatency="+ms(pc/count)+" renderLatency="+ms(render/count)+" gpuActive="+ms(gpu/count);
         }
     }
+    // The XeLL equivalent, so DLSS-with-Reflex and XeSS-with-XeLL can be compared with numbers.
+    if(s.latency==Latency::XeLL) {
+        uint64_t sim=0,submit=0; uint32_t frames=0;
+        if(xell_latency(sim,submit,frames) && frames) {
+            auto ms=[](uint64_t us){ char b[32]{}; std::snprintf(b,sizeof(b),"%.1fms",us/1000.0); return std::string(b); };
+            line+=" | XeLL reports="+n(frames)+" simToPresent="+ms(sim)+" submitToPresent="+ms(submit);
+        }
+    }
     log(line);
     note_foreign_streamline();
     const bool markerLogged=d.markerFailLogged, tagLogged=d.tagFailLogged;

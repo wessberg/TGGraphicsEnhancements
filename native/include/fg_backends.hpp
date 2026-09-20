@@ -66,6 +66,7 @@ bool xell_sleep(uint32_t frameId);
 void xell_marker(uint32_t frameId,sl::PCLMarker);
 // Changing the sleep mode requires an idle GPU; the bridge drains before calling this.
 bool xell_apply(bool lowLatency,uint32_t minimumIntervalUs);
+bool xell_latency(uint64_t& simToPresentUs,uint64_t& submitToPresentUs,uint32_t& frames);
 bool xell_mode_pending(bool lowLatency,uint32_t minimumIntervalUs);
 // AMD Anti-Lag 2 (AMD GPUs with a supporting driver).
 void antilag_probe(ID3D12Device*,uint32_t vendor);

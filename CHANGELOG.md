@@ -1,5 +1,11 @@
 # Unreleased
 
+- Report XeLL's own latency measurements in the pipeline line, so the XeSS path can be compared with
+  the Reflex one with numbers rather than only by feel: `XeLL reports=N simToPresent=.. submitToPresent=..`,
+  averaged over the last 64 frames XeLL kept. The two are not the same measurement - Reflex's
+  pcLatency ends when the GPU finishes the frame, while XeLL timestamps only the CPU side - so what
+  compares between them is how far each moves when frame generation is turned on.
+
 - Apply the switch to Borderless Fullscreen on the same Apply that turned frame generation on, instead
   of needing a second one. Applying the game's display setting also applies its resolution, refresh
   rate and VSync rows, so it waits until the Options screen is closed rather than committing edits the

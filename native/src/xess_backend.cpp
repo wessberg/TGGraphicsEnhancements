@@ -22,6 +22,7 @@ struct XessRuntime {
     F(xefgSwapChainGetProperties); F(xefgSwapChainSetNumInterpolatedFrames); F(xefgSwapChainGetVersion);
     F(xefgSwapChainSetUiCompositionState);
     F(xellD3D12CreateContext); F(xellSetSleepMode); F(xellSleep); F(xellAddMarkerData); F(xellSetLoggingCallback); F(xellGetVersion);
+    F(xellGetFramesReports);
 #undef F
     ID3D12Device* device=nullptr;
     xell_context_handle_t xell=nullptr;
@@ -193,6 +194,7 @@ void load_xess_runtime() {
     F(fg,xefgSwapChainGetProperties); F(fg,xefgSwapChainSetNumInterpolatedFrames); F(fg,xefgSwapChainGetVersion);
     F(fg,xefgSwapChainSetUiCompositionState);
     F(ll,xellD3D12CreateContext); F(ll,xellSetSleepMode); F(ll,xellSleep); F(ll,xellAddMarkerData); F(ll,xellSetLoggingCallback); F(ll,xellGetVersion);
+    F(ll,xellGetFramesReports);
 #undef F
     if(!complete) { log("Intel XeSS runtime is missing expected exports; XeSS and XeLL unavailable"); xs.xefgSwapChainD3D12CreateContext=nullptr; xs.xellD3D12CreateContext=nullptr; return; }
     xefg_swapchain_version_t version{}; xs.xefgSwapChainGetVersion(&version);
@@ -232,6 +234,28 @@ void xell_marker(uint32_t frameId,sl::PCLMarker marker) {
     // The six XeLL markers use the same numbering as Streamline's PCL markers.
     if(xs.xell && uint32_t(marker)<=uint32_t(sl::PCLMarker::ePresentEnd))
         xs.xellAddMarkerData(xs.xell,frameId,static_cast<xell_latency_marker_type_t>(uint32_t(marker)));
+}
+// The last 64 XeLL frames, averaged, so the XeSS path can be compared with the Reflex one instead of
+// being described only from how it feels. Note what these two measure is not identical: Reflex's
+// pcLatency ends at the GPU finishing the frame, while XeLL only timestamps the CPU side, so the
+// comparison that means something is how far each moves when frame generation is turned on.
+bool xell_latency(uint64_t& simToPresentUs,uint64_t& submitToPresentUs,uint32_t& frames) {
+    simToPresentUs=submitToPresentUs=0; frames=0;
+    if(!xs.xell || !xs.xellGetFramesReports) return false;
+    xell_frame_report_t reports[64]{};
+    if(xs.xellGetFramesReports(xs.xell,reports)!=XELL_RESULT_SUCCESS) return false;
+    uint64_t sim=0,submit=0; uint32_t submitted=0;
+    for(const auto& r:reports) {
+        if(!r.m_frame_id || !r.m_sim_start_ts || r.m_present_end_ts<=r.m_sim_start_ts) continue;
+        sim+=r.m_present_end_ts-r.m_sim_start_ts; ++frames;
+        if(r.m_render_submit_start_ts && r.m_present_end_ts>r.m_render_submit_start_ts) {
+            submit+=r.m_present_end_ts-r.m_render_submit_start_ts; ++submitted;
+        }
+    }
+    if(!frames) return false;
+    simToPresentUs=sim/frames/1000;                              // the reports are nanoseconds
+    submitToPresentUs=submitted?submit/submitted/1000:0;
+    return true;
 }
 bool xell_mode_pending(bool lowLatency,uint32_t minimumIntervalUs) {
     if(lowLatency && !ensure_xell()) return false;
