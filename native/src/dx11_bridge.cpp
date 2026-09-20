@@ -1070,9 +1070,23 @@ public:
     }
     ULONG STDMETHODCALLTYPE AddRef() override {return ++refs_;}
     ULONG STDMETHODCALLTYPE Release() override {const auto n=--refs_;if(!n)delete this;return n;}
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID n,UINT size,const void* p) override {return output_->SetPrivateData(n,size,p);}
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID n,const IUnknown* p) override {return output_->SetPrivateDataInterface(n,p);}
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID n,UINT* size,void* p) override {return output_->GetPrivateData(n,size,p);}
+    // A bridge that has given up its presentation swapchain still answers COM calls: the game holds
+    // its reference until it chooses to release it, and Unity queries a swapchain it is about to drop
+    // - the crash that found this was GetFullscreenState arriving after retirement. Every method that
+    // forwards to the presentation swapchain therefore checks first, because after retirement there is
+    // nothing to forward to and guarded() cannot help: a null dereference is not a C++ exception.
+    bool surrendered(const char* method) const {
+        if(output_) return false;
+        log_throttled(std::string("The game called ")+method+" on a bridge that has given up its "
+                      "presentation swapchain; answering without one");
+        return true;
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID n,UINT size,const void* p) override {
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetPrivateData(n,size,p);}
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID n,const IUnknown* p) override {
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetPrivateDataInterface(n,p);}
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID n,UINT* size,void* p) override {
+        if(surrendered(__func__))return DXGI_ERROR_NOT_FOUND;return output_->GetPrivateData(n,size,p);}
     HRESULT STDMETHODCALLTYPE GetParent(REFIID id,void** out) override {return clientFactory_->QueryInterface(id,out);}
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID id,void** out) override {return d11_->QueryInterface(id,out);}
     HRESULT STDMETHODCALLTYPE Present(UINT sync,UINT flags) override {return guarded([&]{return present(sync,flags,nullptr);});}
@@ -1083,10 +1097,13 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL value,IDXGIOutput* target) override {
         return guarded([&]{
+            if(surrendered(__func__))return HRESULT(DXGI_ERROR_INVALID_CALL);
             pause_generation();drain();resync_.display_transition();
             const auto r=output_->SetFullscreenState(value,target);if(SUCCEEDED(r))fullscreen_.Windowed=!value;return r;});
     }
-    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* value,IDXGIOutput** out) override {return output_->GetFullscreenState(value,out);}
+    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* value,IDXGIOutput** out) override {
+        if(surrendered(__func__)) { if(value)*value=FALSE; if(out)*out=nullptr; return S_OK; }
+        return output_->GetFullscreenState(value,out);}
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* d) override {
         if(!d)return E_POINTER;std::lock_guard<std::recursive_mutex> lock(state().mutex);*d={};
         d->BufferDesc.Width=clientDesc_.Width;d->BufferDesc.Height=clientDesc_.Height;d->BufferDesc.Format=clientDesc_.Format;
@@ -1098,25 +1115,44 @@ public:
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
         if(!desc)return E_POINTER;return guarded([&]{
             pause_generation();drain();resync_.display_transition();
+            if(surrendered(__func__))return HRESULT(DXGI_ERROR_INVALID_CALL);
             auto d=*desc;d.Format=DXGI_FORMAT(output_format(d.Format==DXGI_FORMAT_UNKNOWN?clientDesc_.Format:d.Format));
             return output_->ResizeTarget(&d);});
     }
-    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override {return output_->GetContainingOutput(out);}
-    HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {return output_->GetFrameStatistics(out);}
+    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override {
+        if(!out)return E_POINTER;if(surrendered(__func__)){*out=nullptr;return DXGI_ERROR_INVALID_CALL;}
+        return output_->GetContainingOutput(out);}
+    HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->GetFrameStatistics(out);}
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* out) override {if(!out)return E_POINTER;std::lock_guard<std::recursive_mutex> lock(state().mutex);*out=UINT(state().status.sourcePresents);return S_OK;}
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* d) override {if(!d)return E_POINTER;std::lock_guard<std::recursive_mutex> lock(state().mutex);*d=clientDesc_;return S_OK;}
-    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* d) override {return output_->GetFullscreenDesc(d);}
+    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* d) override {
+        if(!d)return E_POINTER;if(surrendered(__func__)){*d=fullscreen_;return S_OK;}
+        return output_->GetFullscreenDesc(d);}
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* w) override {if(!w)return E_POINTER;*w=hwnd_;return S_OK;}
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID,void** out) override {if(!out)return E_POINTER;*out=nullptr;return E_NOINTERFACE;}
     HRESULT STDMETHODCALLTYPE Present1(UINT sync,UINT flags,const DXGI_PRESENT_PARAMETERS* p) override {return guarded([&]{return present(sync,flags,p);});}
-    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {return output_->IsTemporaryMonoSupported();}
-    HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override {return output_->GetRestrictToOutput(out);}
-    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* c) override {return output_->SetBackgroundColor(c);}
-    HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* c) override {return output_->GetBackgroundColor(c);}
-    HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION r) override {return r==DXGI_MODE_ROTATION_IDENTITY?output_->SetRotation(r):DXGI_ERROR_UNSUPPORTED;}
-    HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* r) override {return output_->GetRotation(r);}
-    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT w,UINT h) override {if(w!=clientDesc_.Width||h!=clientDesc_.Height)return DXGI_ERROR_UNSUPPORTED;return output_->SetSourceSize(w,h);}
-    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* w,UINT* h) override {return output_->GetSourceSize(w,h);}
+    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
+        if(surrendered(__func__))return FALSE;return output_->IsTemporaryMonoSupported();}
+    HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override {
+        if(!out)return E_POINTER;if(surrendered(__func__)){*out=nullptr;return S_OK;}
+        return output_->GetRestrictToOutput(out);}
+    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* c) override {
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetBackgroundColor(c);}
+    HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* c) override {
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->GetBackgroundColor(c);}
+    HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION r) override {
+        if(r!=DXGI_MODE_ROTATION_IDENTITY)return DXGI_ERROR_UNSUPPORTED;
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetRotation(r);}
+    HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* r) override {
+        if(!r)return E_POINTER;if(surrendered(__func__)){*r=DXGI_MODE_ROTATION_IDENTITY;return S_OK;}
+        return output_->GetRotation(r);}
+    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT w,UINT h) override {
+        if(w!=clientDesc_.Width||h!=clientDesc_.Height)return DXGI_ERROR_UNSUPPORTED;
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetSourceSize(w,h);}
+    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* w,UINT* h) override {
+        if(surrendered(__func__)){if(w)*w=clientDesc_.Width;if(h)*h=clientDesc_.Height;return S_OK;}
+        return output_->GetSourceSize(w,h);}
     // Frame-latency object semantics for a client that created its swapchain with the waitable flag.
     // It must stay valid while the presentation swapchain is recreated for another frame generation
     // technology, so it is a bridge-owned semaphore released once per presented frame.
@@ -1142,16 +1178,20 @@ public:
         return copy;
     }
     HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* m) override {
-        if(!m)return E_POINTER;if(m->_11!=1||m->_22!=1||m->_12||m->_21||m->_31||m->_32)return DXGI_ERROR_UNSUPPORTED;return output_->SetMatrixTransform(m);
+        if(!m)return E_POINTER;if(m->_11!=1||m->_22!=1||m->_12||m->_21||m->_31||m->_32)return DXGI_ERROR_UNSUPPORTED;
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetMatrixTransform(m);
     }
-    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* m) override {return output_->GetMatrixTransform(m);}
+    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* m) override {
+        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->GetMatrixTransform(m);}
     UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override {std::lock_guard<std::recursive_mutex> lock(state().mutex);return virtualIndex_;}
     HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE cs,UINT* flags) override {
         if(!flags)return E_POINTER;*flags=0;if(!source_color_supported(clientDesc_.Format,cs))return S_OK;
+        if(surrendered(__func__))return S_OK; // no support to report without a presentation swapchain
         return output_->CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE(output_color_space(clientDesc_.Format,cs)),flags);
     }
     HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE cs) override {
-        return guarded([&]{if(!source_color_supported(clientDesc_.Format,cs))return DXGI_ERROR_UNSUPPORTED;
+        return guarded([&]{if(!source_color_supported(clientDesc_.Format,cs))return HRESULT(DXGI_ERROR_UNSUPPORTED);
+            if(surrendered(__func__))return HRESULT(DXGI_ERROR_INVALID_CALL);
             UINT support=0;auto out=DXGI_COLOR_SPACE_TYPE(output_color_space(clientDesc_.Format,cs));
             auto hr=output_->CheckColorSpaceSupport(out,&support);if(FAILED(hr))return hr;
             if(!(support&DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT))return DXGI_ERROR_UNSUPPORTED;
@@ -1162,6 +1202,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type,UINT size,void* data) override {
         return guarded([&]{
+            if(surrendered(__func__))return HRESULT(DXGI_ERROR_INVALID_CALL);
             const auto hr=output_->SetHDRMetaData(type,size,data);
             if(SUCCEEDED(hr)) { const auto* bytes=static_cast<const uint8_t*>(data); hdrType_=type; hdrMetadata_.assign(bytes,bytes+(data?size:0)); }
             // AMD FSR takes its maximum luminance from this when the game sets it, and divides by it.

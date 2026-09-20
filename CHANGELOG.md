@@ -1,5 +1,15 @@
 # Unreleased
 
+- Answer DXGI calls on a bridge that has given up its presentation swapchain, instead of crashing.
+  Twenty-two swapchain methods forwarded straight to the presentation swapchain with no check, and
+  three of them are compiled as tail calls that load the pointer and jump through its vtable, so once
+  that pointer was released the game got an access violation reading address zero. The game holds its
+  reference to a swapchain it is replacing until it chooses to release it, and Unity queries one while
+  tearing it down, so this was reachable both after a bridge retired for a replacement and during
+  teardown. Each method now answers for itself: the fullscreen state of a surrendered bridge is
+  windowed, its fullscreen description is the last one it had, its source size is the client size, and
+  the rest report DXGI_ERROR_INVALID_CALL. The first such call is logged with the method name.
+
 - Let a replacement swapchain take over from a live bridge. Unity replaces the swapchain rather than
   resizing it for some display changes, and it creates the replacement before releasing the old one,
   so bridge creation was refused because one was already active; the old bridge's destructor then
