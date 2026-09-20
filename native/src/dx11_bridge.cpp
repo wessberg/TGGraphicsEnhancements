@@ -17,6 +17,7 @@
 #include <memory>
 #include <algorithm>
 #include <utility>
+#include <map>
 
 namespace tgfg {
 namespace {
@@ -173,6 +174,10 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     ComPtr<ID3D11Buffer> copyCB_;
     ComPtr<ID3D11RasterizerState> raster_;
     ComPtr<ID3D11DepthStencilState> noDepth_;
+    // Keyed by raw GUID bytes; DXGI imposes no ordering of its own.
+    struct GuidLess { bool operator()(const GUID& a,const GUID& b) const { return std::memcmp(&a,&b,sizeof(GUID))<0; } };
+    std::map<GUID,std::vector<uint8_t>,GuidLess> privateData_;
+    std::map<GUID,ComPtr<IUnknown>,GuidLess> privateInterfaces_;
     DXGI_SWAP_CHAIN_DESC1 clientDesc_{};
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_{};
     HWND hwnd_=nullptr;
@@ -595,6 +600,12 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             log("Recursive bridge Present detected; rejecting re-entry");
             return DXGI_ERROR_INVALID_CALL;
         }
+        if(retired_) {
+            // Presenting to a swapchain the game has already replaced. Still hand back a latency
+            // permit, or a client that waits before each frame stalls on an object nothing drives.
+            if(latencySemaphore_.value) ReleaseSemaphore(latencySemaphore_.value,1,nullptr);
+            return S_OK;
+        }
         if(broken_) return DXGI_ERROR_DEVICE_REMOVED;
         if(flags&DXGI_PRESENT_TEST) {
             // An occlusion probe can report that a resize is owed, but a clean probe presents nothing
@@ -724,6 +735,13 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     }
     HRESULT resize(UINT count,UINT width,UINT height,DXGI_FORMAT format,UINT flags) {
         SLGuard own;
+        // A bridge the game has already replaced must not resize: its buffers, counters and frame slots
+        // now belong to its successor, and reporting success would be a lie a caller can act on, since
+        // GetDesc1 and GetBuffer still describe and hand out the old buffers. Zero width, height,
+        // format and buffer count each mean "keep" or "take from the window" rather than "no change",
+        // so there is no reliable no-op to accept either. ReShade treats this error as leaving the
+        // device usable and restores its previous description.
+        if(surrendered(__func__)) return DXGI_ERROR_INVALID_CALL;
         RECT bounds{};if(!GetClientRect(hwnd_,&bounds))return HRESULT_FROM_WIN32(GetLastError());
         auto plan=plan_resize(count,width,height,format,clientDesc_.BufferCount,clientDesc_.Format,
             UINT(std::max<LONG>(0,bounds.right-bounds.left)),UINT(std::max<LONG>(0,bounds.bottom-bounds.top)));
@@ -860,28 +878,56 @@ public:
     // own swapchain for the rest of the session and frame generation never returns. The destructor
     // calls this too, so the work happens exactly once either way.
     void retire() {
+        // The lock comes before the idempotence check, not after: a destructor that set the flag and
+        // then waited for the mutex would let a replacement skip an unfinished handover and hand the
+        // successor state that this object is still about to clear.
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(retired_) return;
         retired_=true;
         renoPending.store(false,std::memory_order_relaxed);
-        std::lock_guard<std::recursive_mutex> lock(state().mutex);SLGuard own;
+        SLGuard own;
         if(registered_) {
             if(generator_) generator_->quiesce();
             else { options_off(); for(auto& slot:state().frames.slots)if(slot.occupied)clear_tags(&slot.value); }
         }
-        try {drain();}catch(const std::exception& e){log(std::string("Bridge teardown: ")+e.what());}
-        if(registered_) {
-            active=nullptr;state().swapchain=nullptr;state().presentQueue.Reset();state().status.bridgeFlags=0;
-            for(auto& slot:state().frames.slots)if(slot.occupied)state().frames.release(slot.id);
+        bool idle=true;
+        try {drain();}catch(const std::exception& e){idle=false;log(std::string("Bridge teardown: ")+e.what());}
+        if(registered_ && active==this) {
+            auto& s=state();
+            active=nullptr;s.swapchain=nullptr;s.presentQueue.Reset();s.status.bridgeFlags=0;
+            for(auto& slot:s.frames.slots)if(slot.occupied)s.frames.release(slot.id);
+            // Both belong to the output being given up, exactly as at a backend switch. The fence is
+            // DLSS-G's, and an asynchronous error reported against this output must not be handed to
+            // the successor, whose first present would otherwise consume it and go fatal.
+            s.lastInputsFence.Reset(); s.lastInputsFenceValue=0;
+            s.asyncApiError.store(S_OK,std::memory_order_relaxed);
             registered_=false;
         }
         // Presents and input capture stop here: a retired bridge never touches the pipeline again,
         // however long the game holds its reference.
         broken_=true;
-        if(output_)output_->SetFullscreenState(FALSE,nullptr);
-        for(auto& b:backbuffers_)b.Reset();output_.Reset();
-        generator_.reset();
-        // Released before any replacement tags the same context, never after.
-        if(c11_)c11_->SetPrivateData(kImmediateContextTag,0,nullptr);
+        // A client that waits on the frame-latency object before each frame would block forever on a
+        // swapchain that no longer presents, because nothing else will release its permit. Fill the
+        // semaphore so anyone already waiting wakes and later waits pass straight through.
+        if(latencySemaphore_.value) while(ReleaseSemaphore(latencySemaphore_.value,1,nullptr)) {}
+        if(idle) {
+            if(output_)output_->SetFullscreenState(FALSE,nullptr);
+            fullscreen_.Windowed=TRUE; // GetDesc and GetFullscreenDesc must agree with GetFullscreenState
+            for(auto& b:backbuffers_)b.Reset();output_.Reset();
+            generator_.reset();
+        } else {
+            // A drain that did not complete proves nothing about the GPU, and a five-second wait_cpu
+            // timeout is not completion. Freeing resources that submitted work may still reference
+            // turns a stall into device removal, so this bridge keeps them until it is destroyed.
+            log("Bridge retirement could not confirm the GPU was idle; its presentation resources are "
+                "kept until the game releases the swapchain, and the replacement may fail to be created");
+        }
+        // Released before any replacement tags the same context, and only while it is still ours.
+        if(c11_) {
+            void* tagged=nullptr; UINT size=sizeof(tagged);
+            if(SUCCEEDED(c11_->GetPrivateData(kImmediateContextTag,&size,&tagged)) && tagged==this)
+                c11_->SetPrivateData(kImmediateContextTag,0,nullptr);
+        }
     }
     ~Dx11Swapchain() { retire(); }
     ID3D11DeviceContext* immediate_context() {return c11_.Get();}
@@ -1069,24 +1115,65 @@ public:
         return E_NOINTERFACE;
     }
     ULONG STDMETHODCALLTYPE AddRef() override {return ++refs_;}
-    ULONG STDMETHODCALLTYPE Release() override {const auto n=--refs_;if(!n)delete this;return n;}
+    // Destruction is serialised with the registry: retirement runs under state().mutex and takes
+    // time (quiesce, drain), so a final Release on another thread could otherwise delete the object
+    // out from under it. Holding the mutex across the decrement makes the last reference and the
+    // handover mutually exclusive.
+    ULONG STDMETHODCALLTYPE Release() override {
+        std::unique_lock<std::recursive_mutex> lock(state().mutex);
+        const auto n=--refs_;
+        // Retire while still holding the lock, so the registry no longer points at this object before
+        // anyone else can run; the destructor's own call then finds the work already done.
+        if(!n) { retire(); lock.unlock(); delete this; }
+        return n;
+    }
     // A bridge that has given up its presentation swapchain still answers COM calls: the game holds
     // its reference until it chooses to release it, and Unity queries a swapchain it is about to drop
     // - the crash that found this was GetFullscreenState arriving after retirement. Every method that
     // forwards to the presentation swapchain therefore checks first, because after retirement there is
     // nothing to forward to and guarded() cannot help: a null dereference is not a C++ exception.
     bool surrendered(const char* method) const {
-        if(output_) return false;
+        if(!retired_ && output_) return false;
         log_throttled(std::string("The game called ")+method+" on a bridge that has given up its "
                       "presentation swapchain; answering without one");
         return true;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID n,UINT size,const void* p) override {
-        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetPrivateData(n,size,p);}
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID n,const IUnknown* p) override {
-        if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetPrivateDataInterface(n,p);}
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID n,UINT* size,void* p) override {
-        if(surrendered(__func__))return DXGI_ERROR_NOT_FOUND;return output_->GetPrivateData(n,size,p);}
+    // The client's private data belongs to the object the client holds, not to whichever presentation
+    // swapchain happens to be behind it. Forwarding it meant every backend switch, which replaces that
+    // swapchain, and every retirement silently discarded it. ReShade keeps its proxy pointer here, so
+    // losing the association breaks a swapchain the game is still using.
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID name,UINT size,const void* data) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        privateInterfaces_.erase(name);
+        if(!data || !size) { privateData_.erase(name); return S_OK; }
+        const auto* bytes=static_cast<const uint8_t*>(data);
+        privateData_[name].assign(bytes,bytes+size);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID name,const IUnknown* unknown) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        privateData_.erase(name);
+        if(!unknown) { privateInterfaces_.erase(name); return S_OK; }
+        privateInterfaces_[name]=const_cast<IUnknown*>(unknown); // the ComPtr takes the reference
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID name,UINT* size,void* data) override {
+        if(!size) return E_INVALIDARG;
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
+        auto answer=[&](const void* from,UINT need)->HRESULT {
+            if(!data) { *size=need; return S_OK; }
+            if(*size<need) { *size=need; return DXGI_ERROR_MORE_DATA; }
+            *size=need; std::memcpy(data,from,need); return S_OK;
+        };
+        if(auto it=privateInterfaces_.find(name); it!=privateInterfaces_.end()) {
+            auto* raw=it->second.Get();
+            const auto hr=answer(&raw,UINT(sizeof(raw)));
+            if(hr==S_OK && data) raw->AddRef(); // the caller owns the reference it was handed
+            return hr;
+        }
+        if(auto it=privateData_.find(name); it!=privateData_.end()) return answer(it->second.data(),UINT(it->second.size()));
+        *size=0; return DXGI_ERROR_NOT_FOUND;
+    }
     HRESULT STDMETHODCALLTYPE GetParent(REFIID id,void** out) override {return clientFactory_->QueryInterface(id,out);}
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID id,void** out) override {return d11_->QueryInterface(id,out);}
     HRESULT STDMETHODCALLTYPE Present(UINT sync,UINT flags) override {return guarded([&]{return present(sync,flags,nullptr);});}
@@ -1102,6 +1189,7 @@ public:
             const auto r=output_->SetFullscreenState(value,target);if(SUCCEEDED(r))fullscreen_.Windowed=!value;return r;});
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* value,IDXGIOutput** out) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__)) { if(value)*value=FALSE; if(out)*out=nullptr; return S_OK; }
         return output_->GetFullscreenState(value,out);}
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* d) override {
@@ -1114,43 +1202,54 @@ public:
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT n,UINT w,UINT h,DXGI_FORMAT f,UINT flags) override {return guarded([&]{return resize(n,w,h,f,flags);});}
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
         if(!desc)return E_POINTER;return guarded([&]{
-            pause_generation();drain();resync_.display_transition();
             if(surrendered(__func__))return HRESULT(DXGI_ERROR_INVALID_CALL);
+            pause_generation();drain();resync_.display_transition();
             auto d=*desc;d.Format=DXGI_FORMAT(output_format(d.Format==DXGI_FORMAT_UNKNOWN?clientDesc_.Format:d.Format));
             return output_->ResizeTarget(&d);});
     }
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(!out)return E_POINTER;if(surrendered(__func__)){*out=nullptr;return DXGI_ERROR_INVALID_CALL;}
         return output_->GetContainingOutput(out);}
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->GetFrameStatistics(out);}
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* out) override {if(!out)return E_POINTER;std::lock_guard<std::recursive_mutex> lock(state().mutex);*out=UINT(state().status.sourcePresents);return S_OK;}
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* d) override {if(!d)return E_POINTER;std::lock_guard<std::recursive_mutex> lock(state().mutex);*d=clientDesc_;return S_OK;}
     HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* d) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(!d)return E_POINTER;if(surrendered(__func__)){*d=fullscreen_;return S_OK;}
         return output_->GetFullscreenDesc(d);}
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* w) override {if(!w)return E_POINTER;*w=hwnd_;return S_OK;}
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID,void** out) override {if(!out)return E_POINTER;*out=nullptr;return E_NOINTERFACE;}
     HRESULT STDMETHODCALLTYPE Present1(UINT sync,UINT flags,const DXGI_PRESENT_PARAMETERS* p) override {return guarded([&]{return present(sync,flags,p);});}
     BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__))return FALSE;return output_->IsTemporaryMonoSupported();}
     HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(!out)return E_POINTER;if(surrendered(__func__)){*out=nullptr;return S_OK;}
         return output_->GetRestrictToOutput(out);}
     HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* c) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetBackgroundColor(c);}
     HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* c) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->GetBackgroundColor(c);}
     HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION r) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(r!=DXGI_MODE_ROTATION_IDENTITY)return DXGI_ERROR_UNSUPPORTED;
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetRotation(r);}
     HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* r) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(!r)return E_POINTER;if(surrendered(__func__)){*r=DXGI_MODE_ROTATION_IDENTITY;return S_OK;}
         return output_->GetRotation(r);}
     HRESULT STDMETHODCALLTYPE SetSourceSize(UINT w,UINT h) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(w!=clientDesc_.Width||h!=clientDesc_.Height)return DXGI_ERROR_UNSUPPORTED;
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetSourceSize(w,h);}
     HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* w,UINT* h) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__)){if(w)*w=clientDesc_.Width;if(h)*h=clientDesc_.Height;return S_OK;}
         return output_->GetSourceSize(w,h);}
     // Frame-latency object semantics for a client that created its swapchain with the waitable flag.
@@ -1178,13 +1277,16 @@ public:
         return copy;
     }
     HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* m) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(!m)return E_POINTER;if(m->_11!=1||m->_22!=1||m->_12||m->_21||m->_31||m->_32)return DXGI_ERROR_UNSUPPORTED;
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->SetMatrixTransform(m);
     }
     HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* m) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(surrendered(__func__))return DXGI_ERROR_INVALID_CALL;return output_->GetMatrixTransform(m);}
     UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override {std::lock_guard<std::recursive_mutex> lock(state().mutex);return virtualIndex_;}
     HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE cs,UINT* flags) override {
+        std::lock_guard<std::recursive_mutex> lock(state().mutex);
         if(!flags)return E_POINTER;*flags=0;if(!source_color_supported(clientDesc_.Format,cs))return S_OK;
         if(surrendered(__func__))return S_OK; // no support to report without a presentation swapchain
         return output_->CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE(output_color_space(clientDesc_.Format,cs)),flags);
@@ -1272,13 +1374,7 @@ HRESULT try_create_dx11_bridge(IUnknown* device,IDXGIFactory* factory,HWND hwnd,
     if(insideSL || !device || !factory || !is_game_window(hwnd,desc.Width,desc.Height))return S_FALSE;
     auto& s=state();std::lock_guard<std::recursive_mutex> lock(s.mutex);
     if(!s.bridgeAllowed)return S_FALSE;
-    if(active) {
-        // Another window is not ours to take over. The same window means the game is replacing the
-        // swapchain this bridge stands in for, so the bridge steps aside for its replacement.
-        if(active->window()!=hwnd)return S_FALSE;
-        log("The game replaced its swapchain for this window; retiring the previous bridge so the new one can take over");
-        active->retire();
-    }
+    if(active && active->window()!=hwnd) return S_FALSE; // another window is not ours to take over
     if(desc.SampleDesc.Count!=1 || desc.Stereo || desc.BufferCount<1 || desc.BufferCount>16 ||
        desc.SwapEffect==DXGI_SWAP_EFFECT_SEQUENTIAL || !source_format_supported(desc.Format) ||
        (desc.AlphaMode!=DXGI_ALPHA_MODE_UNSPECIFIED && desc.AlphaMode!=DXGI_ALPHA_MODE_IGNORE) ||
@@ -1287,6 +1383,13 @@ HRESULT try_create_dx11_bridge(IUnknown* device,IDXGIFactory* factory,HWND hwnd,
     }
     ComPtr<ID3D11Device> game;if(FAILED(device->QueryInterface(IID_PPV_ARGS(&game))))return S_FALSE;
     s.status.sourceApi=11;
+    // Everything that can refuse this request has now refused it, so the handover cannot throw away a
+    // working bridge for a swapchain that was never going to be served. It still has to happen before
+    // the replacement is created: DXGI allows only one flip-model swapchain per window.
+    if(active) {
+        log("The game replaced its swapchain for this window; retiring the previous bridge so the new one can take over");
+        active->retire();
+    }
     try {
         auto bridge=std::make_unique<Dx11Swapchain>();bridge->initialize(game.Get(),factory,hwnd,desc,full,restrictTo);
         *out=bridge.release();s.status.reason=uint32_t(Reason::BridgeReady);return S_OK;

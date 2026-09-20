@@ -1,5 +1,29 @@
 # Unreleased
 
+- Make a bridge safe to hand over while the game is still using it. A bridge that gives up its
+  presentation swapchain to a replacement stays alive as long as the game holds its reference, and the
+  game does keep calling it: the logs show GetFullscreenState, a fullscreen transition and ResizeBuffers
+  arriving seconds after the handover. Those calls now find an object that answers for itself instead
+  of dereferencing what it no longer owns, and they hold the same lock as the present path while doing
+  it, so a query cannot be reading the swapchain as the handover releases it.
+
+  The handover itself is now ordered correctly as well. It happens after every check that could refuse
+  the replacement, so an unsupported request cannot throw away a working bridge; it takes the lock
+  before deciding it has already run, so a final Release cannot destroy the object midway through it;
+  it clears the shared state only while that state still belongs to it, and the immediate context's tag
+  only while the tag still names it; it hands back a frame-latency permit, so a client that waits
+  before each frame cannot be stranded on a swapchain nothing drives; and when the drain cannot confirm
+  the GPU is idle it keeps its resources rather than freeing memory that submitted work may still
+  reference. A retired bridge refuses a resize outright rather than reporting a success its buffers
+  would contradict.
+
+  The client's private data is now the bridge's own rather than the presentation swapchain's, so it
+  survives both a handover and a frame generation backend switch; ReShade keeps its proxy pointer
+  there. The draw observer refuses to install against a second, different context rather than
+  overwriting the original function pointers the first set of detours still calls.
+
+  Found by an external review of the handover added earlier in this release, after two crashes.
+
 - Answer DXGI calls on a bridge that has given up its presentation swapchain, instead of crashing.
   Twenty-two swapchain methods forwarded straight to the presentation swapchain with no check, and
   three of them are compiled as tail calls that load the pointer and jump through its vtable, so once
