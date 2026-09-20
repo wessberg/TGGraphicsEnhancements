@@ -114,6 +114,10 @@ struct State {
     bool hudlessRequested=false, hudlessOk=false;
     uint32_t hudlessGood=0, hudlessBad=0;
     uint32_t debugFlags=0; // TGFG_SetDebugFlags: SDK debug overlays and checks
+    // ResizeBuffers calls the bridge carried out against ones it answered without touching anything,
+    // because they asked for the configuration already in effect. Session totals, not per-summary
+    // counts: a resize is rare, and what matters is that one still happens when something is owed it.
+    uint64_t resizes=0, resizesSkipped=0;
 };
 State& state();
 extern thread_local bool insideSL;

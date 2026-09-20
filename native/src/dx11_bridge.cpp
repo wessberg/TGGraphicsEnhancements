@@ -138,6 +138,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
     Handle latencySemaphore_;
     LARGE_INTEGER qpcFrequency_{}, lastPresent_{};
     uint32_t fallbackPresentId_=0;
+    ResyncState resync_;
     ComPtr<ID3D12Fence> shared12_;
     ComPtr<ID3D11Fence> shared11_;
     Handle event_;
@@ -574,7 +575,11 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             return DXGI_ERROR_INVALID_CALL;
         }
         if(broken_) return DXGI_ERROR_DEVICE_REMOVED;
-        if(flags&DXGI_PRESENT_TEST) return output_->Present(sync,flags);
+        if(flags&DXGI_PRESENT_TEST) {
+            // An occlusion probe can report that a resize is owed, but a clean probe presents nothing
+            // and so cannot retire one that already is.
+            const HRESULT test=output_->Present(sync,flags); resync_.present_status(test==S_OK); return test;
+        }
         // A nonblocking Present cannot be emulated by a path that enqueues copies
         // before knowing whether Present will accept them. Do not consume a frame.
         if(flags&DXGI_PRESENT_DO_NOT_WAIT) return DXGI_ERROR_WAS_STILL_DRAWING;
@@ -645,6 +650,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         // used with FG. In that case suspend FG, not the user's VSync setting.
         else if(sync && !s.vsyncSupported && s.status.lastAcceptedMode) {options_off();s.status.reason=uint32_t(Reason::VsyncUnsupported);}
         const HRESULT hr=output_->Present(sync,flags);
+        resync_.present_status(hr==S_OK); // a mode change owes a resize; occlusion is treated the same way, conservatively
         if(FAILED(hr)) log("Private presentation Present returned "+hexhr(hr));
         if(generator_) generator_->after_present();
         after_present(hr);
@@ -669,6 +675,32 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             c11_->OMSetRenderTargets(0,nullptr,nullptr);
         return hr;
     }
+    // FoA calls ResizeBuffers with the configuration already in effect - seven times in a minute of
+    // Options use in one capture - and every call costs a GPU drain, a full rebuild of both the client
+    // and presentation buffers, a DLSS-G off/on bracket that Streamline reports as a repeated
+    // slDLSSGSetOptions, and a frame over 100 ms. Skipping one cannot break a client: not invalidating
+    // its back buffer is weaker than invalidating it, and GetBuffer keeps returning the same texture at
+    // the same size and format. It is skipped only when nothing could need re-synchronising - every
+    // client-visible parameter unchanged, no display transition or Present status owing a resize, and a
+    // presentation swapchain whose descriptor still reports the geometry it was given. That last check is
+    // a sanity check on the descriptor, not proof that nothing needs re-synchronising; ResyncState is what
+    // carries that, because a fullscreen or target-mode change requires a resize before any Present has
+    // had the chance to report anything.
+    bool redundant_resize(const DXGI_SWAP_CHAIN_DESC1& next,const ResizePlan& plan,UINT flags) {
+        if(broken_ || !output_ || resync_.pending) return false;
+        // Returning S_OK for a skipped resize must not hide a device that went away since the last
+        // operation: the client would keep unusable resources until some later call noticed.
+        if(d11_->GetDeviceRemovedReason()!=S_OK) return false;
+        if(auto* d12=state().device.Get(); d12 && d12->GetDeviceRemovedReason()!=S_OK) return false;
+        if(!resize_is_redundant(plan,flags,clientDesc_.BufferCount,clientDesc_.Width,clientDesc_.Height,
+                                clientDesc_.Format,clientDesc_.Flags)) return false;
+        DXGI_SWAP_CHAIN_DESC1 live{};
+        if(FAILED(output_->GetDesc1(&live))) return false;
+        // Geometry only: an FSR or XeSS presentation proxy owns its buffer count and flags and need
+        // not report the ones the bridge asked for.
+        return live.Width==next.Width && live.Height==next.Height &&
+               live.Format==DXGI_FORMAT(output_format(next.Format));
+    }
     HRESULT resize(UINT count,UINT width,UINT height,DXGI_FORMAT format,UINT flags) {
         SLGuard own;
         RECT bounds{};if(!GetClientRect(hwnd_,&bounds))return HRESULT_FROM_WIN32(GetLastError());
@@ -677,6 +709,20 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(!plan.valid) return DXGI_ERROR_INVALID_CALL;
         if(flags&(DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE|DXGI_SWAP_CHAIN_FLAG_HW_PROTECTED|DXGI_SWAP_CHAIN_FLAG_RESTRICTED_CONTENT))return DXGI_ERROR_UNSUPPORTED;
         auto next=clientDesc_;next.Width=plan.width;next.Height=plan.height;next.Format=DXGI_FORMAT(plan.format);next.BufferCount=plan.count;next.Flags=flags;
+        // DXGI is allowed to change the fullscreen state by itself; MakeWindowAssociation only stops
+        // Alt+Enter. Such a transition owes a resize exactly as an explicit one does, and nothing else
+        // here would notice it, so reconcile the live state with what the bridge last recorded.
+        BOOL live=FALSE;
+        if(FAILED(output_->GetFullscreenState(&live,nullptr))) resync_.display_transition();
+        else if(bool(live)==bool(fullscreen_.Windowed)) { resync_.display_transition(); fullscreen_.Windowed=!live; }
+        if(redundant_resize(next,plan,flags)) {
+            auto& counted=state();
+            if(++counted.resizesSkipped==1 || counted.resizesSkipped%50==0)
+                log("Skipped a ResizeBuffers to the configuration already in effect ("+std::to_string(next.Width)+"x"+
+                    std::to_string(next.Height)+", format "+std::to_string(uint32_t(next.Format))+"); "+
+                    std::to_string(counted.resizesSkipped)+" so far");
+            return S_OK;
+        }
         if(generator_) generator_->quiesce();
         else { options_off(); for(auto& slot:state().frames.slots) if(slot.occupied)clear_tags(&slot.value); }
         drain();
@@ -696,6 +742,8 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         apply_color_space();state().status.sourceFormat=clientDesc_.Format;
         if(clientDesc_.Format==DXGI_FORMAT_R16G16B16A16_FLOAT)state().status.bridgeFlags|=8;else state().status.bridgeFlags&=~8u;
         if(generator_) generator_->resized(plan.width,plan.height,DXGI_FORMAT(output_format(plan.format)));
+        resync_.resized(); // whatever a display transition owed has now been paid
+        ++state().resizes;
         log("DX11 bridge resized to "+std::to_string(plan.width)+"x"+std::to_string(plan.height));return S_OK;
     }
     template<class Fn> HRESULT guarded(Fn&& fn) noexcept {
@@ -996,7 +1044,9 @@ public:
         return colors_[index].source.d11->QueryInterface(id,out);
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL value,IDXGIOutput* target) override {
-        return guarded([&]{pause_generation();drain();const auto r=output_->SetFullscreenState(value,target);if(SUCCEEDED(r))fullscreen_.Windowed=!value;return r;});
+        return guarded([&]{
+            pause_generation();drain();resync_.display_transition();
+            const auto r=output_->SetFullscreenState(value,target);if(SUCCEEDED(r))fullscreen_.Windowed=!value;return r;});
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* value,IDXGIOutput** out) override {return output_->GetFullscreenState(value,out);}
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* d) override {
@@ -1008,7 +1058,10 @@ public:
     }
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT n,UINT w,UINT h,DXGI_FORMAT f,UINT flags) override {return guarded([&]{return resize(n,w,h,f,flags);});}
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
-        if(!desc)return E_POINTER;return guarded([&]{pause_generation();drain();auto d=*desc;d.Format=DXGI_FORMAT(output_format(d.Format==DXGI_FORMAT_UNKNOWN?clientDesc_.Format:d.Format));return output_->ResizeTarget(&d);});
+        if(!desc)return E_POINTER;return guarded([&]{
+            pause_generation();drain();resync_.display_transition();
+            auto d=*desc;d.Format=DXGI_FORMAT(output_format(d.Format==DXGI_FORMAT_UNKNOWN?clientDesc_.Format:d.Format));
+            return output_->ResizeTarget(&d);});
     }
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override {return output_->GetContainingOutput(out);}
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {return output_->GetFrameStatistics(out);}

@@ -37,6 +37,25 @@ inline ResizePlan plan_resize(uint32_t count,uint32_t width,uint32_t height,uint
     p.valid=p.count>=1 && p.count<=16 && p.width>0 && p.height>0 && p.width<=32768 && p.height<=32768 && source_format_supported(p.format);
     return p;
 }
+// Whether a ResizeBuffers is still needed to finish something the presentation swapchain has been
+// through. DXGI requires one to complete a fullscreen or target-mode transition, and a client issues it
+// then without having seen any Present error first, so Present results alone cannot decide this. Only a
+// resize that actually ran clears the flag; a status probe may set it but never clears it.
+struct ResyncState {
+    // False to begin with: a swapchain the bridge just created already matches what it was created for.
+    bool pending=false;
+    void display_transition() { pending=true; }  // SetFullscreenState or ResizeTarget, success or not
+    void present_status(bool clean) { if(!clean) pending=true; } // any Present, including a TEST probe
+    void resized() { pending=false; }            // a ResizeBuffers that reached the swapchain
+};
+// A ResizeBuffers that asks for the configuration already in effect. The caller adds the conditions
+// that numbers alone cannot decide: a healthy bridge, no pending re-synchronisation, and a presentation
+// swapchain whose descriptor still reports this geometry.
+inline bool resize_is_redundant(const ResizePlan& p,uint32_t flags,uint32_t currentCount,
+    uint32_t currentWidth,uint32_t currentHeight,uint32_t currentFormat,uint32_t currentFlags) {
+    return p.valid && p.count==currentCount && p.width==currentWidth && p.height==currentHeight &&
+        p.format==currentFormat && flags==currentFlags;
+}
 inline double pq_encode_nits(double nits) {
     const double y=std::pow(std::clamp(nits,0.0,10000.0)/10000.0,2610.0/16384.0);
     return std::pow((3424.0/4096.0+(2413.0/128.0)*y)/(1.0+(2392.0/128.0)*y),2523.0/32.0);

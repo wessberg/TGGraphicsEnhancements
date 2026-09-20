@@ -1,5 +1,20 @@
 # Unreleased
 
+- Skip a ResizeBuffers that asks for the configuration already in effect. FoA issues one at its current
+  3840x2160 seven times in a minute of Options use, and each costs a GPU drain, a rebuild of the client
+  and presentation buffers, a DLSS-G off/on bracket, and a frame over 100 ms; two of the three frames
+  over 100 ms in the reference run land within 600 ms of one. Skipping cannot surprise a client, since
+  `GetBuffer` keeps returning the same texture at the same size and format.
+
+  A resize is only skipped when nothing could be owed one. `ResyncState` tracks that: a fullscreen or
+  target-mode change requires a resize and reaches the client before any Present can report a problem,
+  so `SetFullscreenState` and `ResizeTarget` set it, a Present result other than S_OK sets it, and only
+  a resize that reached the swapchain clears it. DXGI may also leave fullscreen on its own, which no
+  setter here would see, so `resize` reconciles the live `GetFullscreenState` against the recorded one
+  first. A skip additionally requires both devices to report no removal, so returning success cannot
+  hide a lost device, and the presentation swapchain's descriptor to still report the geometry it was
+  given. Reviewed three times by an external model, which found the fullscreen and device-removal holes.
+
 - Report DLSS-G's presented frames in the pipeline line, and stop printing a zero for FSR. Only the
   XeSS path fed the counter, so the line showed `sdkPresented=0` under FSR, which reads as a failure
   when the FSR API simply exposes no such query; FSR now prints `unreported`. DLSS-G's own

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "tgfg_interop_policy.hpp"
+// The one DXGI flag these checks use, spelled out so the test stays free of Windows headers.
+#define DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT_VALUE 64u
 #include <iostream>
 #include <cstdlib>
 #include <limits>
@@ -27,6 +29,47 @@ int main() {
     CHECK(!plan_resize(17,1,1,24,2,28,1,1).valid);CHECK(!plan_resize(0,1,1,24,0,28,1,1).valid);
     CHECK(!plan_resize(2,0,0,24,2,28,0,0).valid);CHECK(!plan_resize(2,32769,2160,24,2,28,1,1).valid);
     CHECK(!plan_resize(2,3840,32769,24,2,28,1,1).valid);CHECK(!plan_resize(2,3840,2160,2,2,28,1,1).valid);
+    // A ResizeBuffers to the configuration already in effect, which the bridge may skip once the
+    // runtime conditions it cannot see from here also hold.
+    const uint32_t live=DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT_VALUE;
+    auto same=plan_resize(3,3840,2160,10,3,10,3840,2160);
+    CHECK(resize_is_redundant(same,live,3,3840,2160,10,live));
+    // Zero width and height mean the window's current client area, which here is the same configuration.
+    CHECK(resize_is_redundant(plan_resize(0,0,0,0,3,10,3840,2160),live,3,3840,2160,10,live));
+    // Any one difference is a real resize: count, width, height, format, flags.
+    CHECK(!resize_is_redundant(same,live,2,3840,2160,10,live));
+    CHECK(!resize_is_redundant(same,live,3,2560,2160,10,live));
+    CHECK(!resize_is_redundant(same,live,3,3840,1440,10,live));
+    CHECK(!resize_is_redundant(same,live,3,3840,2160,24,live));
+    CHECK(!resize_is_redundant(same,live,3,3840,2160,10,0));
+    CHECK(!resize_is_redundant(plan_resize(0,0,0,0,3,10,2560,1440),live,3,3840,2160,10,live));
+    // An HDR toggle changes the format, so it is never mistaken for a no-op.
+    CHECK(!resize_is_redundant(plan_resize(0,0,0,24,3,10,3840,2160),live,3,3840,2160,10,live));
+    // An invalid plan is rejected before anything else.
+    CHECK(!resize_is_redundant(plan_resize(17,3840,2160,10,3,10,3840,2160),live,17,3840,2160,10,live));
+    // Matching numbers are not sufficient: a resize may still be owed to the presentation swapchain.
+    ResyncState resync;
+    CHECK(!resync.pending); // nothing is owed on a swapchain the bridge just created
+    // DXGI requires a resize to complete a fullscreen or target-mode change, and the client issues it
+    // before any Present has had the chance to report a problem.
+    resync.display_transition();
+    CHECK(resync.pending);
+    resync.present_status(true); // a clean occlusion probe presents nothing, so it settles nothing
+    CHECK(resync.pending);
+    resync.resized();
+    CHECK(!resync.pending);
+    // A mode change owes one, and occlusion is treated the same way; a later clean probe does not
+    // retire either. These checks cover the state machine only: that the bridge consults it before
+    // skipping a resize is D3D behaviour, which no portable test here establishes.
+    resync.present_status(false);
+    CHECK(resync.pending);
+    resync.present_status(true);
+    CHECK(resync.pending);
+    resync.resized();
+    CHECK(!resync.pending);
+    // Clean frames on their own never owe anything.
+    for(int i=0;i<3;++i) resync.present_status(true);
+    CHECK(!resync.pending);
     CHECK(std::abs(pq_encode_nits(100)-0.5080784215)<1e-9);
     CHECK(std::abs(pq_encode_nits(1000)-0.7518270962)<1e-9);
     CHECK(std::abs(pq_encode_nits(10000)-1)<1e-10);

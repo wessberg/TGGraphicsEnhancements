@@ -79,6 +79,8 @@ void summarise(uint64_t now) {
     // equivalent, so FSR says so rather than printing a zero that reads as a failure.
     line+=" sdkPresented="+(s.output==Output::FSR?std::string("unreported"):n(d.sdkPresented));
     line+=std::string(" fatal=")+(s.fatal?"1":"0");
+    // Session totals. A resize that something was owed must still show up here as a real one.
+    line+=" | resizes="+n(s.resizes)+" skipped="+n(s.resizesSkipped);
     if(s.reflexReady && s.sl.reflexState && (s.latency==Latency::Reflex || s.latency==Latency::ReflexBoost)) {
         // Reflex's own per-frame timestamps (microseconds). PC latency here is simulation start to
         // the end of GPU rendering on the presenting queue, which in this bridge follows the D3D11
