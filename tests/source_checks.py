@@ -154,8 +154,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertEqual([int(o) for _, o in names], list(range(6)))
         for name, _ in names:
             self.assertIn('"' + name + '"', rows)
-        self.assertEqual(len(re.findall(r"file\.Bind\(AdvancedSection", settings)), 9)
-        self.assertEqual(len(re.findall(r"Hidden\(\n?\s*\"", settings)), 9)
+        self.assertEqual(len(re.findall(r"file\.Bind\(AdvancedSection", settings)), 10)
+        self.assertEqual(len(re.findall(r"Hidden\(\n?\s*\"", settings)), 10)
         self.assertNotIn("VideoSettings.cfg\")", self.text("src/TGFrameGeneration/Diagnostics.cs"))
         self.assertIn("ModManagers.Tick();", self.text("src/TGFrameGeneration/Session.cs"))
 

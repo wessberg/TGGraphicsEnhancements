@@ -28,6 +28,9 @@ namespace TGFrameGeneration
         {
             if(!stopped) return;
             Abi.Validate(); Log=log; Settings=new Settings(config); Bridge=new NativeBridge();
+            Settings.Changed+=DisplayMode.Arm; // every path that changes the Video selection settles through this
+            // The advanced rows do not, so this one is watched on its own.
+            Settings.BorderlessForFg.SettingChanged+=(sender,args)=>DisplayMode.Arm();
             KandraMotionHistory.Initialize();
             FrameBridge.Initialize(); HdrpInputs.Initialize(); HudlessUi.Initialize(); stopped=false; nextPoll=nextDiscovery=0; captureAt=-1f;
             // A monotonic per-session seed avoids collision after a managed reload in the same process.
@@ -65,6 +68,7 @@ namespace TGFrameGeneration
                 uint debugFlags=(uint)Settings.FsrDebug.Value;
                 if(captureAt>=0) debugFlags=(debugFlags & ~32u) | (now>=captureAt?32u:0u);
                 if(Bridge.Connected && debugFlags!=lastDebugFlags && Bridge.SetDebugFlags(debugFlags)==0) lastDebugFlags=debugFlags;
+                DisplayMode.Tick();
                 Suspension=GetSuspension(now);
                 var request=MakeRequest(Suspension);
                 if(!Same(request,last)) { ++sequence; request.Sequence=sequence; last=request; }
@@ -87,6 +91,10 @@ namespace TGFrameGeneration
                 Stop();
             }
         }
+        // A display-mode change tears the swapchain down and builds it again; hold frame generation
+        // over it, the same as a resolution change, which the width/height check cannot see because
+        // the mode changes while both stay the same.
+        internal static void NoteDisplayChange() { settleUntil=Time.unscaledTime+2f; }
         private static Suspend GetSuspension(float now)
         {
             Suspend flags=Suspend.None;
@@ -133,6 +141,7 @@ namespace TGFrameGeneration
                 var request=MakeRequest(Suspend.Stopping); request.Mode=0; request.Sequence=++sequence;
                 NativeStatus ignored; Bridge.Exchange(ref request,out ignored);
             } catch(Exception ex) { Log?.LogWarning("Native stop request failed: " + ex.Message); }
+            DisplayMode.Release(); // never leave the game's display choices restricted behind us
             FirstPersonMotion.Restore();
             KandraMotionHistory.Dispose();
 #if BEPINEX_IL2CPP

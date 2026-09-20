@@ -1,5 +1,42 @@
 # Unreleased
 
+- Move the game's own display setting to Borderless Fullscreen when frame generation is turned on, and
+  stop offering Exclusive Fullscreen while it is on. Frame generation presents through TGFG's own
+  swapchain, and DXGI will not let that swapchain exist on a window that already holds the display
+  exclusively: a cold start in Exclusive Fullscreen fails to create the bridge outright, and switching
+  into it later keeps the bridge but leaves Unity's window deactivated, so the game reports itself
+  unfocused, pauses, and frame generation suspends with it. Borderless Fullscreen at the same
+  resolution avoids both, and Windows presents a flip-model swapchain the same way in either mode.
+
+  The change goes through the game's own `ScreenResolution` setting rather than overriding the live
+  mode, so Options reads what is actually in effect and the choice persists like any other. Choosing
+  Exclusive Fullscreen again is prevented with the game's own `SetForbiddenOptions`, the mechanism it
+  uses for any other unavailable choice, so the row's arrows skip the entry instead of TGFG writing the
+  value back and the two settings fighting. Turning frame generation off offers the entry again, as
+  does stopping the plugin. Marking the entry forbidden and correcting the row's value change nothing
+  that is in effect and happen immediately; making the corrected value take effect is the game's own
+  `Setting.Apply`, which applies that setting's resolution, refresh rate and VSync rows too, so it
+  waits until the Options screen is closed. `Use borderless for frame generation` in the advanced
+  settings turns the whole behaviour off.
+
+- Forget that the HUD-less captures were ever verified when the buffer configuration changes. The
+  verification compares each capture against the frame actually presented, and thirty consecutive good
+  results allow the captures to reach the technologies; that conclusion held for the rest of the
+  session even after a resize replaced the buffers it was drawn from. A session verified on UNORM
+  buffers that resized into an sRGB configuration, where the comparison cannot run at all, therefore
+  went on supplying captures that nothing had checked. The trust, the counter readbacks still in flight
+  and the previous-frame copy are now dropped together, at a resize and at bridge creation, and have to
+  be earned again against the new buffers.
+
+- Keep frame generation alive when the back buffer cannot be read back as UNORM. A fully typed sRGB
+  back buffer refuses that second interpretation with E_INVALIDARG, and the view exists only to verify
+  the HUD-less capture, but the failure was aborting bridge creation, so there was no frame generation
+  at all. The bridge now continues without the comparison and interpolates the HUD.
+
+- Say what the game asked for when bridge creation fails, on all three creation paths including
+  `D3D11CreateDeviceAndSwapChain`: size, format, buffer count, swap effect, flags and whether the
+  request was windowed or exclusive fullscreen.
+
 - Read the DLSS-G capabilities at startup again, reverting the attempt to defer that query to the
   present thread. The deferral was made to silence one Streamline warning about calling
   `slDLSSGGetState` off the present thread, and it broke the Video tab twice. First the bridge still

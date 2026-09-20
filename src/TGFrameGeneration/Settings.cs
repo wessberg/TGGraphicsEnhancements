@@ -43,7 +43,7 @@ namespace TGFrameGeneration
         private readonly ConfigEntry<float> targetFps;
         // Not in the Video tab; hidden from mod managers.
         internal readonly ConfigEntry<float> BaseLimit;
-        internal readonly ConfigEntry<bool> NativeMenu, SuspendOnCursor, RequireCamera, DumpNow, HudlessCapture;
+        internal readonly ConfigEntry<bool> NativeMenu, SuspendOnCursor, RequireCamera, DumpNow, HudlessCapture, BorderlessForFg;
         internal readonly ConfigEntry<int> FsrDebug;
         internal readonly ConfigEntry<KeyCode> EmergencyKey, FsrCaptureKey;
         // Null until the native side reports what this GPU supports; until then every value is kept.
@@ -88,6 +88,12 @@ namespace TGFrameGeneration
                 "Pauses frame generation while the cursor is unlocked (menus, loading)."));
             RequireCamera = file.Bind(AdvancedSection, "Require active main camera", true, Hidden(
                 "Pauses frame generation while the game has no active main camera."));
+            BorderlessForFg = file.Bind(AdvancedSection, "Use borderless for frame generation", true, Hidden(
+                "Changes the game's display setting from Exclusive Fullscreen to Borderless Fullscreen when " +
+                "frame generation is turned on. Frame generation presents through its own swapchain, which " +
+                "cannot take the display exclusively, so it does not run in Exclusive Fullscreen at all. " +
+                "The change is made once, to the game's own setting, and is not undone when frame generation " +
+                "is turned off. Turn this off to keep the display setting exactly as chosen."));
             EmergencyKey = file.Bind(AdvancedSection, "Emergency off key", KeyCode.F8, Hidden(
                 "Sets Frame Generation to Off. None disables the key."));
             FsrDebug = file.Bind(AdvancedSection, "FSR debug flags", 0, Hidden(
