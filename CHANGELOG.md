@@ -1,246 +1,66 @@
 # Unreleased
 
-- Report XeLL's own latency measurements in the pipeline line, so the XeSS path can be compared with
-  the Reflex one with numbers rather than only by feel: `XeLL reports=N simToPresent=.. submitToPresent=..`,
-  averaged over the last 64 frames XeLL kept. The two are not the same measurement - Reflex's
-  pcLatency ends when the GPU finishes the frame, while XeLL timestamps only the CPU side - so what
-  compares between them is how far each moves when frame generation is turned on.
+Frame generation quality
 
-- Apply the switch to Borderless Fullscreen on the same Apply that turned frame generation on, instead
-  of needing a second one. Applying the game's display setting also applies its resolution, refresh
-  rate and VSync rows, so it waits until the Options screen is closed rather than committing edits the
-  player has not applied yet. When the change came from the Video tab's own Apply that caution is
-  wrong: the same press has just applied those rows, so the display change now goes through with it.
+- DLSS Frame Generation and Intel XeSS-FG receive depth, motion vectors and a camera in the same
+  orientation as the frame they interpolate. HDRP renders Y-inverted, so both were reprojecting from
+  mirrored buffers and visibly warping during camera movement; all three backends now look alike.
+- The HUD-less image is HDRP's colour at `AfterPostProcess`, taken in the frame it belongs to, instead
+  of a swapchain capture that was one frame late.
+- First-person hands no longer flicker: Kandra's previous skinned positions survive the extra
+  camera-rendering contexts that used to overwrite them within a frame.
+- The HUD stays out of frame generation with ReShade and RenoDX, by replaying RenoDX's recognised
+  final-output shader on the capture, and by accepting ReShade's wrapped D3D11 device.
+- FSR is given the resolution the game renders at rather than the display resolution, and near and far
+  swapped for inverted depth, as AMD's own integrations do.
+- FSR resets its history when the HUD-less source changes, and rebuilds its context when input flags do.
+- DLSS-G is told to allocate its UI recomposition path only while a verified HUD-less image is supplied.
+- A still image - a menu, a pause, a loading screen - no longer counts against the HUD-less capture.
 
-- Say once if the bridge uses the game's immediate context from more than one thread. The game leaves
-  D3D11 multithread protection off, so the context may only be used by one thread at a time, and the
-  bridge touches it from a present, a resize and a handover. Whether those are the same thread is the
-  game's business; the log now records the answer rather than assuming it.
+Display settings
 
-- Make a bridge safe to hand over while the game is still using it. A bridge that gives up its
-  presentation swapchain to a replacement stays alive as long as the game holds its reference, and the
-  game does keep calling it: the logs show GetFullscreenState, a fullscreen transition and ResizeBuffers
-  arriving seconds after the handover. Those calls now find an object that answers for itself instead
-  of dereferencing what it no longer owns, and they hold the same lock as the present path while doing
-  it, so a query cannot be reading the swapchain as the handover releases it.
+- Turning frame generation on moves the game's own display setting from Exclusive Fullscreen to
+  Borderless Fullscreen, and stops offering Exclusive while it is on. Frame generation cannot run in
+  Exclusive Fullscreen: DXGI will not give its swapchain a window that already holds the display.
+  `Use borderless for frame generation` in the advanced settings turns this off.
+- Low Latency can be Off while FSR frame generation runs; AMD pairs FSR with Anti-Lag 2, which NVIDIA
+  hardware does not have.
 
-  The handover itself is now ordered correctly as well. It happens after every check that could refuse
-  the replacement, so an unsupported request cannot throw away a working bridge; it takes the lock
-  before deciding it has already run, so a final Release cannot destroy the object midway through it;
-  it clears the shared state only while that state still belongs to it, and the immediate context's tag
-  only while the tag still names it; it hands back a frame-latency permit, so a client that waits
-  before each frame cannot be stranded on a swapchain nothing drives; and when the drain cannot confirm
-  the GPU is idle it keeps its resources rather than freeing memory that submitted work may still
-  reference. A retired bridge refuses a resize outright rather than reporting a success its buffers
-  would contradict.
+Stability
 
-  The client's private data is now the bridge's own rather than the presentation swapchain's, so it
-  survives both a handover and a frame generation backend switch; ReShade keeps its proxy pointer
-  there. The draw observer refuses to install against a second, different context rather than
-  overwriting the original function pointers the first set of detours still calls.
+- Frame generation survives a display-mode change. Unity replaces the swapchain rather than resizing
+  it, and the replacement was refused because a bridge already existed, which left the game presenting
+  through its own swapchain for the rest of the session.
+- Fixed a crash when the game kept using a bridge it had replaced. Twenty-two swapchain methods
+  forwarded to a presentation swapchain that was no longer there, three of them as tail calls through
+  its vtable.
+- Frame generation starts on an sRGB back buffer instead of failing to create the bridge. The view that
+  failed exists only to verify the HUD-less capture, so the bridge now continues without it.
+- The HUD-less capture has to earn its verification again whenever the buffers change; the previous
+  result outlived the buffers it was measured on.
+- A `ResizeBuffers` asking for the configuration already in effect is skipped. FoA issues seven in a
+  minute of Options use, each costing a GPU drain, a buffer rebuild and a frame over 100 ms.
+- Fixed the IL2CPP crash when opening Options with upscaling active.
 
-  Found by an external review of the handover added earlier in this release, after two crashes.
+DLSS-G correctness
 
-- Answer DXGI calls on a bridge that has given up its presentation swapchain, instead of crashing.
-  Twenty-two swapchain methods forwarded straight to the presentation swapchain with no check, and
-  three of them are compiled as tail calls that load the pointer and jump through its vtable, so once
-  that pointer was released the game got an access violation reading address zero. The game holds its
-  reference to a swapchain it is replacing until it chooses to release it, and Unity queries one while
-  tearing it down, so this was reachable both after a bridge retired for a replacement and during
-  teardown. Each method now answers for itself: the fullscreen state of a surrendered bridge is
-  windowed, its fullscreen description is the last one it had, its source size is the client size, and
-  the rest report DXGI_ERROR_INVALID_CALL. The first such call is logged with the method name.
+- `slDLSSGGetState` is no longer given an options pointer, which it applies rather than reads.
+- The capabilities query stays at startup; deferring it to the present thread broke the Video tab twice.
+- The pipeline line reports DLSS-G's own presented-frame count, and prints `unreported` for FSR rather
+  than a zero that read as failure.
 
-- Let a replacement swapchain take over from a live bridge. Unity replaces the swapchain rather than
-  resizing it for some display changes, and it creates the replacement before releasing the old one,
-  so bridge creation was refused because one was already active; the old bridge's destructor then
-  cleared that pointer and the game presented through its own swapchain for the rest of the session,
-  with the native log repeating "D3D11 NGX observed, but the presentation bridge is absent". Any
-  display-mode change permanently disabled frame generation. The previous bridge now retires on the
-  spot: it hands over the shared pipeline, stops presenting and capturing, and releases the immediate
-  context's tag before the replacement sets its own, so however long the game holds its reference it
-  never touches the pipeline again.
+Diagnostics
 
-- Move the game's own display setting to Borderless Fullscreen when frame generation is turned on, and
-  stop offering Exclusive Fullscreen while it is on. Frame generation presents through TGFG's own
-  swapchain, and DXGI will not let that swapchain exist on a window that already holds the display
-  exclusively: a cold start in Exclusive Fullscreen fails to create the bridge outright, and switching
-  into it later keeps the bridge but leaves Unity's window deactivated, so the game reports itself
-  unfocused, pauses, and frame generation suspends with it. Borderless Fullscreen at the same
-  resolution avoids both, and Windows presents a flip-model swapchain the same way in either mode.
-
-  The change goes through the game's own `ScreenResolution` setting rather than overriding the live
-  mode, so Options reads what is actually in effect and the choice persists like any other. Choosing
-  Exclusive Fullscreen again is prevented with the game's own `SetForbiddenOptions`, the mechanism it
-  uses for any other unavailable choice, so the row's arrows skip the entry instead of TGFG writing the
-  value back and the two settings fighting. Turning frame generation off offers the entry again, as
-  does stopping the plugin. Marking the entry forbidden and correcting the row's value change nothing
-  that is in effect and happen immediately; making the corrected value take effect is the game's own
-  `Setting.Apply`, which applies that setting's resolution, refresh rate and VSync rows too, so it
-  waits until the Options screen is closed. `Use borderless for frame generation` in the advanced
-  settings turns the whole behaviour off.
-
-- Forget that the HUD-less captures were ever verified when the buffer configuration changes. The
-  verification compares each capture against the frame actually presented, and thirty consecutive good
-  results allow the captures to reach the technologies; that conclusion held for the rest of the
-  session even after a resize replaced the buffers it was drawn from. A session verified on UNORM
-  buffers that resized into an sRGB configuration, where the comparison cannot run at all, therefore
-  went on supplying captures that nothing had checked. The trust, the counter readbacks still in flight
-  and the previous-frame copy are now dropped together, at a resize and at bridge creation, and have to
-  be earned again against the new buffers.
-
-- Keep frame generation alive when the back buffer cannot be read back as UNORM. A fully typed sRGB
-  back buffer refuses that second interpretation with E_INVALIDARG, and the view exists only to verify
-  the HUD-less capture, but the failure was aborting bridge creation, so there was no frame generation
-  at all. The bridge now continues without the comparison and interpolates the HUD.
-
-- Say what the game asked for when bridge creation fails, on all three creation paths including
-  `D3D11CreateDeviceAndSwapChain`: size, format, buffer count, swap effect, flags and whether the
-  request was windowed or exclusive fullscreen.
-
-- Read the DLSS-G capabilities at startup again, reverting the attempt to defer that query to the
-  present thread. The deferral was made to silence one Streamline warning about calling
-  `slDLSSGGetState` off the present thread, and it broke the Video tab twice. First the bridge still
-  announced "capability probes complete" at creation, before the query had filled the DLSS maxima, and
-  the plugin reads the capabilities once, so it snapshotted a zero DLSS maximum and offered Off, FSR
-  and XeSS while the configured DLSS setting was still honoured underneath. Withholding that
-  announcement then moved it after the Video rows were built, so the rows fell back to their
-  no-native-report layout, which is Off and DLSS alone with neither usable. The capabilities are read
-  before any present again. The warning concerns the inputs-processing completion fence, which does
-  not exist that early, and is left in place.
-
-- Skip a ResizeBuffers that asks for the configuration already in effect. FoA issues one at its current
-  3840x2160 seven times in a minute of Options use, and each costs a GPU drain, a rebuild of the client
-  and presentation buffers, a DLSS-G off/on bracket, and a frame over 100 ms; two of the three frames
-  over 100 ms in the reference run land within 600 ms of one. Skipping cannot surprise a client, since
-  `GetBuffer` keeps returning the same texture at the same size and format.
-
-  A resize is only skipped when nothing could be owed one. `ResyncState` tracks that: a fullscreen or
-  target-mode change requires a resize and reaches the client before any Present can report a problem,
-  so `SetFullscreenState` and `ResizeTarget` set it, a Present result other than S_OK sets it, and only
-  a resize that reached the swapchain clears it. DXGI may also leave fullscreen on its own, which no
-  setter here would see, so `resize` reconciles the live `GetFullscreenState` against the recorded one
-  first. A skip additionally requires both devices to report no removal, so returning success cannot
-  hide a lost device, and the presentation swapchain's descriptor to still report the geometry it was
-  given. Reviewed three times by an external model, which found the fullscreen and device-removal holes.
-
-- Report DLSS-G's presented frames in the pipeline line, and stop printing a zero for FSR. Only the
-  XeSS path fed the counter, so the line showed `sdkPresented=0` under FSR, which reads as a failure
-  when the FSR API simply exposes no such query; FSR now prints `unreported`. DLSS-G's own
-  `numFramesActuallyPresented` feeds the same counter, so all three backends report what their runtime
-  states and none of it is inferred from TGFG's own frame counts.
-
-- Query DLSS-G capabilities on the present thread. The startup query ran on whichever thread created
-  the bridge, which Streamline warns about because the state carries the inputs-processing completion
-  fence. The bridge always starts on the standard swapchain, so the first present fills the
-  capabilities instead and there is no longer an off-thread `slDLSSGGetState` call.
-
-- Stop handing DLSS-G options to the state query. `slDLSSGGetState` applies the options it is given,
-  and the per-present capability read passed the applied ones, so Streamline received a full options
-  set on every frame and re-evaluated its flip metering for no reason; the change check in
-  `apply_options` had no effect. The query now passes null, which returns the state of the options
-  already in effect. Measured: flip-metering reconfigurations that followed no option change at all,
-  half of them in the run before the change, no longer occur.
-
-  This does not remove Streamline's "Repeated slDLSSGSetOptions() call for the frame N" warning,
-  which has a different cause. Every remaining one follows a swapchain resize: `resize` disables
-  DLSS-G, and the next present turns it back on, with no Present in between to advance Streamline's
-  frame counter. That bracketing is correct; Streamline cannot tell it from a race. The game issues
-  `ResizeBuffers` at its current 3840x2160 repeatedly, seven times in 88 seconds of menu use in the
-  reference run, and two of the three frames over 100 ms in that run land within 600 ms of one.
-
-- Give DLSS Frame Generation and Intel XeSS-FG the same presentation-oriented depth and motion
-  vectors FSR already gets. HDRP renders into Y-inverted targets and flips the image in its final
-  blit, so the frame all three runtimes interpolate is mirrored against the buffers HDRP produced.
-  No SDK can be told a tagged texture is upside down, and the projection matrix DLSS-G and XeSS
-  receive does not describe row order, so both were reprojecting from mirrored vectors; DLSS-G's
-  optical flow hid most of it, leaving the image warping during movement. The copies now flip for
-  every backend and `TGFG_SetCamera` turns the camera's clip-space matrices to match, so the camera
-  describes the space the buffers are in. The reporter's own account - FSR looking cleaner than both
-  DLSS and XeSS after the FSR-only fix - is what this follows up. Build, eight native tests and the
-  Python checks pass. Confirmed in game on Mono, RTX 5080: the reporter finds all three technologies
-  equally good afterwards, where DLSS and XeSS were visibly worse than FSR before. The run's log
-  shows HUD-less input supplied on every steady gameplay frame for all three, differing from the
-  presented frame over 2.4-3.1% of sample points in each case.
-
-- Fix the IL2CPP Options crash by evaluating TGFG's dependent-row visibility
-  through a scoped native-getter hook instead of a converted callback. Build and
-  regression checks pass; the reporter confirms the upscaling/pause/Options retest works.
-
-- Port the hand-history guard to IL2CPP. Intercept the native compute dispatcher because
-  IL2CPP inlines the copy wrapper; preserve one history copy per manager per Unity frame
-  while allowing skinning and other kernels. Native-pointer identity handles multiple
-  managed wrappers. Build and regression checks pass; IL2CPP visual validation is pending.
-
-- Fix HUD flicker with ReShade/RenoDX by replaying its recognized final-output shader
-  and live settings on the HUD-less scene before HDR10 encoding. Observe indexed,
-  instanced and indirect draws without assuming three-vertex geometry: the successful
-  game log identifies a six-index DrawIndexed pass. Reporter confirms success with
-  ReShade and RenoDX DLSS 5, with/without upscaling and the other upscalers tested.
-  Logs confirm replay, pixel verification and HUD-less supply; production draw detours
-  and color conversion also pass WARP tests.
-
-- Accept ReShade's wrapped D3D11 device for HUD-less capture by checking its immediate
-  context against the bridge's existing identity/tag validation. Previously all captures
-  were rejected as device mismatches, bringing HUD flicker back when ReShade/RenoDX was
-  enabled. Verified capture and HUD-less supply now work across all three FG backends.
-
-- Mono: preserve Kandra's previous skinned positions across extra camera-rendering contexts
-  while DLSS, FSR or XeSS FG is selected. The latest capture shows enabling hand material
-  motion passes alone was insufficient. The guard prevents duplicate history copies within
-  one Unity frame, with runtime counters. The reporter confirms hands are much better;
-  the new input capture confirms hand vectors no longer follow camera-only motion.
-  No minimap mod dependency; single-camera history is preserved in regression tests.
-
-- The FSR capture shows first-person hands receiving camera-only motion instead of their own motion.
-  Enable existing disabled motion-vector passes on the first-person Kandra rig's opaque materials
-  for DLSS, FSR and XeSS frame generation, restoring them when FG is Off. The shipped character skin material disables
-  that pass despite having compiled variants. Visual and corrected-input validation are pending.
-
-- FSR: align depth and motion textures with HDRP's Y-flipped presentation color, including vertical
-  motion scale and jitter. Prevent submission across a backend/orientation change. HUD separation
-  is confirmed fixed in-game; the reporter finds hands improved but still flickering during camera movement.
-- Add opt-in FSR debug flag 32 to save three source color/depth/motion frames and metadata once
-  gameplay movement begins, for diagnosing the remaining hand flicker. Copies precede readback;
-  the capture stops automatically and uses at most 384 MiB of image data.
-
-- Replace the stale end-camera swapchain capture with HDRP's current `AfterPostProcess` color,
-  copied on render event 4 before overlay UI composition. Remove the `rendersUIOverlay` override.
-  Handle padded RTHandles, final-blit Y orientation, SDR sRGB and HDR PQ conversion. A verified
-  copy is supplied to DLSS-G, FSR and XeSS for their UI separation paths. The reporter confirms
-  HUD flicker is fixed in SDR; HDR validation remains pending.
-- Keep the present-time freshness and HUD-area checks, including skipping still frames. The native
-  log reports capture/rejection/supply counts, while the managed log reports HDRP color layout and HDR state.
-- The advanced setting "Keep the HUD out of frame generation" (default on) controls the custom
-  pass. Screen-space overlay UI is separated; camera/world-space UI and lens effects already in
-  scene color remain interpolation inputs.
-- FSR resets history when the HUD-less source changes, and recreates its context when input flags
-  change (including enabling/disabling FSR's debug checker).
-- Add a D3D11 WARP regression test for the actual HUD-less color conversion shader.
-- DLSS Frame Generation is told to allocate its user interface recomposition path while a verified
-  HUD-less image is supplied. Streamline only interpolates the HUD-less image separately from the
-  back buffer when that option is on, so the HUD-less tag had nothing to act on before. XeSS already
-  switches its UI composition on with the same condition.
-- Low Latency can be Off while FSR frame generation runs. AMD pairs FSR with Anti-Lag 2, which needs
-  an AMD GPU; on other GPUs the row previously forced NVIDIA Reflex, which only knows about generated
-  frames through Streamline and therefore only for DLSS Frame Generation. DLSS still requires Reflex
-  and XeSS still runs with XeLL.
-- FSR is told the resolution the game renders at instead of the display resolution. The FSR API
-  takes that as maxRenderSize at context creation, allocates its render-resolution buffers for it
-  and scales its lookups into them by renderSize/maxRenderSize. With DLSS or another upscaler on,
-  the two differ (1896x1068 against 3840x2160 at 4K Performance), so the context is now rebuilt for
-  the render resolution of the first frame and whenever it changes.
-- The HUD-less check no longer counts a still image against the capture. A menu, a pause or a
-  loading screen leaves the frame unchanged, which the check read as a stale capture and which
-  reset the streak of good results, so the HUD-less image was never handed to a technology in a
-  normal session. Still frames are skipped and counted separately in the log.
-- FSR: near and far are passed swapped for inverted depth, as FSR's own integrations do; the inputs
-  FSR receives (render and display size, motion vector scale, jitter, near/far, FOV, frame time,
-  reset, HUD-less) are logged once and whenever they change. New advanced setting "FSR debug flags"
-  turns on FSR's overlays (tear lines, reset indicators, the debug view of motion vectors, depth and
-  masks, pacing lines) and FSR's input checker, for troubleshooting from a screenshot and the log.
-- New optional exports TGFG_SetHudlessCapture, TGFG_SetHudless and TGFG_SetDebugFlags; the ABI
-  (0x00050000) and existing structures are unchanged. The new HUD-less packet is 32 bytes.
+- Reflex and XeLL are measured on one comparable figure, `simToPresent`, alongside each technology's
+  own. Every average divides by the frames behind it, which `renderLatency` did not.
+- A refused bridge says what the game asked for - size, format, buffers, swap effect, flags and whether
+  the request was windowed or exclusive fullscreen - on all three creation paths.
+- The log records whether the game protects its immediate context, and says so once if the bridge ever
+  uses that context from a second thread.
+- FSR debug flag 32 saves three source colour, depth and motion frames with their metadata, once.
+- Added a D3D11 WARP regression test for the HUD-less colour conversion shader, and portable tests for
+  the clip-space orientation change.
+- New optional exports `TGFG_SetHudlessCapture`, `TGFG_SetHudless` and `TGFG_SetDebugFlags`.
 
 # v0.5.0 - AMD FSR and Intel XeSS frame generation, one Low Latency selector
 

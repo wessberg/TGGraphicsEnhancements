@@ -38,10 +38,13 @@ Tested in game on an RTX 5080 with the Mono build:
 - The HUD fix with ReShade and RenoDX DLSS 5 enabled, with and without upscaling and with
   the other upscalers tested by the reporter. Logs confirm HUD-less input reaches all three FG backends.
 
-The standard IL2CPP build also has a successful reporter retest after fixing a crash when
-opening Pause → Options with upscaling active. The broader compatibility coverage above
-was tested on Mono. AMD Anti-Lag 2 (AMD GPUs) and Intel XeLL on its own (Intel GPUs) have
-not yet been confirmed in game.
+- Borderless and Exclusive Fullscreen, cold started and switched between while playing, and a
+  display-mode change with frame generation on.
+
+Everything above was tested on the Mono build. AMD Anti-Lag 2 (AMD GPUs) and Intel XeLL on its own
+(Intel GPUs) have not yet been confirmed in game, and neither has the IL2CPP build against this
+release's changes. Frame generation with FSR or XeSS selected has not been confirmed across a
+display-mode change, which retires and rebuilds the bridge.
 
 When DLSS upscaling is on, frame generation takes its motion vectors and depth from the DLSS
 upscaler. With any other setting (TAA, STP or no anti-aliasing), a custom pass takes HDRP's own depth
