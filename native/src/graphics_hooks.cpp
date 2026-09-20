@@ -22,6 +22,13 @@ void describe(const DXGI_SWAP_CHAIN_DESC& in,DXGI_SWAP_CHAIN_DESC1& out,DXGI_SWA
     full={};full.RefreshRate=in.BufferDesc.RefreshRate;full.Scaling=in.BufferDesc.Scaling;
     full.ScanlineOrdering=in.BufferDesc.ScanlineOrdering;full.Windowed=in.Windowed;
 }
+// The swapchain the game asked for, so a refused bridge says why in the same line.
+std::string requested(const DXGI_SWAP_CHAIN_DESC1& d,const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full) {
+    return std::to_string(d.Width)+"x"+std::to_string(d.Height)+" format="+std::to_string(uint32_t(d.Format))+
+        " buffers="+std::to_string(d.BufferCount)+" swapEffect="+std::to_string(uint32_t(d.SwapEffect))+
+        " flags="+std::to_string(uint32_t(d.Flags))+
+        (full? (full->Windowed?", windowed":", exclusive fullscreen") : ", no fullscreen description");
+}
 HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory* f,IUnknown* device,DXGI_SWAP_CHAIN_DESC* d,IDXGISwapChain** out) {
     auto original=reinterpret_cast<CreateSwap>(vtable_original(f,10));if(!original)return E_FAIL;
     if(!insideSL && d && out) {
@@ -29,7 +36,8 @@ HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory* f,IUnknown* device,DXGI_SWAP_C
         ComPtr<IDXGISwapChain1> replacement;
         const auto hr=try_create_dx11_bridge(device,f,d->OutputWindow,desc,&full,nullptr,&replacement);
         if(hr==S_OK){*out=replacement.Detach();return S_OK;}
-        if(FAILED(hr))log("D3D11 bridge creation failed; retaining the original game swapchain path");
+        if(FAILED(hr))log("D3D11 bridge creation failed; retaining the original game swapchain path. The game asked for "+
+            requested(desc,&full));
     }
     // Not all factory users belong to the game's primary rendering path.
     SLGuard bypass;return original(f,device,d,out);
@@ -40,7 +48,8 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* f,IUnknown* device,HWND hwnd,
     if(!insideSL && desc && out) {
         const auto hr=try_create_dx11_bridge(device,f,hwnd,*desc,full,restrictTo,out);
         if(hr==S_OK)return S_OK;
-        if(FAILED(hr))log("D3D11 HWND bridge creation failed; retaining original creation path");
+        if(FAILED(hr))log("D3D11 HWND bridge creation failed; retaining original creation path. The game asked for "+
+            requested(*desc,full));
     }
     SLGuard bypass;return original(f,device,hwnd,desc,full,restrictTo,out);
 }
@@ -79,7 +88,11 @@ HRESULT WINAPI combined_hook(IDXGIAdapter* adapter,D3D_DRIVER_TYPE driver,HMODUL
     ComPtr<IDXGISwapChain1> replacement;
     result=try_create_dx11_bridge(game.Get(),factory.Get(),desc->OutputWindow,d,&full,nullptr,&replacement);
     if(result==S_OK)*chain=replacement.Detach();
-    else {auto originalDesc=*desc;SLGuard bypass;result=factory->CreateSwapChain(game.Get(),&originalDesc,chain);}
+    else {
+        if(FAILED(result))log("D3D11 combined bridge creation failed; retaining the original game swapchain path. The game asked for "+
+            requested(d,&full));
+        auto originalDesc=*desc;SLGuard bypass;result=factory->CreateSwapChain(game.Get(),&originalDesc,chain);
+    }
     if(FAILED(result))return result;
     if(device)*device=game.Detach();if(context)*context=immediate.Detach();return result;
 }
