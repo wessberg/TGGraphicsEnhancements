@@ -1,5 +1,30 @@
 # Unreleased
 
+- Report DLSS-G's presented frames in the pipeline line, and stop printing a zero for FSR. Only the
+  XeSS path fed the counter, so the line showed `sdkPresented=0` under FSR, which reads as a failure
+  when the FSR API simply exposes no such query; FSR now prints `unreported`. DLSS-G's own
+  `numFramesActuallyPresented` feeds the same counter, so all three backends report what their runtime
+  states and none of it is inferred from TGFG's own frame counts.
+
+- Query DLSS-G capabilities on the present thread. The startup query ran on whichever thread created
+  the bridge, which Streamline warns about because the state carries the inputs-processing completion
+  fence. The bridge always starts on the standard swapchain, so the first present fills the
+  capabilities instead and there is no longer an off-thread `slDLSSGGetState` call.
+
+- Stop handing DLSS-G options to the state query. `slDLSSGGetState` applies the options it is given,
+  and the per-present capability read passed the applied ones, so Streamline received a full options
+  set on every frame and re-evaluated its flip metering for no reason; the change check in
+  `apply_options` had no effect. The query now passes null, which returns the state of the options
+  already in effect. Measured: flip-metering reconfigurations that followed no option change at all,
+  half of them in the run before the change, no longer occur.
+
+  This does not remove Streamline's "Repeated slDLSSGSetOptions() call for the frame N" warning,
+  which has a different cause. Every remaining one follows a swapchain resize: `resize` disables
+  DLSS-G, and the next present turns it back on, with no Present in between to advance Streamline's
+  frame counter. That bracketing is correct; Streamline cannot tell it from a race. The game issues
+  `ResizeBuffers` at its current 3840x2160 repeatedly, seven times in 88 seconds of menu use in the
+  reference run, and two of the three frames over 100 ms in that run land within 600 ms of one.
+
 - Give DLSS Frame Generation and Intel XeSS-FG the same presentation-oriented depth and motion
   vectors FSR already gets. HDRP renders into Y-inverted targets and flips the image in its final
   blit, so the frame all three runtimes interpolate is mirrored against the buffers HDRP produced.

@@ -73,7 +73,11 @@ void summarise(uint64_t now) {
         " suspend=0x"+hex32(s.request.suspensionMask)+" latency="+n(s.request.latencyMode)+
         " | output="+output_name(s.output)+" latency="+latency_name(s.latency);
     if(s.output==Output::Standard) line+=" DLSS-G status=0x"+hex32(s.status.dlssgStatus)+" vsyncSupported="+(s.vsyncSupported?"1":"0");
-    else line+=" sdkPresented="+n(d.sdkPresented)+(s.status.backendResult?" lastError="+std::to_string(s.status.backendResult):"");
+    else if(s.status.backendResult) line+=" lastError="+std::to_string(s.status.backendResult);
+    // Rendered plus generated frames as the runtime itself reports them, never inferred from our own
+    // counts: DLSS-G through slDLSSGGetState, XeSS through its present status. The FSR API exposes no
+    // equivalent, so FSR says so rather than printing a zero that reads as a failure.
+    line+=" sdkPresented="+(s.output==Output::FSR?std::string("unreported"):n(d.sdkPresented));
     line+=std::string(" fatal=")+(s.fatal?"1":"0");
     if(s.reflexReady && s.sl.reflexState && (s.latency==Latency::Reflex || s.latency==Latency::ReflexBoost)) {
         // Reflex's own per-frame timestamps (microseconds). PC latency here is simulation start to

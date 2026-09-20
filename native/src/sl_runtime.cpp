@@ -200,7 +200,10 @@ void on_device(IUnknown* object) {
         if(!s.dlssReady) log("DLSS-G feature functions (or the Reflex it requires) are missing; DLSS-G unavailable");
     }
     if(s.reflexReady) s.status.latencyAvailable|=(1u<<uint32_t(Latency::Reflex))|(1u<<uint32_t(Latency::ReflexBoost));
-    if(s.dlssReady) { s.status.backendsAvailable|=1u<<uint32_t(Backend::DLSS); options_off(); update_caps(); }
+    // No capability query here: slDLSSGGetState must be called on the present thread, and this runs
+    // on whichever thread created the bridge. The bridge always starts on the standard swapchain, so
+    // after_present fills the capabilities on the very first present instead.
+    if(s.dlssReady) { s.status.backendsAvailable|=1u<<uint32_t(Backend::DLSS); options_off(); }
     log(std::string("Streamline bound to the private D3D12 presentation device: DLSS-G ")+(s.dlssReady?"available":"unavailable")+
         ", Reflex "+(s.reflexReady?"available":"unavailable")+". FG remains Off until valid render inputs and a user request.");
 }
@@ -212,7 +215,12 @@ void update_caps() {
     auto& s=state(); if(!s.dlssReady) return;
     SLGuard inside;
     sl::DLSSGState g{};
-    auto r=s.sl.getState(s.viewport,g,&s.applied);
+    // No options: slDLSSGGetState applies the ones it is handed. Passing the applied options pushed a
+    // full set on every present, which defeated the change check in apply_options and made Streamline
+    // re-evaluate its flip metering; it reports the frames where both happen as "Repeated
+    // slDLSSGSetOptions() call". A null pointer queries the state of the options already in effect,
+    // which is all this reads.
+    auto r=s.sl.getState(s.viewport,g,nullptr);
     s.status.lastGetStateResult=static_cast<int32_t>(r);
     if(r!=sl::Result::eOk) return;
     s.status.flags|=4u|8u;
@@ -221,6 +229,7 @@ void update_caps() {
     s.status.dlssgStatus=static_cast<uint32_t>(g.status);
     s.status.presentedSinceQuery=g.numFramesActuallyPresented;
     s.status.outputFramesReported+=g.numFramesActuallyPresented;
+    s.diag.sdkPresented+=g.numFramesActuallyPresented; // same counter the XeSS path reports into
     s.vsyncSupported=g.bIsVsyncSupportAvailable==sl::Boolean::eTrue;
     // NVIDIA owns this object. Acquire a COM reference; do not Attach a borrowed
     // fence or treat an API acceptance result as a displayed-frame measurement.
