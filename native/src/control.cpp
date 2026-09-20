@@ -249,6 +249,14 @@ void note_hudless_difference(uint32_t differing,uint32_t changed,uint32_t moving
                  " the HUD is interpolated until the frames match again");
     }
 }
+void reset_hudless_verification(const char* why) {
+    auto& s=state();
+    const bool wasVerified=s.hudlessOk;
+    s.hudlessOk=false; s.hudlessGood=s.hudlessBad=0; s.status.bridgeFlags&=~32u;
+    if(wasVerified)
+        log(std::string("HUD-less frame unverified again: ")+why+". The captures are withheld and the HUD is "
+            "interpolated until they verify against the new buffers");
+}
 void present_markers(Frame* frame,bool start) {
     if(!start) { latency_marker(sl::PCLMarker::ePresentEnd,frame); return; }
     latency_marker(sl::PCLMarker::eRenderSubmitEnd,frame);

@@ -156,6 +156,10 @@ void note_generation(Frame*,Reason,bool enabled);
 // the presented frame itself does. A still image proves nothing and is skipped; a capture that did
 // not change while the frame did is stale. Decides whether the captures reach the technologies.
 void note_hudless_difference(uint32_t differing,uint32_t changed,uint32_t moving,uint32_t samples);
+// Forget that the captures were ever verified. The verification is a statement about one buffer
+// configuration - these dimensions, this format, this comparison view - so when the configuration
+// changes the evidence stops applying and the captures have to earn it again against the new one.
+void reset_hudless_verification(const char* why);
 void present_markers(Frame*,bool start);
 void release_stale_frames(bool generating);
 void summarise(uint64_t now);

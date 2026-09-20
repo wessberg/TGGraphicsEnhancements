@@ -302,10 +302,19 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
             c.source=SharedTexture::make(d11_.Get(),state().device.Get(),d.Width,d.Height,d.Format,D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE);
             if(d.Format==DXGI_FORMAT_R16G16B16A16_FLOAT)
                 c.encoded=SharedTexture::make(d11_.Get(),state().device.Get(),d.Width,d.Height,DXGI_FORMAT_R10G10B10A2_UNORM,D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE);
-            // An sRGB-typed source would read back linearised; the HUD-less copy is UNORM, so compare as UNORM.
+            // An sRGB-typed source would read back linearised; the HUD-less copy is UNORM, so compare as
+            // UNORM. A fully typed sRGB texture refuses that second interpretation with E_INVALIDARG, and
+            // a view used only to verify the HUD-less capture must never stop the bridge from existing:
+            // without it there is no frame generation at all. Fall back to no comparison view, which
+            // leaves the HUD interpolated rather than taking the whole bridge down with it.
             if(DXGI_FORMAT(unorm_format(d.Format))!=d.Format) {
                 D3D11_SHADER_RESOURCE_VIEW_DESC view{};view.Format=DXGI_FORMAT(unorm_format(d.Format));view.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;view.Texture2D.MipLevels=1;
-                check(d11_->CreateShaderResourceView(c.source.d11.Get(),&view,&c.compareSrv),"Create HUD-less comparison SRV");
+                const HRESULT r=d11_->CreateShaderResourceView(c.source.d11.Get(),&view,&c.compareSrv);
+                if(FAILED(r)) {
+                    c.compareSrv.Reset();
+                    log_throttled("Cannot read the "+std::to_string(d.Format)+" back buffer as UNORM for the HUD-less check "+
+                                  hexhr(r)+"; frame generation continues with the HUD interpolated");
+                }
             } else c.compareSrv=c.source.srv;
         }
         return colors;
@@ -484,12 +493,24 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         if(enable && recorded && in.hudless) s.status.bridgeFlags|=16u; else s.status.bridgeFlags&=~16u;
         note_generation(frame,why,enable && recorded);
     }
+    // Everything the HUD-less verification concluded, dropped together, because it only ever described
+    // one buffer configuration: the shared trust flag, the counter readbacks still in flight from the
+    // old buffers, and the previously presented frame the staleness check compares against. Without
+    // this a session verified on UNORM buffers would keep supplying captures after a resize into a
+    // configuration where the comparison cannot run at all.
+    void forget_hudless_verification(const char* why) {
+        reset_hudless_verification(why);
+        hudStagingSamples_.fill(0); previousValid_=false;
+    }
     // Compares the frame about to be presented with the HUD-less capture at a sparse grid, on the
     // D3D11 context before the hand-off. Only HUD-sized regions may differ: something that redraws the
     // frame after the camera (a post-process injector at Present) or a stale copy differs everywhere,
     // and the captures are then withheld from the technologies (note_hudless_difference).
     void verify_hudless(InputSlot& slot,uint32_t id,ColorBuffer& color,SharedTexture* final) {
         if(!slot.occupied || slot.id!=id || !slot.hudlessValid || !slot.hudless.matches(final->width,final->height,final->format)) return;
+        // No comparable view of the presented frame: the capture cannot be verified, so it is never
+        // supplied. Presentation and frame generation are unaffected.
+        if(final!=&color.encoded && !color.compareSrv) return;
         constexpr UINT stride=4;
         const UINT sx=final->width/stride,sy=final->height/stride;
         if(!sx || !sy) return;
@@ -735,6 +756,7 @@ class Dx11Swapchain final : public IDXGISwapChain4 {
         const bool changedFormat=next.Format!=clientDesc_.Format;
         clientDesc_=next;physicalFlags_=physicalFlags;colors_=std::move(colors);virtualIndex_=0;
         for(auto& slot:inputs_)slot=InputSlot{};
+        forget_hudless_verification("the swapchain buffers changed");
         for(auto& slot:state().frames.slots)if(slot.occupied)state().frames.release(slot.id);
         haveRenderFrame=false;
         buffers();allocatorRetired_.fill(0);
@@ -815,6 +837,7 @@ public:
             check(lists_[i]->Close(),"Close initial command list");
         }
         shaders();colors_=make_colors(clientDesc_);
+        forget_hudless_verification("a new bridge swapchain was created");
         waitable_=(clientDesc_.Flags&DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)!=0;
         QueryPerformanceFrequency(&qpcFrequency_);
         // Frame generation technologies other than DLSS switch to their own swapchain on the first request.
