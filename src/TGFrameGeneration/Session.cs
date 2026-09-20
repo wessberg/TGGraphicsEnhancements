@@ -30,7 +30,7 @@ namespace TGFrameGeneration
             Abi.Validate(); Log=log; Settings=new Settings(config); Bridge=new NativeBridge();
             Settings.Changed+=DisplayMode.Arm; // every path that changes the Video selection settles through this
             // The advanced rows do not, so this one is watched on its own.
-            Settings.BorderlessForFg.SettingChanged+=(sender,args)=>DisplayMode.Arm();
+            Settings.BorderlessForFg.SettingChanged+=BorderlessSettingChanged;
             KandraMotionHistory.Initialize();
             FrameBridge.Initialize(); HdrpInputs.Initialize(); HudlessUi.Initialize(); stopped=false; nextPoll=nextDiscovery=0; captureAt=-1f;
             // A monotonic per-session seed avoids collision after a managed reload in the same process.
@@ -39,6 +39,7 @@ namespace TGFrameGeneration
             Log.LogInfo("TGFG " + Plugin.Version + " loaded. Graphics API: " + SystemInfo.graphicsDeviceType +
                 ". Frame generation " + Settings.FrameGeneration + ", low latency " + Settings.LowLatency + " (" + Settings.File.ConfigFilePath + ").");
         }
+        private static void BorderlessSettingChanged(object sender,EventArgs args) { DisplayMode.Arm(); }
         internal static void Tick()
         {
             if(stopped) return;

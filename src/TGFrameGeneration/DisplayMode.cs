@@ -29,6 +29,7 @@ using Awaken.TG.MVC;
 using UnityEngine;
 #if BEPINEX_IL2CPP
 using Il2CppInterop.Runtime.InteropTypes;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using ModeMap = Il2CppSystem.Collections.Generic.Dictionary<Awaken.TG.Main.Settings.Options.ToggleOption, UnityEngine.FullScreenMode>;
 #else
 using System.Reflection;
@@ -72,7 +73,7 @@ namespace TGFrameGeneration
             {
                 // Null rather than an empty array: the game never forbids anything on this row itself,
                 // so this leaves it exactly as it was found.
-                option.SetForbiddenOptions(null);
+                Unforbid(option);
                 Session.Log.LogInfo("Exclusive Fullscreen is offered again in the game's display settings.");
             }
             catch (Exception ex)
@@ -157,10 +158,21 @@ namespace TGFrameGeneration
         private static void Block(EnumArrowsOption option, ToggleOption exclusive)
         {
             if (blocked != null) return;
-            option.SetForbiddenOptions(new[] { exclusive });
+            Forbid(option, exclusive);
             blocked = option;
             Session.Log.LogInfo("Exclusive Fullscreen is no longer offered in the game's display settings: frame generation " +
                 "cannot run in it. Turn frame generation off to get the choice back.");
+        }
+        // Every path that changes the row - the arrows, Cancel, Restore Defaults - goes through the
+        // setter, which invokes this, and Restore Defaults is the one that bypasses the forbidden list.
+        // Re-arming rather than acting keeps the work out of the game's own call stack, at the cost of
+        // one tick. Il2CppSystem.Action converts from the managed delegate and combines, so this is the
+        // same code in both runtimes.
+        private static void Hook(EnumArrowsOption option)
+        {
+            if (hooked) return;
+            hooked = true;
+            option.onChange += (Action<ToggleOption>)((ToggleOption ignored) => pending = true);
         }
         private static bool TryMode(ModeMap modes, ToggleOption option, out FullScreenMode mode)
         {
@@ -168,10 +180,10 @@ namespace TGFrameGeneration
             return option != null && modes.TryGetValue(option, out mode);
         }
 #if BEPINEX_IL2CPP
-        // The forbidden entry covers every way a player can choose the mode. Restore Defaults writes
-        // the value directly instead, and catching that needs the game's own change callback, which is
-        // not ported to IL2CPP yet: there, the next change to a TGFG setting re-arms this instead.
-        private static void Hook(EnumArrowsOption option) { hooked = true; }
+        private static void Forbid(EnumArrowsOption option, ToggleOption entry) =>
+            option.SetForbiddenOptions(new Il2CppReferenceArray<ToggleOption>(new[] { entry }));
+        private static void Unforbid(EnumArrowsOption option) =>
+            option.SetForbiddenOptions((Il2CppReferenceArray<ToggleOption>)null);
         private static ModeMap Modes(ScreenResolution screen) => screen._fullScreenModes;
         private static ToggleOption Find(EnumArrowsOption option, ModeMap modes, FullScreenMode wanted)
         {
@@ -186,15 +198,8 @@ namespace TGFrameGeneration
             return null;
         }
 #else
-        // Every path that changes the row - the arrows, Cancel, Restore Defaults - goes through the
-        // setter, which invokes this. Re-arming rather than acting keeps the work out of the game's own
-        // call stack, at the cost of one tick.
-        private static void Hook(EnumArrowsOption option)
-        {
-            if (hooked) return;
-            hooked = true;
-            option.onChange += ignored => pending = true;
-        }
+        private static void Forbid(EnumArrowsOption option, ToggleOption entry) => option.SetForbiddenOptions(new[] { entry });
+        private static void Unforbid(EnumArrowsOption option) => option.SetForbiddenOptions((ToggleOption[])null);
         // Not public, like SettingsMaster's setting lists; resolved once.
         private static readonly FieldInfo ModesField =
             typeof(ScreenResolution).GetField("_fullScreenModes", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
