@@ -90,20 +90,28 @@ void summarise(uint64_t now) {
         *reflex=sl::ReflexState{};
         SLGuard inside;
         if(s.sl.reflexState(*reflex)==sl::Result::eOk) {
-            uint64_t pc=0,render=0,gpu=0,present=0; uint32_t count=0,presented=0;
+            // Each average divides by the number of frames that contributed to it, not by the number
+            // that contributed to the first one: a frame missing a render-submit or present timestamp
+            // would otherwise drag that average down by however many such frames there were, which is
+            // not a constant between backends and so cannot be compared across them.
+            uint64_t pc=0,render=0,gpu=0,present=0; uint32_t count=0,rendered=0,presented=0;
             for(const auto& r:reflex->frameReport) {
                 if(!r.frameID || !r.simStartTime || r.gpuRenderEndTime<=r.simStartTime) continue;
                 pc+=r.gpuRenderEndTime-r.simStartTime; gpu+=r.gpuActiveRenderTimeUs; ++count;
-                if(r.renderSubmitStartTime && r.gpuRenderEndTime>r.renderSubmitStartTime) render+=r.gpuRenderEndTime-r.renderSubmitStartTime;
+                if(r.renderSubmitStartTime && r.gpuRenderEndTime>r.renderSubmitStartTime) {
+                    render+=r.gpuRenderEndTime-r.renderSubmitStartTime; ++rendered;
+                }
                 // The same pair of timestamps XeLL reports, so the two latency technologies can be
                 // compared on one measurement instead of on two that end in different places.
                 if(r.presentEndTime>r.simStartTime) { present+=r.presentEndTime-r.simStartTime; ++presented; }
             }
             auto ms=[](uint64_t us){ char b[32]{}; std::snprintf(b,sizeof(b),"%.1fms",us/1000.0); return std::string(b); };
             line+=" | Reflex mode="+n(static_cast<uint32_t>(s.lastReflex.mode))+" lowLatencyAvailable="+(reflex->lowLatencyAvailable?"1":"0")+
-                " reports="+n(count);
-            if(count) line+=" pcLatency="+ms(pc/count)+" renderLatency="+ms(render/count)+" gpuActive="+ms(gpu/count);
-            if(presented) line+=" simToPresent="+ms(present/presented);
+                " reportAvailable="+(reflex->latencyReportAvailable?"1":"0")+" reports="+n(count);
+            if(count) line+=" pcLatency="+ms(pc/count)+" gpuActive="+ms(gpu/count);
+            // The population behind each average, because they need not be the same frames.
+            if(rendered) line+=" renderLatency="+ms(render/rendered)+"/"+n(rendered);
+            if(presented) line+=" simToPresent="+ms(present/presented)+"/"+n(presented);
         }
     }
     // The XeLL equivalent, so DLSS-with-Reflex and XeSS-with-XeLL can be compared with numbers.
