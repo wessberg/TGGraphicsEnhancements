@@ -157,9 +157,10 @@ backs up every TGFG file it replaces under `BepInEx/TGFrameGeneration/Backups`.
 `Package.ps1 -Runtime Mono -Deploy` repackages existing artifacts. Every packaging run also writes the
 Nexus Mods downloads to `artifacts/Nexus`: `TGFrameGeneration - mono.zip` for the Mono branch and
 `TGFrameGeneration.zip` for the standard version. A package contains the plugin,
-the preloader, the native backend, the vendor runtimes with their license notices and
-`TGFG-Package-manifest.json`. Install one runtime package per game installation, then start the game
-from Steam as usual.
+the preloader, the native backend, the vendor runtimes with their license notices,
+`TGFG-Package-manifest.json` and `vortex_override_instructions.json`, which tells Vortex to install
+the archive at the game root under the mod type it calls "Engine Injector". Install one runtime
+package per game installation, then start the game from Steam as usual.
 
 `Test-Setup.ps1 -GameDir <game folder> -Runtime Mono` (or `IL2CPP`) checks an installed copy without starting
 the game. Native builds also run the portable ABI, policy, interop and camera-orientation tests and compile the HLSL;

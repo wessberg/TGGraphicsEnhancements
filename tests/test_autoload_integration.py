@@ -79,7 +79,10 @@ class AutoloadIntegration(unittest.TestCase):
         self.assertIn("'artifacts\\Native'",source)
         self.assertIn("$nativeManifest.version -ne '0.5.0'",source)
         # Forward-slash zip entries (not Compress-Archive) and the Nexus download copy.
-        self.assertIn("New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json')",source)
+        # The archive root carries the package manifest and the Vortex mod type, nothing else.
+        self.assertIn("New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json',"
+                      "(Get-TgfgVortexOverrideName)) ($stage + '.zip')",source)
+        self.assertIn('Write-TgfgVortexOverrides $stage',source)
         self.assertNotIn('PLAYER-INSTALL',source)
         self.assertNotIn('Compress-Archive',source)
         self.assertIn("'artifacts/Nexus/' + (Get-TgfgNexusName $target)",source)

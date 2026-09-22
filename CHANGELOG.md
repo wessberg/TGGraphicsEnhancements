@@ -62,6 +62,12 @@ Diagnostics
   the clip-space orientation change.
 - New optional exports `TGFG_SetHudlessCapture`, `TGFG_SetHudless` and `TGFG_SetDebugFlags`.
 
+Packaging
+
+- The Nexus downloads carry `vortex_override_instructions.json`, which sets the mod type Vortex calls
+  "Engine Injector". Vortex was installing the BepInEx folder under its own mod directory instead of
+  the game root, so nothing loaded. Manual installs and other mod managers are unaffected.
+
 # v0.5.0 - AMD FSR and Intel XeSS frame generation, one Low Latency selector
 
 - The plugin is now "TG Frame Generation" with the ID com.wessberg.tgframegeneration. Settings

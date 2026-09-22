@@ -32,6 +32,18 @@ function Get-TgfgVendorRuntimes {
 function Get-TgfgNexusName([string]$Runtime) {
     switch ($Runtime) { 'Mono' { 'TGFrameGeneration - mono.zip' }; 'IL2CPP' { 'TGFrameGeneration.zip' }; default { throw "Unknown runtime: $Runtime" } }
 }
+# Vortex picks a mod type to decide where it deploys an archive, and guesses wrong for a BepInEx
+# payload: it lands under the game's own mod folder instead of the game root. Vortex 1.14 and later
+# read this file from the archive root, and 'dinput' - shown as "Engine Injector" - is the built-in
+# mod type that always deploys to the game root. Only the destination changes; the Vortex game
+# extension still decides which files to copy, and Vortex ignores the type if the game rejects it.
+function Get-TgfgVortexOverrideName { 'vortex_override_instructions.json' }
+function Write-TgfgVortexOverrides([string]$Stage) {
+    $json = ConvertTo-Json -InputObject @([ordered]@{type='setmodtype'; value='dinput'}) -Depth 3
+    # Vortex reads this with Node, whose JSON.parse rejects a UTF-8 BOM.
+    [IO.File]::WriteAllText((Join-Path $Stage (Get-TgfgVortexOverrideName)), $json,
+        (New-Object Text.UTF8Encoding $false))
+}
 # Zip entries use forward slashes, as the zip format requires. Compress-Archive in Windows PowerShell
 # 5.1 writes backslashes, which some extractors and archive previews show as flat file names.
 function New-TgfgZip([string]$Stage, [string[]]$Items, [string]$Destination) {

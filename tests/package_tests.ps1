@@ -49,7 +49,8 @@ try {
     Assert-Throws { Test-TgfgPayload $bad $stage 'Mono' } 'Missing preloader was accepted.'
     # Zip entries use forward slashes; the Nexus downloads have fixed names per game version.
     $zip=Join-Path $temp 'forward-slashes.zip'
-    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json') $zip
+    Write-TgfgVortexOverrides $stage
+    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json',(Get-TgfgVortexOverrideName)) $zip
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive=[System.IO.Compression.ZipFile]::OpenRead($zip)
     try {
@@ -57,7 +58,17 @@ try {
         Assert-True (@($names | Where-Object { $_.Contains('\') }).Count -eq 0) 'A zip entry uses a backslash.'
         Assert-True ($names -contains 'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll') 'The native DLL is missing from the zip or misnamed.'
         Assert-True ($names -contains 'TGFG-Package-manifest.json') 'The manifest is missing from the zip root.'
+        Assert-True ($names -contains 'vortex_override_instructions.json') 'The Vortex override is missing from the zip root.'
     } finally { $archive.Dispose() }
+    # Vortex reads the override from the archive root and deploys the payload to the game root instead.
+    $overridePath=Join-Path $stage (Get-TgfgVortexOverrideName)
+    $bytes=[IO.File]::ReadAllBytes($overridePath)
+    # Node's JSON.parse, which Vortex reads this with, rejects a UTF-8 BOM.
+    Assert-True ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) 'The Vortex override starts with a UTF-8 BOM.'
+    $override=@(Get-Content -LiteralPath $overridePath -Raw | ConvertFrom-Json)
+    Assert-True ($override.Count -eq 1 -and $override[0].type -eq 'setmodtype' -and $override[0].value -eq 'dinput') 'The Vortex override does not set the Engine Injector mod type.'
+    # It instructs Vortex only; TGFG's own deployment must never copy it into the game folder.
+    Assert-Throws { Get-TgfgOwnedPath $stage (Get-TgfgVortexOverrideName) } 'The Vortex override was accepted as a deployable payload path.'
     Assert-True ((Get-TgfgNexusName 'Mono') -eq 'TGFrameGeneration - mono.zip') 'Wrong Mono Nexus name.'
     Assert-True ((Get-TgfgNexusName 'IL2CPP') -eq 'TGFrameGeneration.zip') 'Wrong IL2CPP Nexus name.'
     # NVIDIA's, AMD's and Intel's license terms require their notices next to their runtimes.
