@@ -1,15 +1,180 @@
-# Native architecture and ownership (v0.5.0)
+# Native architecture and ownership (v1.1.0)
 
-This is original TGFG integration code. The Open Shaders implementation was read
-as an architectural precedent, not copied as a Skyrim backend dependency. The
-frame generation backends are the vendors' own SDKs: NVIDIA Streamline DLSS-G, the
-AMD FSR API (FidelityFX SDK 2.3) and Intel XeSS-FG (XeSS SDK 3.0). Primary
+This is original integration code. The Open Shaders implementation was read as an architectural
+precedent, not copied as a Skyrim backend dependency. The frame generation and upscaling backends are
+the vendors' own SDKs: NVIDIA Streamline DLSS-G, the AMD FSR API (FidelityFX SDK 2.3; frame
+generation and upscaling) and Intel XeSS (XeSS SDK 3.0; XeSS-FG and XeSS Super Resolution). Primary
 references are listed in SOURCES.md. DLSS-G, FSR and XeSS frame generation (with XeLL) have run in
-FoA, with DLSS upscaling and on HDRP's own inputs; Anti-Lag 2 has not yet been confirmed in game.
+FoA, with DLSS upscaling and on HDRP's own inputs, and TG Better Upscaling's FSR and XeSS have upscaled in
+FoA; Anti-Lag 2 has not yet been confirmed in game.
+
+## Three native DLLs
+
+`native/bridge` builds `TGGraphicsBridge.Native.dll`: the graphics hooks (one MinHook registry for
+the process), the observation of the game's real D3D11 device and immediate context, the shared
+D3D12 device, and the extension host. `native/framegen` builds `TGFG.Native.dll` and
+`native/upscaling` builds `TGBetterUpscaling.Native.dll`, both extensions of the bridge
+(`native/bridge/include/tgb/bridge_api.hpp`):
+
+- `Host` is what the bridge offers an extension: hook installation (inline and vtable) with the
+  original pointer, a per-thread "internal call" flag so an extension's own DXGI/D3D calls pass the
+  hooks untouched, a native DXGI factory, Authenticode signer checks and signed loading, the game's
+  D3D11 device and context with a generation counter (bumped when the game creates a new device),
+  the shared D3D12 device, the GPU vendor and the BepInEx root.
+- `Extension` is what an extension offers: its `needs()` (`NeedD3D12`, `NeedPresentation`),
+  `bootstrap()` outside DllMain, `create_d3d12_device()` (frame generation creates it through
+  Streamline on NVIDIA GPUs, so DLSS-G sees the device it presents on), `d3d12_device_ready()`, and
+  for the one presentation provider `create_swapchain()`.
+
+The bridge creates the D3D12 device inside the game's swapchain creation, on the swapchain's adapter.
+That is also where ReShade's guard lets a nested device creation through; creating it earlier, from
+the device hook, would be refused while ReShade wraps the game's device.
+
+`TGGraphicsBridge_ReadStatus` reports what happened: extensions registered/active/failed, their
+needs, which extension presents and which created the device, whether the game's device was seen,
+swapchains seen and replaced, the last error and the loading PID. The bridge's gameplay plugin logs
+it; both mods include it in their diagnostic reports.
+
+## Upscaling (TG Better Upscaling)
+
+HDRP decides per camera which upscaler runs (`HDRenderPipeline.SetupPartnerUpscalers`): DLSS if the
+camera allows it, else STP when the camera requested dynamic resolution. The game's upscaling
+controller (`UpScalingController.OnSettingChanged`) configures that from its Upscaling row. For the
+two entries TG Better Upscaling appends (index 3 FSR, index 4 XeSS), a Harmony prefix configures the camera
+exactly as the game does for STP - `allowDynamicResolution`, DLSS off, a dynamic-resolution scaler
+returning the row's `QualityScaling` - instead of the game's error path, which would turn upscaling
+off.
+
+`HDRenderPipeline.DoStpPasses(renderGraph, hdCamera, inputColor, inputDepth, inputMotion,
+inputStencil)` is where HDRP would record STP. A prefix records this mod's pass instead, for the
+gameplay camera only (`Camera.main`, no target texture) and only while the selected technology is
+usable, and returns the same output handle STP would (`GetPostprocessUpsampledOutputHandle`). The
+render-graph textures only exist while the graph executes, so the frame is handed over from a pass:
+HDRP's own `CustomPass.ExecuteInternal` records one for this mod's `CustomPass` with the output as
+its color target (which keeps the pass from being culled, since post-processing reads it), color as a
+second color target (which keeps it alive until the pass), and depth and motion vectors. The pass's
+owner volume is never enabled, so HDRP never runs it by itself. When the pass executes, it resolves
+the four textures to their `ID3D11Resource*`, submits the frame (`TGUP_SubmitFrame`) and issues
+render event 1; if that fails, it enlarges color into the output with `HDUtils.BlitCameraTexture` so
+the frame is never left unwritten.
+
+On the render thread (`native/upscaling/src/upscaler.cpp`), event 1:
+
+1. copies color, depth and motion vectors on the game's D3D11 context (isolated with
+   `SwapDeviceContextState`) into textures shared with the D3D12 device: RGBA16F, R32F, RG16F;
+2. signals the shared fence and flushes; the private D3D12 queue waits for it on the GPU;
+3. records FSR (`ffxDispatchDescUpscale`) or XeSS (`xessD3D12Execute`) into a command list writing a
+   shared RGBA16F output;
+4. signals the queue whether or not the SDK accepted the frame, and the game's D3D11 context waits
+   for that on the GPU, never the CPU;
+5. writes the output into HDRP's destination through a UAV, or a render-target view if it has none;
+   if the SDK refused the frame, the shared color copy is enlarged bilinearly instead.
+
+A technology change or a context rebuild (output size, flags) idles the queue first.
+After five refused frames in a row a technology is off for the session and STP runs again.
+
+The inputs are STP's: HDRP's pre-exposed linear color (FSR is told HDR and an exposure of 1.0; auto
+exposure is an advanced option), reversed-Z depth (FSR gets near and far swapped, as AMD's
+integrations do; XeSS gets `XESS_INIT_FLAG_INVERTED_DEPTH`), motion vectors scaled by
+(-render width, -render height) into render pixels, the jitter HDRP applied negated, HDRP's own
+history reset, the camera's vertical field of view and HDRP's render delta time. FSR's maximum render
+size is the output size, because the row's slider can go up to native. XeSS takes the narrowest
+preset whose range contains the render scale (XeSS 1.3 and later accept any input resolution within a
+preset's range); the preset follows the slider.
+
+Frame generation then sees an upscaled frame exactly as after STP: its HDRP-input custom pass runs
+before post-processing and takes HDRP's depth and motion vectors at render resolution.
+
+The jitter is HDRP's own. In STP mode it comes from `STP.Jit16(taaFrameIndex)`, which despite its
+name is Halton(2,3) over HDRP's 1024-frame index, longer than the `8 * (output / render width)^2`
+samples AMD and Intel ask as a minimum; STP itself derives the jitter it removes from that index, so
+an override would break STP whenever it upscales in FSR's or XeSS's place. When STP takes over right
+after a frame this mod upscaled, its history is reset (`resetPostProcessingHistory`, read by
+`PopulateStpConfig`); a hosted frame after a gap resets FSR's or XeSS's.
+
+Exposure: HDRP pre-exposes its color by its exposure, and only its DLSS pass reads that exposure back
+(`HDRenderPipeline.DoDLSSPass`: `hdCamera.RequestGpuExposureValue(GetExposureTexture(hdCamera))`, then
+`Clamp(hdCamera.GpuExposureValue(), 0.2, 2)` as DLSS's pre-exposure). For FSR the prefix requests the
+same readback every hosted frame and sends the same clamped value; the native side gives it to FSR as
+`preExposure` and, through a 1x1 R32_FLOAT texture written from a ring of upload slots, as its
+`exposure`. FSR divides the pre-exposure out, so its history is kept independent of the exposure and
+survives eye adaptation, and multiplies the exposure back in, so its heuristics see the color HDRP
+tonemaps. The limit keeps that history within half precision where the exposure is far from 1. XeSS
+has no pre-exposure input and keeps an exposure multiplier of 1.
+
+Texture mip bias: wherever STP runs, HDRP biases texture sampling by `log2(render / output width)`
+(`HDCamera.Update`: `globalMipBias = materialMipBias + CalculateMipBias(...)`, applied because STP's
+injection point is before depth of field). That is Intel's guidance for XeSS. AMD asks for one mip
+more with FSR, `log2(render / output width) - 1`, so while FSR is selected the gameplay camera's
+`HDAdditionalCameraData.materialMipBias` gets -1 on top of its own value, which the game never sets;
+it goes back as soon as another upscaler is selected.
+
+FSR's version is AMD's default for the GPU: no version override, as AMD asks when the player has no
+version choice. FSR's own sharpening is the only sharpening: DLSS has none any more, XeSS never had.
+
+The sign convention was checked on 2026-09-23 with AMD's and Intel's runtimes themselves: jittered
+render-resolution frames cut from a supersampled in-game image the way HDRP renders them (frustum
+moved by +taaJitter, bottom row first) upscaled closest to that image with the SDKs given
+-taaJitter on both axes, the convention HDRP's DLSS pass uses; every other combination scored 3 to
+10 dB worse. FSR 3.1's softness at a third of the resolution is its own: it was the same on those
+synthetic frames, and its own sharpening recovers part of it.
+
+Quality modes replace the game's slider for DLSS, FSR and XeSS (`QualityModes.cs`, `DlssModes.cs`,
+`UpscalerRow.cs`). The modes come from the runtimes: `GraphicsDevice.GetOptimalSettings` for each NGX
+quality level (Unity's `DLSSQuality` lacks DLAA but passes 5 through), FSR's null-context
+`FFX_API_QUERY_DESC_TYPE_UPSCALE_GETUPSCALERATIOFROMQUALITYMODE`, and `xessGetOptimalInputResolution`
+for each XeSS preset at a 4K output (`TGUP_GetModes`). `SwitchRowsOption` shows the game's slider
+under STP and a Quality Mode row under the other three. The controller prefix gives FSR and XeSS the
+mode's render scale (a tenth of a point above, so HDRP's rounding stays inside a preset's input
+range) and XeSS the preset (`TGUP_Frame.mode`, preferred over the ratio search while its range holds
+the render size). For DLSS it replaces `UpScalingController.EnableDLSS` with the same camera setup,
+the mode as `deepLearningSuperSamplingQuality` and NVIDIA's size as the scale; HDRP recreates the NGX
+feature when the quality level changes. A postfix on `UpScaling.SetValueForPreset` moves the modes
+with the game's graphics presets. After the rows are installed, `Setting.Apply(true, ...)` raises the
+controller's refresh even without a change, since it configured the camera before the rows existed.
+
+The game's own DLSS runs from the `nvngx_dlss.dll` that NVIDIA's runtime (`_nvngx.dll`, in the
+driver) loads with `LoadLibraryExW` by full path while the game initializes NGX: the one next to the
+game, 3.8.10 as shipped. `native/upscaling/src/dlss_dll.cpp` hooks `kernelbase!LoadLibraryExW` at
+bootstrap. For a path ending in `nvngx_dlss.dll` whose file version is older than the bundled,
+NVIDIA-signed `Native/DLSS/nvngx_dlss.dll` (310.9.1, DLSS SDK), it loads the bundled file instead,
+data-file loads included, so a version query and the loaded module agree. An equal or newer file (a
+DLSS swap, the driver's own download) and every other load pass through, and so does a file that
+belongs to a DLSS mod's set in its folder (`part_of_dlss_set`): `nvngx_dlssnr.dll` beside it (DLSS 5's
+neural rendering), or `nvngx_dlssd.dll` or `nvngx_dlssg.dll` of the same major.minor release. The RenoDX
+DLSS 5 add-on stopped scaling with the render resolution when the game's DLSS ran our 310.9.1 beside
+its 310.8 set. The decision is made once
+per path and logged.
+
+## Performance overlay
+
+`TGGraphicsBridge.PerformanceOverlay` draws the panel from the bridge's per-frame component with IMGUI
+(`OnGUI`, Repaint events only), after the game's UI, so frame generation treats it as UI. It records
+`Time.unscaledDeltaTime` every frame while shown and rebuilds its text four times a second: its own
+Performance section, then the mods' sections in ascending order (upscaling 10, frame generation 20),
+each read through the delegate the mod registered; a section that throws shows as unavailable. The
+setting is the bridge plugin's (one copy loads, whichever mod bundled the newest), so both mods share
+it. `PerformanceOverlayRow` adds it to the game's Video settings as a game `Setting`
+(`PerformanceOverlaySetting`: Performance Overlay, and through a `SwitchRowsOption` Overlay Position
+and Overlay Size while it is on), as the last graphic setting, and moves it back to the end whenever
+the settings screen is closed and other rows were added after it. It adds it once: only if no setting
+of that type is in the list already. `TGGraphicsBridge_ReadPerformance` starts a sampling thread on its first call: process and system
+CPU time, PDH's `\GPU Engine(*)\Utilization Percentage` summed per engine type (the busiest type,
+for this process's `pid_` instances and for all), and the game adapter's local memory use and budget.
+
+The DLSS model the overlay names: NGX has no query for it, and the NVIDIA App's DLSS override is
+applied inside the driver. `native/upscaling/src/nvidia_profile.cpp` reads that override where the
+NVIDIA App stores it, the driver's settings profile for the game's executable (falling back to the
+global profile), through NVAPI's DRS functions from `nvapi64.dll`: `Override DLSS-SR presets`
+(0x10E41DF3), `Enable DLSS-SR override` (0x10E41E01), `Override DLSS-SR performance mode`
+(0x10AFB768), `Override DLSS mode to be DLAA` (0x10E41DF4) and `Override scaling ratio for DLSS-SR`
+(0x10E41DF5), once when the overlay first asks and every 30 seconds after. The driver checks
+`NVDRS_SETTING_V1` at 12320 bytes and refuses the 12328 bytes the current nvapi.h gives it (a 64-bit
+member pads its unions), so the structure is declared with 4-byte packing.
 
 ## Source and output are distinct
 
-`graphics_hooks.cpp` intercepts native DXGI factory creation and the combined
+`native/bridge/src/hooks.cpp` intercepts native DXGI factory creation and the combined
 D3D11 device/swapchain entrypoint. Game factory calls still use the original
 D3D11 path. For one suitable game HWND, the returned object implements
 IDXGISwapChain through IDXGISwapChain4 but returns the **D3D11 device and a stable
@@ -69,25 +234,39 @@ DLSS: while DLSS supplied the previous frame's inputs, event 3 leaves the frame 
 1. At the D3D11-facing Present, the source color is already rendered. FP16 scRGB
    is converted on D3D11 when necessary. Source buffers stay owned by the wrapper.
 2. D3D11 signals the shared producer fence and flushes; the private D3D12 queue
-   waits on that value. No image is mapped to CPU memory.
+   waits on that value. No image is mapped to CPU memory. Only D3D11 signals the
+   producer fence and only the D3D12 queue signals the consumer fence (steps 4, 7
+   and `drain()`): a fence Signal sets its value, so a fence with two signalling
+   queues can move backwards once neither waits for the other.
 3. The current **private D3D12** buffer index selects its allocator and backbuffer.
    The allocator's previous retirement fence is checked before reset.
 4. A D3D12 command list transitions/copies final color to the actual output buffer
-   and returns the shared source resource to COMMON and output to PRESENT.
+   and returns the shared source resource to COMMON and output to PRESENT. Right
+   after it is submitted, and before Present, the queue signals the value that
+   records this virtual back buffer as copied.
 5. The captured frame's constants/depth/motion and, once verified, the HUD-less
    texture are tagged `eValidUntilPresent`. `before_present` applies requested
    options only if all readiness conditions pass. Otherwise it requests Off and
    clears the frame's tags.
 6. The Streamline swapchain presents. The present thread queries its reported
    output count and borrowed input-processing fence, retaining its own COM ref.
-7. The private queue waits on that completion dependency, signals the shared
-   consumer fence, and D3D11 waits before subsequent writes. The selected
-   `eBlockPresentingClientQueue` mode is also explicit in the options.
+7. The private queue waits on that completion dependency and signals the value
+   that retires this present, which becomes the retire value of the frame's input
+   slot. The selected `eBlockPresentingClientQueue` mode is also explicit in the
+   options.
+8. D3D11 waits only for what it is about to overwrite: the next virtual back
+   buffer until D3D12 copied it (an earlier present when there are two or more),
+   and an input slot until the present that used it retired, just before the NGX
+   or HDRP capture rewrites it three frames later. No wait is queued when the
+   shared fence has already passed the value; the pipeline line counts the ones
+   that were (`d3d11Waits buffer/inputs`).
 
-The implementation serializes the cross-API resource handoff deliberately.
-It has not been GPU-profiled; no speedup/latency/VRAM figure is promised. Off mode
-still uses the output bridge and copy. No mode-toggle output-swapchain recreation
-or device-loss recovery is implemented.
+Until 1.2.0, D3D11 waited after every Present for that present's retire value, so the
+game's next frame could start on the GPU only once frame generation had finished the
+current one. The per-resource waits keep the same guarantees without that. Nothing here
+has been GPU-profiled on hardware other than an RTX 5080; no speedup/latency/VRAM figure
+is promised. Off mode still uses the output bridge and copy. No mode-toggle
+output-swapchain recreation or device-loss recovery is implemented.
 
 ## Frame generation technologies
 
@@ -121,11 +300,20 @@ API exposes no multi-frame control. Requests are clamped to the reported maximum
 
 One setting selects NVIDIA Reflex (+ Boost), Intel XeLL or AMD Anti-Lag 2. `select_latency`
 applies the pairings: DLSS-G requires Reflex; XeSS-FG runs with XeLL and nothing else, and on
-non-Intel GPUs XeLL works only together with XeSS-FG; Anti-Lag 2 needs an AMD driver. The sleep
-runs in `TGFG_BeginSimulation` (outside the state mutex), markers follow the existing PCL points
-(simulation, render submit, present), and XeLL's sleep mode changes only after a GPU drain, as
-Intel requires. With FSR on AMD GPUs the frame generation swapchain reports interpolated frames to
-Anti-Lag 2 through the documented swapchain private data.
+non-Intel GPUs XeLL works only together with XeSS-FG; Anti-Lag 2 needs an AMD driver. Reflex is
+offered as a choice only when Streamline reports `lowLatencyAvailable` (NVIDIA's rule for the
+Reflex UI); DLSS-G still runs it. The sleep runs in `TGFG_BeginSimulation` (outside the state
+mutex), which the plugin calls from an entry in Unity's PlayerLoop right after
+`TimeUpdate.WaitForLastPresentationAndUpdateTime` (`FrameStart`): after Unity's own wait for the
+previous presentation, which Intel's XeLL guide wants before XeLL's sleep, and before any input is
+read (Unity's in EarlyUpdate, Rewired's in Update). The SDKs ask for the wait just before input is
+sampled; from a MonoBehaviour's Update it came after. XeSS-FG generates only from frames XeLL slept
+for while its low latency mode is on. If another mod replaces the PlayerLoop, the frame begins in
+Update again. Markers follow the existing PCL points (simulation, render submit, present), and
+XeLL's sleep mode changes only after a GPU drain, as Intel requires. XeLL's frame limit counts
+every Present, so under XeSS-FG the Base FPS limit reaches it multiplied by the presents per
+rendered frame. With FSR on AMD GPUs the frame generation swapchain reports interpolated frames
+to Anti-Lag 2 through the documented swapchain private data.
 
 ## HDR
 
@@ -250,22 +438,9 @@ are created without the flag and throttle through a blocking Present.
   to find an optional NGX updater. The addon runs DLSS 5 through NGX directly on its own D3D12
   device; its NGX D3D12 hooks (with pre/post evaluation callbacks) also see TGFG's DLSS-G.
 
-## Legacy development launcher (not the player workflow)
+## Automatic startup
 
-The launcher holds only the child process it creates. A temporary software
-breakpoint at the PE entrypoint permits the Windows loader to finish; the byte
-and instruction pointer are restored, the main thread is explicitly suspended,
-and the debugger is detached before native loading. TGFG_Bootstrap executes
-outside DllMain, before the main thread starts the game. The original loader
-proxies on disk are not replaced. Early TLS graphics and Steam replacement
-processes require separate handling and are not covered by this mechanism.
-
-## Integrated automatic startup
-
-The normal startup entry point is now `src/TGFG.Autoload`, loaded by BepInEx's
-preloader inside the game process Steam starts. It synchronously invokes the
-existing native bootstrap. The gameplay project builds the preloader through a
-build-only project reference, but does not reference/load it at runtime. See
-AUTOLOAD-INTEGRATION.md for the separate Mono/IL2CPP patcher contracts and the
-unverified relationship between this preloader phase and FoA graphics startup.
-The legacy native launcher is not included in player packages.
+The only startup entry point is TG Graphics Bridge's BepInEx preloader, `src/TGGraphicsBridge.Autoload` (one copy per mod, one of which starts the bridge; see AUTOLOAD-INTEGRATION.md),
+loaded by BepInEx inside the game process Steam starts. It registers the extensions it finds and
+synchronously invokes the bridge's bootstrap. See AUTOLOAD-INTEGRATION.md for the Mono and IL2CPP
+patcher contracts. The development launcher of earlier versions is gone.

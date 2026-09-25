@@ -18,22 +18,24 @@ presentation orientation, deriving the latter through an independent matrix inve
 that `to_presentation_clip` turns one into the other, that a world point reprojects correctly
 through the converted `clipToPrev`, and that the turn is its own inverse. It says nothing about
 what the runtimes do with those matrices; that was established by an in-game comparison of DLSS,
-FSR and XeSS. When repeating such a comparison, check that the deployed `TGFG.Native.dll` hashes
-equal to `artifacts/Native/TGFG.Native.dll` first: a mod manager may have left a symlink to an
-older build in place, which makes a real change look like no change at all.
+FSR and XeSS. When repeating such a comparison, check that the deployed native DLLs hash equal to
+their `artifacts/Native/<mod>/` builds first: a mod manager may have left a symlink to an older
+build in place, which makes a real change look like no change at all. `Test-Setup.ps1` does this
+for every installed mod.
 
 The Mono Kandra history regression uses the production Harmony hook and the installed
 Harmony runtime, with a stand-in skinning manager (no game launch or GPU):
 
 ```powershell
 dotnet build tests/KandraMotionHistory.Tests.csproj -c Release
-$gameRoot = (Get-Content src/TGFrameGeneration/bin/Release/net472/TGFG.GameDir.txt -Raw).Trim()
+$gameRoot = (Get-Content src/TGGraphicsBridge/bin/Release/net472/TG.GameDir.txt -Raw).Trim()
 & ./tests/bin/Release/net472/KandraMotionHistory.Tests.exe "$gameRoot/BepInEx/core"
 ```
 
-It checks all FG backends, consecutive single-camera frames, repeated cameras, separate managers, frame gaps, Off/on,
-copy failure/retry, and unpatch/reinstall. In-game, check the history guard installation
-and `FG Kandra motion history: prevented ...` counters with the minimap camera active.
+It checks the guard for frame generation's request, upscaling's and both, consecutive single-camera
+frames, repeated cameras, separate managers, frame gaps, no request, copy failure/retry, and
+unpatch/reinstall. In-game, check the history guard installation and `Kandra motion history:
+prevented ...` counters (TG Graphics Bridge's log source) with the minimap camera active.
 Use a fresh F6 capture during a camera turn to verify hand reprojection; these unit checks
 do not establish Unity GPU ordering or that the hand flicker is fixed.
 
@@ -41,7 +43,7 @@ For the IL2CPP guard branch, using the installed IL2CPP game's Harmony runtime:
 
 ```powershell
 dotnet build tests/KandraMotionHistory.Tests.csproj -c Release -p:TestRuntime=IL2CPP
-$gameRoot = (Get-Content src/TGFrameGeneration/bin/Release/net6.0/TGFG.GameDir.txt -Raw).Trim()
+$gameRoot = (Get-Content src/TGGraphicsBridge/bin/Release/net6.0/TG.GameDir.txt -Raw).Trim()
 dotnet tests/bin/Release/net6.0/KandraMotionHistory.Tests.dll "$gameRoot/BepInEx/core"
 ```
 
@@ -56,13 +58,14 @@ For IL2CPP dependent-option visibility routing:
 
 ```powershell
 dotnet build tests/Il2CppOptionConditions.Tests.csproj -c Release
-$gameRoot = (Get-Content src/TGFrameGeneration/bin/Release/net6.0/TGFG.GameDir.txt -Raw).Trim()
+$gameRoot = (Get-Content src/TGGraphicsBridge/bin/Release/net6.0/TG.GameDir.txt -Raw).Trim()
 dotnet tests/bin/Release/net6.0/Il2CppOptionConditions.Tests.dll "$gameRoot/BepInEx/core"
 ```
 
 This uses a stand-in getter and the production Harmony prefix to check owned/unowned
 routing, native-pointer aliases, changing/nested conditions, exception isolation, owner
-retention through GC, clearing, and unpatch/reinstall. It does not run native IL2CPP.
+retention through GC, per-mod removal (one mod rebuilding its rows keeps the other's), and
+unpatch/reinstall. It does not run native IL2CPP.
 In game, enable upscaling, open Pause then Options repeatedly, and check both TGFG
 dependent-option hook installation and evaluation messages. Change FG modes and verify
 their dependent rows, Apply/Undo, and returning to gameplay. The reported Options crash
@@ -88,6 +91,15 @@ brightness/gamma changes, constant-buffer range offsets and image orientation. I
 exercise ReShade's runtime draw hooks. In-game, verify shader recognition, final-pass replay,
 HUD-less pixel verification and increasing supply counts, then assess HUD stability visually.
 
+`tgup_gpu_smoke` (and `tgup_gpu_smoke_unity_order`, with the factory and device created before the
+bridge starts, as Unity does) checks that the bridge sees a swapchain and creates its D3D12 device
+there. To check the hook order against ReShade, copy the game's ReShade `dxgi.dll` next to a copy of
+`tgup_gpu_smoke.exe` and run it there (add `--with-fg` for frame generation). In the `ReShade.log`
+beside it, the game's `Redirecting IDXGIFactory2::CreateSwapChainForHwnd` must appear, and no
+`Redirecting D3D12CreateDevice` and no second `CreateSwapChainForHwnd`: ReShade wraps neither the
+bridge's device nor frame generation's swapchain. The bridge's log says "Created the bridge's DXGI
+factory past 3 hook(s)".
+
 The `tgfg_draw_observer` WARP test installs the production MinHook detours through Context4
 and invokes all six draw APIs through the base context. It verifies callback delivery while
 the pixel shader is still bound, GPU results after forwarding nonzero draw/argument offsets,
@@ -107,6 +119,179 @@ hands/weapons and world edges. Also compare DLSS upscaling with TAA/STP to exerc
 `Test-Setup.ps1` checks expected files, the managed assembly version and the installed package
 manifest hashes without loading the native DLL into PowerShell. It cannot
 check runtime hook ordering or whether interpolation will work.
+
+## Both mods, in game
+
+Start with both mods installed and every setting as the previous session left it.
+
+1. `BepInEx/TGGraphicsBridge/Autoload.log`: two headers for the PID, one per mod's copy of the
+   preloader. The first found both extensions (each "bundles bridge 1.1.0"), loaded its own
+   `TGGraphicsBridge.Native.dll`, registered both and `TGGraphicsBridge_Bootstrap returned 0`; the
+   second says the bridge was already started by the first. No warning about `TGFG.Autoload.dll`
+   (deployment removes 0.5.0's preloader). With only one mod installed there is one header and that
+   mod's copy starts the bridge.
+2. `BepInEx/TGGraphicsBridge/TGGraphicsBridge.Native.log`: the game's device observed, the
+   D3D12 device created inside the swapchain creation (by TG Frame Generation through Streamline on
+   an NVIDIA GPU), frame generation as presentation provider.
+3. BepInEx's log: `Skipping [TG Graphics Bridge 1.1.0] because a newer version exists` for one
+   copy of the bridge's plugin (expected with both mods: BepInEx keeps one), `TG Graphics Bridge
+   1.1.0 loaded (the copy bundled in plugins/<mod>)`, then the two mods, then a bridge status line
+   naming both extensions as active.
+4. Frame generation behaves exactly as in 0.5.0 (the sections below). Its rows still follow the
+   Upscaling row.
+
+## TG Better Upscaling
+
+1. `TGBetterUpscaling.Native.log`: the FSR versions and the XeSS version the runtimes report, and
+   `Upscaler interop ready` on the first frame with FSR or XeSS. With FSR: `AMD FSR upscaler <v>
+   (AMD's default, the newest this GPU offers)`; FSR 4 on a Radeon RX 9000.
+2. Video tab: the Upscaling row offers None, STP, DLSS, FSR, XeSS (unavailable ones skipped). STP
+   shows the game's render-scale slider; DLSS and XeSS show Quality Mode; FSR shows Quality Mode and
+   FSR Sharpness. No FSR Version row, in the Video tab or in FoA Mod Manager. Apply, Undo and Restore
+   Defaults behave as for the game's own entries.
+3. Select FSR and Apply: BepInEx logs `Upscaling with FSR <mode> at N% render scale`, the native log an
+   `Upscaling 10s:` line every ten seconds with `fallback=0`, render size the mode's share of the
+   output (Performance: half). Compare the image with DLSS in the same mode, standing and during
+   camera turns: no shimmering edges, ghosting behind moving characters, or a smeared first-person hand.
+4. Repeat with XeSS; the `preset` in the status is the chosen Quality Mode.
+5. Change the Quality Mode while playing (Apply): the output size stays, the render size follows, no
+   black frames. Change the resolution and the display mode: the context is rebuilt once.
+6. FSR Sharpness: 0% and 100% are visibly different. The native log's `Upscaling 10s:` line shows
+   `preExposure=`, HDRP's exposure between 0.2 and 2; walking from a dark interior into daylight (and
+   back) shows no ghosting or smearing while the exposure adapts.
+7. Restart the game with FSR selected: FSR is selected again (`restored FSR from the game's
+   preferences`). Change the upscaler in FoA Mod Manager: the Video tab follows after closing it.
+8. With TG Frame Generation on (each technology): frame generation still starts, its HDRP input line
+   reports render-resolution depth and motion, and generated frames show no reprojection wobble.
+9. With ReShade + RenoDX HDR: FSR and XeSS upscale the HDR scene (no clipped highlights, no colour
+   shift against STP); with the RenoDX DLSS addon: the game still starts and the addon still works.
+10. Remove TG Better Upscaling (or add `BepInEx/TGBetterUpscaling/disable-autoload.txt`) with FSR selected: the
+    game falls back to its own default upscaler.
+11. NVIDIA GPU: the native log has `NVIDIA DLSS 310.9.1.0 bundled in Native/DLSS (NVIDIA-signed)` at
+    startup, then `NVIDIA's runtime asked for DLSS 3.8.10.0 (<game folder>\nvngx_dlss.dll); it gets the
+    bundled 310.9.1.0 instead`, or `keeps DLSS ...` when a DLSS mod has put the same or a newer file in
+    the game folder, or its own set (DLSS 5: `a DLSS mod's set of DLLs, with DLSS neural rendering
+    310.8.0.0 beside it`). DLSS still upscales, and with DLSS 5 on, the frame rate still follows the
+    quality mode (Ultra Performance clearly faster than Quality), as with the game's own DLSS DLL.
+12. Quality modes: `AMD FSR quality modes: Native AA 1.00x, ... Ultra Performance 3.00x` and `Intel XeSS
+    upscaling available; quality presets: ...` in the native log, and BepInEx's `quality modes DLSS: ...;
+    FSR: ...; XeSS: ...` status. The Video tab shows the slider under STP, Quality Mode under DLSS, FSR
+    (with FSR Sharpness) and XeSS, and FoA Mod Manager the same rows. On the first start with this
+    version, BepInEx logs `Quality modes set from the game's N% render scale, rounded down`. Picking a
+    graphics preset moves the modes with the slider. With TG Frame Generation installed, its log's
+    `Observed D3D11 DLSS SR feature` line shows `quality=` the chosen mode's NGX level (2 Quality, 1
+    Balanced, 0 Performance, 3 Ultra Performance, 5 DLAA) and `preset hints` all 0 (the DLL's default).
+
+## Performance overlay
+
+1. Performance Overlay is the last row of the Video settings, once, with both mods installed as well.
+   On shows Overlay Position and Overlay Size below it; Apply shows the panel in that corner, Off and
+   Apply hides it; Undo and Restore Defaults behave as for the game's rows. FoA Mod Manager shows the
+   same three rows under TG Graphics Bridge, position and size only while it is on, and a change there
+   shows up in the Video row after closing it.
+2. Performance: the rendered frame rate agrees with the game's own counter or RTSS; the resolution
+   line shows the render size under DLSS, STP, FSR and XeSS; VSync and the frame cap follow the game's
+   settings; CPU and GPU use are within a few points of Task Manager; VRAM matches Task Manager's
+   dedicated GPU memory for the game.
+3. Upscaling: each upscaler's version and mode; DLSS names its preset and the DLL (`bundled` when the
+   game folder's is older). With a DLSS override in the NVIDIA App (for example preset L), the preset
+   reads `L (NVIDIA driver override)`, matching the NVIDIA App overlay's `SR OVR Preset L`, and the native
+   log has `NVIDIA driver settings for Fall of Avalon.exe: DLSS-SR preset override 12`.
+4. Frame generation: Fixed 2x shows about twice the rendered frame rate on screen, 3x/4x likewise with
+   DLSS-G; Dynamic shows the target; the menu shows Paused.
+5. With only one of the two mods installed, only its section and the Performance section show.
+
+## Troubleshooting report, problems and the framerate check
+
+Without the game, the install check runs on folders laid out the ways players unpack the mods:
+
+```powershell
+dotnet build tests/InstallCheck.Tests.csproj -c Release
+./tests/bin/Release/net472/InstallCheck.Tests.exe   # TG_VERBOSE=1 prints what the player reads
+```
+
+In game (none of this has been run yet):
+
+1. Create Troubleshooting Report is nested under Performance Overlay: alone while the overlay is off,
+   after its position and size rows while it is on. Selecting it closes the settings, with the game's question about unapplied
+   changes first if there are any; a message at the top of the screen says to go back to the game.
+2. In gameplay the steps begin: the message names each one. The upscaling row switches (Off, STP,
+   DLSS, FSR, XeSS as offered) with frame generation off, then frame generation goes through its
+   technologies and low latency choices. Escape pauses it, the message says the settings are back,
+   and Options > Video shows the player's own upscaler and frame generation. Back in the game, the
+   step starts over. Selecting the button during the test stops it and saves what was measured.
+3. At the end the player's upscaler and frame generation are back (Video tab, performance overlay,
+   both configs unchanged), and a message names the report in the BepInEx folder
+   (`TG Troubleshooting Report <date>.txt`, beside LogOutput.log). It is one text file of about 25 KB
+   with a line per step, then a section per log with this session's lines only, the config values
+   and "Where the mods' files are", with `%USERPROFILE%` in place of the Windows user folder. In the
+   TGFG.Native.log section, each step's `Note: Troubleshooting: done:` line is followed by a Pipeline
+   line covering that step alone.
+4. Close the game during a test (Alt+F4 in a step with FSR or XeSS upscaling): the next start logs
+   that the test didn't finish and the Upscaling row shows the player's choice again.
+5. Install problems: move the mod's BepInEx folder into BepInEx/BepInEx (or BepInEx/plugins with the
+   other mod installed correctly): no rows named after the mods appear. For TG Frame Generation, the
+   Frame Generation row reads Off, greyed out, with an amber alert icon after its name; its tooltip reads
+   "TG Frame Generation: Wrong folder." and says in a sentence or two where the files are and what to do
+   (with Vortex: Engine Injector). For TG Better Upscaling, the Dynamic Resolution row gets the icon and
+   the same kind of tooltip. With old files for the other game version in the right place, the tooltip
+   says to delete BepInEx/plugins/<mod> "(for the game's normal version)", never "IL2CPP". The report has
+   the full explanation with the files to delete. With the same mod also installed correctly and the
+   same version running from there, the tooltip reads "Extra copy" instead. The performance overlay
+   lists it under Problems as "TG Frame Generation: Wrong folder", no wider than half the screen. The
+   icon disappears from a row once its problem is gone, and never stays on another row when the
+   settings screen scrolls or switches tabs.
+6. Put an empty OptiScaler.ini beside Fall of Avalon.exe: both the Frame Generation and the Dynamic
+   Resolution row get the icon, with "OptiScaler: Leftover files." as the tooltip. With RivaTuner's frame
+   rate limit set for the game, the Frame Generation row's tooltip names the limit ("RivaTuner: 60 fps
+   limit."). With the NVIDIA App's Max Frame Rate set for the game, the same after about ten seconds.
+   No tooltip is longer than about three lines; with more than one problem it says how many more the
+   performance overlay lists. Remove TG Frame Generation's plugin DLL (keep its preloader): a stand-in
+   Frame Generation row reads Off with the icon and the reason.
+   Turn Smooth Motion on for the game in the NVIDIA App to check the Smooth Motion ID (the native log's
+   `NVIDIA driver settings` line should show `smoothMotion=0x1@game`); if it stays `unset`, the ID is wrong.
+7. The framerate check: play a few seconds with frame generation off, then turn it on with the game's
+   Framerate Limit at the display's refresh rate and VSync on. About eight seconds into play a message
+   says frame generation isn't raising the framerate, with the numbers and the VSync explanation, and a
+   "No FPS gain" alert appears on the Frame Generation row. Turning frame generation off clears it; with an
+   uncapped framerate and VSync off, the log says it raised the framerate from X to Y.
+
+## Frame generation pipeline changes in 1.2.0
+
+In game (none of this has been run yet). Compare against 1.1.0 where a number is asked for.
+
+1. D3D11 no longer waits for frame generation. With DLSS, FSR and XeSS at 2x, uncapped and VSync
+   off, note the performance overlay's rendered and displayed framerate in the same spot as with
+   1.1.0. Both should be the same or higher; the GPU-bound case gains most. The Pipeline line's
+   `d3d11Waits buffer/inputs=` appears only when D3D11 had to wait and should stay small next to
+   `presents=`. Watch for corruption: flickering depth or motion (FSR debug flag 4 shows them), a
+   HUD-less image from the wrong frame, or a torn or stale frame. Any of those means a resource was
+   overwritten while D3D12 still read it.
+2. The frame start: BepInEx's log says once that "Frames begin in Unity's PlayerLoop after
+   WaitForLastPresentationAndUpdateTime".
+   With Reflex on, the Pipeline line's `pcLatency` should be the same or lower than in 1.1.0 at the
+   same framerate, and mouse look should feel no worse. The IL2CPP build uses Il2CppInterop's
+   PlayerLoop types, which only a run in game proves.
+3. DLSS-G UI recomposition is off: the HUD under DLSS Frame Generation (compass, crosshair, prompts
+   while turning) should look no worse than in 1.1.0. If it does, the next step is a UI alpha buffer
+   derived from the HUD-less image, not turning recomposition back on without one.
+4. DLSS-G's minimum: set the game's resolution very low in windowed mode (the minimum is in the
+   native log's facts as `dlssg.minimum`). Frame generation reads "resolution too low" and resumes
+   after raising the resolution again, without a restart.
+5. XeSS's Base FPS limit: set `Base FPS limit` to 30 in TGFrameGeneration's config with XeSS
+   Frame Generation at 2x. The overlay shows about 30 rendered and 60 displayed (it was 15 and 30).
+6. The native DLLs carry their C++ runtime: `dumpbin /dependents` on the three `*.Native.dll`
+   lists no MSVCP140, VCRUNTIME140 or api-ms-win-crt DLL. The report's System section has a
+   "Visual C++ runtime:" line with the System32 version.
+7. VSync on another GPU's screen: on a laptop in its hybrid mode (or with the monitor in the
+   motherboard's port), choose DLSS Frame Generation with VSync on. After the settings close, VSync
+   reads Off and is greyed out with a tooltip naming the integrated GPU, a message says VSync was turned
+   off, Target FPS reads Unlimited, and the log says so. Choosing a limit in Target FPS afterwards keeps it. Choosing FSR
+   offers the toggle again with VSync still off. On a desktop with the monitor on the NVIDIA card, nothing
+   changes. Moving the window to a monitor on the other GPU is picked up within about 5 s. The Pipeline
+   line shows `crossAdapterCopy=` on the laptop.
+8. Memory rows: with frame generation on at a texture quality that overfills video memory, a "VRAM full"
+   row appears after about 6 s; with system memory filled by another program, "RAM full".
 
 ## Off-mode output bridge
 
@@ -164,11 +349,13 @@ combined compatibility. Keep backups of addon files; no test script replaces the
 
 ## Report collection
 
-Collect the new in-game diagnostic, BepInEx/LogOutput.log,
-BepInEx/TGFrameGeneration/Autoload.log and native/Streamline logs under
-BepInEx/TGFrameGeneration/Native in the game installation. Include whether this
-was Off, Fixed 2× or Dynamic and whether the capture was in gameplay or a menu.
-Compare managed and native PIDs with the current session in Autoload.log.
+The Video tab's Create Troubleshooting Report puts this session's part of all of the following in one
+text file in the BepInEx folder, with a test run. The full files, by hand: collect the new in-game diagnostic (each mod's `Write diagnostic report now`), BepInEx/LogOutput.log,
+BepInEx/TGGraphicsBridge/Autoload.log, BepInEx/TGGraphicsBridge/TGGraphicsBridge.Native.log,
+and the native and Streamline logs under BepInEx/TGFrameGeneration/Native and
+BepInEx/TGBetterUpscaling/Native in the game installation. Include whether frame generation was Off, Fixed
+2× or Dynamic, which upscaler ran, and whether the capture was in gameplay or a menu. Compare managed
+and native PIDs with the current session in Autoload.log.
 
 FSR in HDR: the log prints the presentation colour space with the display's luminance range, and
 any HDR metadata the game sets. FSR converts the presented frame back to linear light using the
@@ -205,9 +392,11 @@ or flags are hardcoded to pretend frame generation succeeded.
 
 ## Rollback
 
-Exit and disable autoload using BepInEx/TGFrameGeneration/disable-autoload.txt,
-or remove BepInEx/patchers/TGFG.Autoload.dll. Then start normally through Steam.
-Removing only the gameplay plugin removes its menu but does not stop preloader
-initialization. No proxy DLL or system setting was overwritten.
+Exit and create an empty `disable-autoload.txt` in BepInEx/TGFrameGeneration or BepInEx/TGBetterUpscaling
+to keep that mod's native DLL from loading, or in BepInEx/TGGraphicsBridge to load nothing native at
+all (or remove BepInEx/patchers/TGFrameGeneration.Autoload.dll and TGBetterUpscaling.Autoload.dll). Then start normally through Steam.
+Removing only a gameplay plugin removes its rows but does not stop its native DLL from loading. Every
+file a deployment replaced is under BepInEx/<mod>/Backups. No proxy DLL or system setting was
+overwritten.
 
-Check game-local BepInEx/TGFrameGeneration/Autoload.log first; confirm the current PID.
+Check game-local BepInEx/TGGraphicsBridge/Autoload.log first; confirm the current PID.

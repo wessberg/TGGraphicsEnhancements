@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using BepInEx;
 using BepInEx.Configuration;
+using TGGraphicsBridge;
 using UnityEngine;
 namespace TGFrameGeneration
 {
@@ -16,16 +17,6 @@ namespace TGFrameGeneration
     public enum FrameGenerationMode { Fixed = 0, Dynamic = 1 }
     // Values are the native latency identifiers.
     public enum LowLatencySetting { Off = 0, Reflex = 1, ReflexBoost = 2, XeLL = 3, AntiLag2 = 4 }
-    // Row hints for settings managers: FoA Mod Manager reads DisplayName, DisplaySection, SortOrder,
-    // ChoiceLabels and Hidden; BepInEx ConfigurationManager reads DispName, Category and Browsable. FoA Mod
-    // Manager sorts Order ascending and ConfigurationManager descending, so only SortOrder is set.
-    internal sealed class ConfigurationManagerAttributes
-    {
-        public string DisplayName, DispName, DisplaySection, Category, ChoiceLabels;
-        public int? SortOrder;
-        public bool? Hidden, Browsable;
-        internal bool Visible { set { Hidden = !value; Browsable = value; } }
-    }
     internal sealed class Settings
     {
         // ABI sanity bound only; the rows offer what the selected runtime reports.
@@ -43,7 +34,7 @@ namespace TGFrameGeneration
         private readonly ConfigEntry<float> targetFps;
         // Not in the Video tab; hidden from mod managers.
         internal readonly ConfigEntry<float> BaseLimit;
-        internal readonly ConfigEntry<bool> NativeMenu, SuspendOnCursor, RequireCamera, DumpNow, HudlessCapture, BorderlessForFg;
+        internal readonly ConfigEntry<bool> NativeMenu, SuspendOnCursor, RequireCamera, DumpNow, HudlessCapture, BorderlessForFg, VsyncOffForHybridDlss;
         internal readonly ConfigEntry<int> FsrDebug;
         internal readonly ConfigEntry<KeyCode> EmergencyKey, FsrCaptureKey;
         // Null until the native side reports what this GPU supports; until then every value is kept.
@@ -53,7 +44,7 @@ namespace TGFrameGeneration
         internal float[] Targets { get; } = VideoCapabilities.Targets();
         private readonly Dictionary<string, ConfigurationManagerAttributes> rows = new Dictionary<string, ConfigurationManagerAttributes>();
         private int editing;
-        // Up to 0.5.0 the Video rows were kept in BepInEx/TGFrameGeneration/VideoSettings.cfg and the rest
+        // Up to 1.0.x (internally 0.5.0) the Video rows were kept in BepInEx/TGFrameGeneration/VideoSettings.cfg and the rest
         // under the plugin ID tgfoa.experimental.dlss-frame-generation.
         private static string LegacyVideoPath => Path.Combine(Path.Combine(Paths.BepInExRootPath, "TGFrameGeneration"), "VideoSettings.cfg");
         private static string LegacyMainPath => Path.Combine(Paths.ConfigPath, "tgfoa.experimental.dlss-frame-generation.cfg");
@@ -94,6 +85,12 @@ namespace TGFrameGeneration
                 "cannot take the display exclusively, so it does not run in Exclusive Fullscreen at all. " +
                 "The change is made once, to the game's own setting, and is not undone when frame generation " +
                 "is turned off. Turn this off to keep the display setting exactly as chosen."));
+            VsyncOffForHybridDlss = file.Bind(AdvancedSection, "VSync off for DLSS when the screen is on another GPU", true, Hidden(
+                "Turns the game's VSync off while DLSS Frame Generation is chosen and the screen is connected to another GPU than " +
+                "the one the game renders on (a laptop's screen on its integrated GPU). NVIDIA: VSync with DLSS Frame Generation " +
+                "there has high input delay, and the frames aren't torn without it. Target FPS is set to Unlimited at the same time. " +
+                "VSync stays off afterwards until you turn it on. " +
+                "Turn this off to keep VSync as chosen."));
             EmergencyKey = file.Bind(AdvancedSection, "Emergency off key", KeyCode.F8, Hidden(
                 "Sets Frame Generation to Off. None disables the key."));
             FsrDebug = file.Bind(AdvancedSection, "FSR debug flags", 0, Hidden(
@@ -165,10 +162,22 @@ namespace TGFrameGeneration
             Batch(() => FrameGeneration = FrameGenerationSetting.Off);
             Settle();
         }
+        // BepInEx's own saving is off for this file (Session.Start): every change is saved here.
         private void OnSettingChanged(object sender, SettingChangedEventArgs e)
         {
-            if (editing == 0 && e.ChangedSetting.Definition.Section == VideoSection) Settle();
+            if (editing != 0) return;
+            if (e.ChangedSetting.Definition.Section == VideoSection) Settle();
+            else Save();
         }
+        // Through TG Graphics Bridge's SafeConfig: a file that can't be written keeps the values for this session
+        // and shows a warning instead of throwing into whatever changed the setting.
+        internal void Save()
+        {
+            try { SaveThroughBridge(); }
+            catch { try { File.Save(); } catch { } } // a bridge from before SafeConfig
+        }
+        private void SaveThroughBridge() => TGGraphicsBridge.SafeConfig.Save(File, Plugin.Name);
+
         private void Batch(Action change)
         {
             bool save = File.SaveOnConfigSet;
@@ -179,7 +188,7 @@ namespace TGFrameGeneration
         private void Settle()
         {
             Batch(Refresh);
-            File.Save();
+            Save();
             ModManagers.RequestFoARefresh();
             Changed?.Invoke();
         }
@@ -200,17 +209,18 @@ namespace TGFrameGeneration
             multiplier = Rebind(multiplier, Range(max), 2, v => Mathf.Clamp(v, 2, max));
             int dlssMax = known ? Math.Max(2, caps.MaxMultiplier(FrameGenerationSetting.DLSS)) : MaxMultiplierBound;
             maxMultiplier = Rebind(maxMultiplier, Range(dlssMax), dlssMax, v => Mathf.Clamp(v, 2, dlssMax));
-            // Rows shown as in the Video tab. Rows the Video tab shows greyed out (no NVIDIA GPU for the
-            // DLSS inputs) have no greyed-out state in a mod manager, so they are left out.
-            bool usable = !known || caps.InputSource;
-            bool hasMode = !known || caps.HasMode;
+            // Rows shown as in the Video tab. Rows the Video tab shows greyed out (no report from the native
+            // side yet, or no NVIDIA GPU for the DLSS inputs) have no greyed-out state in a mod manager, so
+            // they are left out. Without a report the stored values are kept for a session that has one.
+            bool usable = known && caps.InputSource;
+            bool hasMode = known && caps.HasMode;
             bool dynamic = backend == FrameGenerationSetting.DLSS && hasMode && Mode == FrameGenerationMode.Dynamic;
             rows[FrameGenerationKey].Visible = usable && backends.Length > 1;
             rows[ModeKey].Visible = usable && backend == FrameGenerationSetting.DLSS && hasMode;
             rows[MultiplierKey].Visible = usable && backend != FrameGenerationSetting.Off && max > 2 && !dynamic;
             rows[MaxMultiplierKey].Visible = usable && dynamic;
             rows[TargetKey].Visible = usable && dynamic;
-            rows[LowLatencyKey].Visible = !known || caps.Latencies.Length > 1;
+            rows[LowLatencyKey].Visible = known && caps.Latencies.Length > 1;
         }
         // Gives an entry new choices. A value outside them becomes the nearest (numbers) or the fallback;
         // BepInEx would otherwise fall back to the first choice.
@@ -270,7 +280,7 @@ namespace TGFrameGeneration
             }
             return values.Count > 0 ? values : null;
         }
-        // Values BepInEx would reset on binding, and on the first start the settings of 0.5.0 and earlier.
+        // Values BepInEx would reset on binding, and on the first start the settings of 1.0.x (internally 0.5.0) and earlier.
         private void Restore(Dictionary<string, string> stored, bool legacy)
         {
             Batch(() =>

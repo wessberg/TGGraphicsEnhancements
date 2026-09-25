@@ -18,7 +18,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" Condition="'$(TestRuntime)' == 'Mono'" />
     <Reference Include="0Harmony"><HintPath>$(TestCoreDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
-    <Compile Include="..\src\TGFrameGeneration\KandraMotionHistory.cs" Link="KandraMotionHistory.cs" />
+    <Compile Include="..\src\TGGraphicsBridge\KandraMotionHistory.cs" Link="KandraMotionHistory.cs" />
+    <Compile Include="..\src\TGGraphicsBridge\MotionVectors.cs" Link="MotionVectors.cs" />
     <Compile Include="kandra_motion_history_tests.cs" />
   </ItemGroup>
 </Project>

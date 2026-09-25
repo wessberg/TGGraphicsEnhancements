@@ -1,0 +1,327 @@
+// SPDX-License-Identifier: MIT
+// End-to-end check on this machine's GPU, outside the game: TG Graphics Bridge boots with the upscaling
+// extension (and, with --with-fg, frame generation as presentation provider), sees a D3D11 swapchain
+// being created, creates its D3D12 device there, and every available upscaler then upscales a moving
+// test image through the real render event. With DLSS staged, an older nvngx_dlss.dll loads the
+// bundled one. Needs the staged artifacts/Native folders; exits 77
+// (skipped) without them or without a D3D12 GPU.
+#include "tgb/bridge_c_api.h"
+#include "tgup_api.h"
+#include <Windows.h>
+#include <psapi.h>
+#include <d3d11_4.h>
+#include <dxgi1_6.h>
+#include <wrl/client.h>
+#include <cmath>
+#include <cwctype>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+namespace fs=std::filesystem;
+static int failures=0;
+static void expect(bool condition, const char* what) { std::printf("%s: %s\n", condition ? "ok  " : "FAIL", what); if(!condition) ++failures; }
+static float half_to_float(uint16_t h) {
+    const uint32_t sign=(h>>15)&1, exponent=(h>>10)&31, mantissa=h&1023;
+    float value;
+    if(exponent==0) value=std::ldexp(float(mantissa), -24);
+    else if(exponent==31) value=mantissa ? NAN : INFINITY;
+    else value=std::ldexp(float(mantissa|1024), int(exponent)-25);
+    return sign ? -value : value;
+}
+static uint16_t float_to_half(float f) {
+    uint32_t x; std::memcpy(&x, &f, 4);
+    const uint32_t sign=(x>>16)&0x8000; int exponent=int((x>>23)&0xFF)-127+15; uint32_t mantissa=x&0x7FFFFF;
+    if(exponent<=0) return uint16_t(sign);
+    if(exponent>=31) return uint16_t(sign|0x7C00);
+    return uint16_t(sign|(uint32_t(exponent)<<10)|(mantissa>>13));
+}
+static float halton(int index, int base) { float f=1, r=0; while(index>0) { f/=float(base); r+=f*float(index%base); index/=base; } return r; }
+// The bundled DLSS: a load of an older nvngx_dlss.dll by full path (a system DLL under that name,
+// version 10.0) maps the bundled copy instead. Loaded as a data file, so none of NVIDIA's code runs.
+static void check_bundled_dlss(const fs::path& root) {
+    if(!fs::exists(root/"TGBetterUpscaling"/"DLSS"/"nvngx_dlss.dll")) { std::printf("      no DLSS staged in TGBetterUpscaling/DLSS; its check is skipped\n"); return; }
+    wchar_t temp[MAX_PATH]{}, system[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, temp); GetSystemDirectoryW(system, MAX_PATH);
+    const auto folder=fs::path(temp)/("tgup-dlss-"+std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    fs::create_directories(folder, error);
+    const auto older=folder/"nvngx_dlss.dll";
+    fs::copy_file(fs::path(system)/"version.dll", older, fs::copy_options::overwrite_existing, error);
+    const HMODULE mapped=LoadLibraryExW(older.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE|LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    wchar_t name[MAX_PATH]{};
+    if(mapped) GetMappedFileNameW(GetCurrentProcess(), reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mapped)&~uintptr_t(3)), name, MAX_PATH);
+    std::wstring mappedName(name);
+    for(auto& c:mappedName) c=wchar_t(towlower(c));
+    const std::wstring suffix=L"\\tgbetterupscaling\\dlss\\nvngx_dlss.dll";
+    expect(mappedName.size()>suffix.size() && mappedName.compare(mappedName.size()-suffix.size(), suffix.size(), suffix)==0,
+        "an older nvngx_dlss.dll loads the bundled DLSS");
+    if(mapped) FreeLibrary(mapped);
+    fs::remove_all(folder, error);
+    // A DLSS mod's set (neural rendering beside it, as DLSS 5 installs) keeps its own nvngx_dlss.dll.
+    const auto setFolder=fs::path(temp)/("tgup-dlss-set-"+std::to_string(GetCurrentProcessId()));
+    fs::create_directories(setFolder, error);
+    fs::copy_file(fs::path(system)/"version.dll", setFolder/"nvngx_dlss.dll", fs::copy_options::overwrite_existing, error);
+    fs::copy_file(fs::path(system)/"version.dll", setFolder/"nvngx_dlssnr.dll", fs::copy_options::overwrite_existing, error);
+    const auto kept=setFolder/"nvngx_dlss.dll";
+    const HMODULE own=LoadLibraryExW(kept.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE|LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    wchar_t ownName[MAX_PATH]{};
+    if(own) GetMappedFileNameW(GetCurrentProcess(), reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(own)&~uintptr_t(3)), ownName, MAX_PATH);
+    std::wstring ownMapped(ownName);
+    for(auto& c:ownMapped) c=wchar_t(towlower(c));
+    const std::wstring setSuffix=L"\\nvngx_dlss.dll";
+    expect(own && ownMapped.find(L"tgbetterupscaling")==std::wstring::npos && ownMapped.size()>setSuffix.size(),
+        "a DLSS mod's set (DLSS 5) keeps its own nvngx_dlss.dll");
+    if(own) FreeLibrary(own);
+    fs::remove_all(setFolder, error);
+}
+int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0); // vendor runtimes may end the process without the CRT flushing stdio
+    const fs::path root=argc>1 ? fs::path(argv[1]) : fs::current_path()/"artifacts"/"Native";
+    bool withFg=false, factoryFirst=false;
+    for(int i=2;i<argc;++i) { if(std::strcmp(argv[i], "--with-fg")==0) withFg=true; if(std::strcmp(argv[i], "--factory-first")==0) factoryFirst=true; }
+    const auto bridgePath=root/"TGGraphicsBridge"/"TGGraphicsBridge.Native.dll";
+    const auto upPath=root/"TGBetterUpscaling"/"TGBetterUpscaling.Native.dll";
+    const auto fgPath=root/"TGFrameGeneration"/"TGFG.Native.dll";
+    if(!fs::exists(bridgePath) || !fs::exists(upPath)) { std::printf("SKIP: build and stage the native DLLs first (%s)\n", root.string().c_str()); return 77; }
+    if(!fs::exists(root/"TGBetterUpscaling"/"FidelityFX") && !fs::exists(root/"TGBetterUpscaling"/"XeSS")) { std::printf("SKIP: no upscaler runtimes staged\n"); return 77; }
+    const HMODULE bridge=LoadLibraryW(bridgePath.c_str());
+    if(!bridge) { std::printf("FAIL: load bridge %lu\n", GetLastError()); return 1; }
+    auto addExtension=reinterpret_cast<decltype(&TGGraphicsBridge_AddExtension)>(GetProcAddress(bridge, "TGGraphicsBridge_AddExtension"));
+    auto bootstrap=reinterpret_cast<decltype(&TGGraphicsBridge_Bootstrap)>(GetProcAddress(bridge, "TGGraphicsBridge_Bootstrap"));
+    auto readBridge=reinterpret_cast<decltype(&TGGraphicsBridge_ReadStatus)>(GetProcAddress(bridge, "TGGraphicsBridge_ReadStatus"));
+    expect(addExtension && bootstrap && readBridge, "bridge exports");
+    if(failures) return 1;
+    // Like Unity, which creates its DXGI factory and D3D11 device before the BepInEx preloader starts the
+    // bridge, and the swapchain only later.
+    ComPtr<IDXGIFactory2> factory;
+    ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context;
+    const D3D_FEATURE_LEVEL level=D3D_FEATURE_LEVEL_11_1;
+    if(factoryFirst) {
+        if(FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) { std::printf("SKIP: no DXGI factory\n"); return 77; }
+        ComPtr<IDXGIAdapter1> adapter; factory->EnumAdapters1(0, &adapter);
+        if(FAILED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &level, 1, D3D11_SDK_VERSION, &device, nullptr, &context))) {
+            std::printf("SKIP: no hardware D3D11 device\n"); return 77;
+        }
+    }
+    expect(addExtension(upPath.c_str())==0, "upscaling extension registered");
+    if(withFg && fs::exists(fgPath)) expect(addExtension(fgPath.c_str())==0, "frame generation extension registered");
+    expect(bootstrap(nullptr)==0, "bridge bootstrap");
+    check_bundled_dlss(root);
+    WNDCLASSW wc{}; wc.lpfnWndProc=DefWindowProcW; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=L"TGGraphicsBridgeSmoke";
+    RegisterClassW(&wc);
+    const HWND window=CreateWindowExW(0, wc.lpszClassName, L"TG Graphics Bridge smoke test", WS_OVERLAPPEDWINDOW, 0, 0, 1296, 759, nullptr, nullptr, wc.hInstance, nullptr);
+    RECT client{}; GetClientRect(window, &client);
+    if(!factory && FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) { std::printf("SKIP: no DXGI factory\n"); return 77; }
+    if(!device && FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &level, 1, D3D11_SDK_VERSION, &device, nullptr, &context))) {
+        std::printf("SKIP: no hardware D3D11 device\n"); return 77;
+    }
+    DXGI_SWAP_CHAIN_DESC1 desc{}; desc.Width=UINT(client.right); desc.Height=UINT(client.bottom); desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc={1, 0}; desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT; desc.BufferCount=2; desc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    ComPtr<IDXGISwapChain1> swapchain;
+    expect(SUCCEEDED(factory->CreateSwapChainForHwnd(device.Get(), window, &desc, nullptr, nullptr, &swapchain)), "game swapchain created through the bridge hooks");
+    TGB_Status bs{sizeof(TGB_Status), TGB_ABI};
+    expect(readBridge(&bs)==0 && bs.gameDeviceObserved==1, "bridge observed the game's D3D11 device");
+    expect(bs.d3d12DeviceReady==1, "bridge created the shared D3D12 device inside the swapchain creation");
+    std::printf("      bridge: extensions active %u, presentation provider %d, device creator %d, swapchains seen/provided %u/%u\n",
+        bs.extensionsActive, bs.presentationProvider, bs.deviceCreator, bs.swapchainsSeen, bs.swapchainsProvided);
+    // The performance overlay's CPU, GPU and video memory figures: sampling starts with the first read.
+    auto readPerformance=reinterpret_cast<decltype(&TGGraphicsBridge_ReadPerformance)>(GetProcAddress(bridge, "TGGraphicsBridge_ReadPerformance"));
+    expect(readPerformance!=nullptr, "performance export");
+    if(readPerformance) {
+        TGB_Performance perf{sizeof(TGB_Performance), TGB_ABI};
+        readPerformance(&perf);
+        // The first sample comes half a second after the sampling thread has set up its counters.
+        for(int wait=0; wait<50 && (perf.valid&5u)!=5u; ++wait) { Sleep(100); perf={sizeof(TGB_Performance), TGB_ABI}; readPerformance(&perf); }
+        expect(readPerformance(&perf)==0 && (perf.valid&1u) && perf.cpuProcess>=0.f && perf.cpuProcess<=100.f, "CPU use sampled");
+        expect((perf.valid&4u) && perf.vramProcess>0 && perf.vramTotal>=perf.vramProcess, "video memory of the game's adapter sampled");
+        std::printf("      performance: valid 0x%X, CPU %.0f%% (system %.0f%%), GPU %.0f%% (system %.0f%%), VRAM %.2f of %.2f GB budget (%.2f GB)\n",
+            perf.valid, perf.cpuProcess, perf.cpuSystem, perf.gpuProcess, perf.gpuSystem,
+            perf.vramProcess/1073741824.0, perf.vramBudget/1073741824.0, perf.vramTotal/1073741824.0);
+    }
+    if(withFg) {
+        expect(bs.swapchainsProvided==1, "frame generation replaced the swapchain");
+        for(int i=0;i<30 && swapchain;++i) if(FAILED(swapchain->Present(0, 0))) { expect(false, "present through the frame generation bridge"); break; }
+        std::printf("      presented 30 frames through the frame generation bridge\n");
+    }
+    const HMODULE up=GetModuleHandleW(L"TGBetterUpscaling.Native.dll");
+    auto readUp=reinterpret_cast<decltype(&TGUP_ReadStatus)>(GetProcAddress(up, "TGUP_ReadStatus"));
+    auto submit=reinterpret_cast<decltype(&TGUP_SubmitFrame)>(GetProcAddress(up, "TGUP_SubmitFrame"));
+    auto eventFn=reinterpret_cast<decltype(&TGUP_GetRenderEvent)>(GetProcAddress(up, "TGUP_GetRenderEvent"));
+    auto versionName=reinterpret_cast<decltype(&TGUP_GetFsrVersionName)>(GetProcAddress(up, "TGUP_GetFsrVersionName"));
+    auto setOutput=reinterpret_cast<decltype(&TGUP_SetOutput)>(GetProcAddress(up, "TGUP_SetOutput"));
+    expect(readUp && submit && eventFn && versionName && setOutput, "upscaling exports");
+    if(failures) return 1;
+    auto render=reinterpret_cast<void(__stdcall*)(int, void*)>(eventFn());
+    TGUP_Status us{sizeof(TGUP_Status), TGUP_ABI};
+    expect(readUp(&us)==0 && us.deviceReady==1, "upscaler has the shared device");
+    std::printf("      upscaler: available 0x%X, FSR versions %u, XeSS %u.%u.%u\n", us.available, us.fsrVersionCount,
+        us.xessVersion>>16, (us.xessVersion>>8)&255, us.xessVersion&255);
+    for(uint32_t i=0;i<us.fsrVersionCount;++i) { char name[128]{}; versionName(i, name, sizeof(name)); std::printf("      FSR version %u: %s\n", i, name); }
+    // The DLSS overrides in the NVIDIA driver's profile (for this test program's name, so usually none):
+    // on an NVIDIA GPU the driver's settings are read within a few seconds.
+    auto getOverride=reinterpret_cast<decltype(&TGUP_GetDlssOverride)>(GetProcAddress(up, "TGUP_GetDlssOverride"));
+    expect(getOverride!=nullptr, "DLSS override export");
+    if(getOverride && us.gpuVendor==0x10DE) {
+        TGUP_DlssOverride driver{};
+        for(int wait=0; wait<50 && getOverride(&driver)==0 && !driver.known; ++wait) Sleep(100);
+        expect(driver.known==1, "the NVIDIA driver's profile was read");
+        std::printf("      NVIDIA driver profile: preset override %u, override %u, mode %u, DLAA %u, scaling ratio %u\n",
+            driver.presetOverride, driver.overrideEnabled, driver.modeOverride, driver.dlaaOverride, driver.scalingRatio);
+    }
+    // Each runtime's quality modes, from the highest render scale down, as the Video tab offers them.
+    auto getModes=reinterpret_cast<decltype(&TGUP_GetModes)>(GetProcAddress(up, "TGUP_GetModes"));
+    expect(getModes!=nullptr, "quality mode export");
+    for(uint32_t backend : {uint32_t(TGUP_BACKEND_FSR), uint32_t(TGUP_BACKEND_XESS)}) {
+        if(!getModes || !(us.available&(1u<<backend))) continue;
+        TGUP_Mode modes[16]{};
+        const int count=getModes(backend, modes, 16);
+        std::string list; bool ordered=count>0;
+        for(int i=0;i<count && i<16;++i) {
+            char item[48]; std::snprintf(item, sizeof(item), "%s%u:%.2fx", i ? ", " : "", modes[i].id, modes[i].ratio); list+=item;
+            if(i>0 && !(modes[i].ratio>modes[i-1].ratio)) ordered=false;
+        }
+        std::printf("      %s quality modes: %s\n", backend==TGUP_BACKEND_FSR ? "FSR" : "XeSS", list.c_str());
+        if(backend==TGUP_BACKEND_FSR)
+            expect(count==5 && modes[0].ratio==1.f && std::fabs(modes[3].ratio-2.f)<0.01f && std::fabs(modes[4].ratio-3.f)<0.01f && ordered,
+                "FSR reports Native AA to Ultra Performance (1x to 3x)");
+        else
+            expect(count==7 && modes[0].id==106 && modes[6].id==100 && std::fabs(modes[6].ratio-3.f)<0.01f && ordered,
+                "XeSS reports Native Anti-Aliasing to Ultra Performance (1x to 3x)");
+    }
+    // HDRP-like inputs: 9:16 render region inside a larger allocation, a moving bright square.
+    const UINT RW=640, RH=360, AW=704, AH=400, OW=1280, OH=720;
+    D3D11_TEXTURE2D_DESC t{}; t.MipLevels=t.ArraySize=t.SampleDesc.Count=1; t.Usage=D3D11_USAGE_DEFAULT;
+    t.Width=AW; t.Height=AH; t.Format=DXGI_FORMAT_R16G16B16A16_FLOAT; t.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET;
+    ComPtr<ID3D11Texture2D> color, depth, motion, output;
+    device->CreateTexture2D(&t, nullptr, &color);
+    t.Format=DXGI_FORMAT_R32_TYPELESS; t.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_DEPTH_STENCIL; device->CreateTexture2D(&t, nullptr, &depth);
+    t.Format=DXGI_FORMAT_R16G16_FLOAT; t.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET; device->CreateTexture2D(&t, nullptr, &motion);
+    t.Width=OW; t.Height=OH; t.Format=DXGI_FORMAT_R11G11B10_FLOAT; t.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET|D3D11_BIND_UNORDERED_ACCESS;
+    device->CreateTexture2D(&t, nullptr, &output);
+    expect(color && depth && motion && output, "HDRP-like input textures");
+    ComPtr<ID3D11DepthStencilView> dsv; D3D11_DEPTH_STENCIL_VIEW_DESC dv{}; dv.Format=DXGI_FORMAT_D32_FLOAT; dv.ViewDimension=D3D11_DSV_DIMENSION_TEXTURE2D;
+    device->CreateDepthStencilView(depth.Get(), &dv, &dsv);
+    context->ClearDepthStencilView(dsv.Get(), D3D11_CLEAR_DEPTH, 0.25f, 0); // reversed-Z: near objects are large
+    std::vector<uint16_t> pixels(size_t(AW)*AH*4);
+    uint32_t sequence=1;
+    for(uint32_t backend : {uint32_t(TGUP_BACKEND_FSR), uint32_t(TGUP_BACKEND_XESS)}) {
+        if(!(us.available&(1u<<backend))) { std::printf("      %s not available here; skipped\n", backend==TGUP_BACKEND_FSR ? "FSR" : "XeSS"); continue; }
+        const uint64_t before=us.framesUpscaled, fallbackBefore=us.framesFallback;
+        const int frames=24;
+        for(int n=0;n<frames;++n) {
+            // Gray background with a gradient, a bright 60x60 square moving right one render pixel per frame.
+            for(UINT y=0;y<AH;++y) for(UINT x=0;x<AW;++x) {
+                const bool square=x>=100+UINT(n) && x<160+UINT(n) && y>=150 && y<210;
+                const float v=square ? 4.f : 0.1f+0.4f*float(x)/float(RW);
+                for(int c=0;c<3;++c) pixels[(size_t(y)*AW+x)*4+c]=float_to_half(v);
+                pixels[(size_t(y)*AW+x)*4+3]=float_to_half(1.f);
+            }
+            context->UpdateSubresource(color.Get(), 0, nullptr, pixels.data(), AW*8, 0);
+            std::vector<uint16_t> mv(size_t(AW)*AH*2, 0);
+            // HDRP's convention: current minus previous in UV units; the square moved +1 pixel.
+            for(UINT y=150;y<210;++y) for(UINT x=100+UINT(n);x<160+UINT(n);++x) mv[(size_t(y)*AW+x)*2]=float_to_half(1.f/float(RW));
+            context->UpdateSubresource(motion.Get(), 0, nullptr, mv.data(), AW*4, 0);
+            TGUP_Frame f{}; f.size=sizeof(f); f.abi=TGUP_ABI; f.sequence=sequence++; f.backend=backend;
+            f.color=uint64_t(uintptr_t(color.Get())); f.depth=uint64_t(uintptr_t(depth.Get()));
+            f.motion=uint64_t(uintptr_t(motion.Get())); f.output=uint64_t(uintptr_t(output.Get()));
+            f.renderWidth=RW; f.renderHeight=RH; f.outputWidth=OW; f.outputHeight=OH;
+            f.jitterX=halton(n+1, 2)-0.5f; f.jitterY=halton(n+1, 3)-0.5f;
+            f.motionScaleX=-float(RW); f.motionScaleY=-float(RH);
+            // FSR with HDRP's pre-exposure of a dark scene (the output keeps the input's brightness); XeSS without.
+            f.cameraNear=0.1f; f.cameraFar=1000.f; f.fovY=1.0f; f.frameTimeMs=16.6f; f.sharpness=0.f;
+            f.preExposure=backend==TGUP_BACKEND_FSR ? 0.4f : 1.f;
+            f.flags=TGUP_FLAG_DEPTH_INVERTED|(n==0 ? TGUP_FLAG_RESET : 0u);
+            // FSR takes the plugin's path: the destination arrives from a second pass, and event 2
+            // writes it. XeSS takes the single-event path with the destination in the request.
+            const bool twoPasses=backend==TGUP_BACKEND_FSR;
+            if(twoPasses) f.output=0;
+            if(submit(&f)!=0) { expect(false, "submit an upscaling request"); break; }
+            render(1, reinterpret_cast<void*>(uintptr_t(f.sequence)));
+            if(twoPasses) {
+                if(setOutput(f.sequence, uint64_t(uintptr_t(output.Get())))!=0) { expect(false, "set the destination"); break; }
+                render(2, reinterpret_cast<void*>(uintptr_t(f.sequence)));
+            }
+        }
+        context->Flush();
+        us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
+        const std::string label=backend==TGUP_BACKEND_FSR ? "AMD FSR" : "Intel XeSS";
+        expect(us.framesUpscaled-before==uint64_t(frames), (label+" upscaled every frame").c_str());
+        expect(us.framesFallback==fallbackBefore, (label+" never fell back to the bilinear copy").c_str());
+        // Read the output back: the background gradient must survive at the output's scale.
+        D3D11_TEXTURE2D_DESC s{}; output->GetDesc(&s); s.Usage=D3D11_USAGE_STAGING; s.BindFlags=0; s.CPUAccessFlags=D3D11_CPU_ACCESS_READ; s.MiscFlags=0;
+        ComPtr<ID3D11Texture2D> staging; device->CreateTexture2D(&s, nullptr, &staging);
+        context->CopyResource(staging.Get(), output.Get());
+        D3D11_MAPPED_SUBRESOURCE mapped{}; context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        auto red=[&](UINT x, UINT y) {
+            uint32_t packed; std::memcpy(&packed, static_cast<uint8_t*>(mapped.pData)+size_t(y)*mapped.RowPitch+size_t(x)*4, 4);
+            const uint32_t r=packed&0x7FF; return r==0 ? 0.f : std::ldexp(float((r&63)|64), int(r>>6)-15-6);
+        };
+        const float left=red(40, 600), right=red(1200, 600), squareCenter=red(2*(130+frames-1), 2*180);
+        context->Unmap(staging.Get(), 0);
+        std::printf("      %s: background %.3f (left) %.3f (right), moving square %.3f; preset/version %u/%u\n", label.c_str(),
+            left, right, squareCenter, us.xessPreset, us.activeFsrVersion);
+        expect(std::fabs(left-(0.1f+0.4f*20.f/RW))<0.05f && std::fabs(right-(0.1f+0.4f*600.f/RW))<0.05f, (label+" keeps the background gradient").c_str());
+        expect(squareCenter>2.f, (label+" keeps the moving square where it is this frame").c_str());
+        if(backend==TGUP_BACKEND_XESS) {
+            // The player's preset wins over the narrowest one by ratio while its range holds the render
+            // size: Performance (up to 2.3x) at 2x, where the ratio alone would pick Balanced.
+            TGUP_Frame f{}; f.size=sizeof(f); f.abi=TGUP_ABI; f.sequence=sequence++; f.backend=backend; f.mode=101;
+            f.color=uint64_t(uintptr_t(color.Get())); f.depth=uint64_t(uintptr_t(depth.Get()));
+            f.motion=uint64_t(uintptr_t(motion.Get())); f.output=uint64_t(uintptr_t(output.Get()));
+            f.renderWidth=RW; f.renderHeight=RH; f.outputWidth=OW; f.outputHeight=OH;
+            f.motionScaleX=-float(RW); f.motionScaleY=-float(RH);
+            f.cameraNear=0.1f; f.cameraFar=1000.f; f.fovY=1.0f; f.frameTimeMs=16.6f; f.preExposure=1.f; f.flags=TGUP_FLAG_DEPTH_INVERTED|TGUP_FLAG_RESET;
+            expect(submit(&f)==0, "submit a request naming a XeSS preset");
+            render(1, reinterpret_cast<void*>(uintptr_t(f.sequence)));
+            context->Flush();
+            us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
+            expect(us.xessPreset==101, "XeSS runs the preset the request names");
+        }
+    }
+    // XeSS just below native: the narrowest preset by ratio (Native Anti-Aliasing) refuses the size, so
+    // a wider one serves it. That choice is made once, not re-made (with a blocking re-initialization)
+    // every frame.
+    if(us.available&(1u<<TGUP_BACKEND_XESS)) {
+        const UINT NW=1270, NH=714;
+        D3D11_TEXTURE2D_DESC n{}; n.MipLevels=n.ArraySize=n.SampleDesc.Count=1; n.Usage=D3D11_USAGE_DEFAULT; n.Width=OW; n.Height=OH;
+        ComPtr<ID3D11Texture2D> ncolor, ndepth, nmotion;
+        n.Format=DXGI_FORMAT_R16G16B16A16_FLOAT; n.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET; device->CreateTexture2D(&n, nullptr, &ncolor);
+        n.Format=DXGI_FORMAT_R32_TYPELESS; n.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_DEPTH_STENCIL; device->CreateTexture2D(&n, nullptr, &ndepth);
+        n.Format=DXGI_FORMAT_R16G16_FLOAT; n.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET; device->CreateTexture2D(&n, nullptr, &nmotion);
+        const auto logPath=root/"TGBetterUpscaling"/"TGBetterUpscaling.Native.log";
+        auto inits=[&]() {
+            FILE* file=nullptr; size_t count=0;
+            if(_wfopen_s(&file, logPath.c_str(), L"rb")==0 && file) {
+                char line[1024];
+                while(fgets(line, sizeof(line), file)) if(std::strstr(line, "Intel XeSS ") && std::strstr(line, "(render 1270x714)")) ++count;
+                fclose(file);
+            }
+            return count;
+        };
+        const size_t before=inits();
+        const uint64_t upscaledBefore=us.framesUpscaled;
+        for(int k=0;k<8;++k) {
+            TGUP_Frame f{}; f.size=sizeof(f); f.abi=TGUP_ABI; f.sequence=sequence++; f.backend=TGUP_BACKEND_XESS;
+            f.color=uint64_t(uintptr_t(ncolor.Get())); f.depth=uint64_t(uintptr_t(ndepth.Get()));
+            f.motion=uint64_t(uintptr_t(nmotion.Get())); f.output=uint64_t(uintptr_t(output.Get()));
+            f.renderWidth=NW; f.renderHeight=NH; f.outputWidth=OW; f.outputHeight=OH;
+            f.jitterX=halton(k+1, 2)-0.5f; f.jitterY=halton(k+1, 3)-0.5f; f.motionScaleX=-float(NW); f.motionScaleY=-float(NH);
+            f.cameraNear=0.1f; f.cameraFar=1000.f; f.fovY=1.0f; f.frameTimeMs=16.6f; f.preExposure=1.f;
+            f.flags=TGUP_FLAG_DEPTH_INVERTED|(k==0 ? TGUP_FLAG_RESET : 0u);
+            if(submit(&f)!=0) { expect(false, "submit a near-native XeSS request"); break; }
+            render(1, reinterpret_cast<void*>(uintptr_t(f.sequence)));
+        }
+        context->Flush();
+        us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
+        std::printf("      Intel XeSS near native: preset %u, %zu initialization(s) for 8 frames\n", us.xessPreset, inits()-before);
+        expect(us.framesUpscaled-upscaledBefore==8, "Intel XeSS upscaled every near-native frame");
+        expect(inits()-before==1, "Intel XeSS chose its near-native preset once, not every frame");
+    }
+    if(failures) { std::printf("%d smoke checks failed\n", failures); return 1; }
+    std::printf("GPU smoke test passed\n");
+    return 0;
+}

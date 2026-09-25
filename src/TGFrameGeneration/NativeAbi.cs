@@ -17,7 +17,7 @@ namespace TGFrameGeneration
         UnsupportedQueue=18, InputContractInvalid=19, ExistingStreamline=20,
         RuntimeNotSupported=21, CameraInvalid=22, PresentFailed=23, BridgeNotCreated=24, InteropFailure=25, UnsupportedColorSpace=26,
         SourceDeviceMismatch=27, UnsupportedSourceLayout=28, BridgeReady=29, VsyncUnsupported=30,
-        BackendUnavailable=31, BackendFailed=32
+        BackendUnavailable=31, BackendFailed=32, ResolutionTooLow=33
     }
     [StructLayout(LayoutKind.Sequential, Pack=4)]
     internal struct NativeRequest
@@ -123,9 +123,26 @@ namespace TGFrameGeneration
         internal ulong Color;
         internal uint Width, Height;
     }
+    // CPU time the presentation bridge spent in Present since the last read (TGFG_ReadTimings), microseconds.
+    [StructLayout(LayoutKind.Sequential, Pack=4)]
+    internal struct NativeTiming
+    {
+        internal uint Size, Abi, Presents, SlowIntervals;
+        internal ulong TotalUs, GpuWaitUs, SdkPresentUs, HandoffUs, IntervalUs;
+        internal uint TotalMaxUs, GpuWaitMaxUs, SdkPresentMaxUs, IntervalMaxUs;
+        internal const int SizeBytes = 72;
+        internal string Describe()
+        {
+            if (Presents == 0) return "no presents";
+            string Ms(double us) => (us / 1000.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            return "present CPU " + Ms((double)TotalUs / Presents) + " ms (max " + Ms(TotalMaxUs) + "): GPU wait " + Ms((double)GpuWaitUs / Presents) +
+                ", SDK present " + Ms((double)SdkPresentUs / Presents) + " (max " + Ms(SdkPresentMaxUs) + "), handoff " + Ms((double)HandoffUs / Presents) +
+                "; frame interval max " + Ms(IntervalMaxUs) + " ms, " + SlowIntervals + " over 50 ms";
+        }
+    }
     internal static class Abi
     {
-        internal const uint Version = 0x00050000;
+        internal const uint Version = 0x00010100;
         internal const int RequestSize = 48, StatusSize = 188, CameraSize = 416, HdrpInputsSize = 48, HudlessSize = 32;
         internal static void Validate()
         {

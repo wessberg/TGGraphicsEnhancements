@@ -44,7 +44,8 @@ namespace TGFrameGeneration
         // once; after that only when something changes the selection or the display row. Written from
         // whichever thread raised the change, read and cleared on the main thread.
         private static volatile bool pending = true;
-        private static bool failed, hooked, applyOwed, noBorderless;
+        private static bool failed, applyOwed, noBorderless;
+        private static EnumArrowsOption hooked; // the row the change callback is on
         // Set when the player pressed Apply in the Video tab, the one moment when applying the
         // display setting cannot disturb anything: the same press has just applied its sibling rows.
         private static volatile bool fromVideoApply;
@@ -85,6 +86,10 @@ namespace TGFrameGeneration
         // False while there is more to do that cannot be done yet, so the next tick tries again.
         private static bool Reconcile()
         {
+            // The Apply press counts for this reconcile only: kept, it would let a later Restore Defaults
+            // apply the display rows the player is still editing.
+            bool videoApply = fromVideoApply;
+            fromVideoApply = false;
             try
             {
                 var screen = World.Any<ScreenResolution>();
@@ -127,9 +132,8 @@ namespace TGFrameGeneration
                 // Applying the display setting applies its resolution, refresh rate and VSync rows
                 // with it, so it waits for the Options screen to close - unless the player just
                 // pressed Apply there, which applied those same rows and asked for exactly this.
-                if (NativeVideoSettings.IsSettingsOpen && !fromVideoApply) return false;
+                if (TGGraphicsBridge.VideoTab.IsSettingsOpen && !videoApply) return false;
                 applyOwed = false;
-                fromVideoApply = false;
                 // The game's own apply, which drives Screen.SetResolution with the resolution and
                 // refresh rate this setting already holds.
                 bool needRestart;
@@ -168,10 +172,14 @@ namespace TGFrameGeneration
         // Re-arming rather than acting keeps the work out of the game's own call stack, at the cost of
         // one tick. Il2CppSystem.Action converts from the managed delegate and combines, so this is the
         // same code in both runtimes.
+        // The game builds its display rows again when the window moves to another monitor
+        // (ScreenResolution.ResetScreenResolution calls Init): the new row gets the callback, and a
+        // restriction left on the discarded one is forgotten, so Block puts it on the new one.
         private static void Hook(EnumArrowsOption option)
         {
-            if (hooked) return;
-            hooked = true;
+            if (hooked != null && TGGraphicsBridge.VideoTab.Same(hooked, option)) return;
+            if (blocked != null && !TGGraphicsBridge.VideoTab.Same(blocked, option)) blocked = null;
+            hooked = option;
             option.onChange += (Action<ToggleOption>)((ToggleOption ignored) => pending = true);
         }
         // Once per session. A row this cannot read makes every decision below it a no-op, so the log

@@ -4,6 +4,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
+using TGGraphicsBridge;
 #if BEPINEX_IL2CPP
 using Il2CppInterop.Runtime.Injection;
 #endif
@@ -57,7 +58,7 @@ namespace TGFrameGeneration
         internal static void BeginGameplayCamera()
         {
             bool want = !failed && host != null && Session.Bridge != null && Session.Bridge.CanSetHudless &&
-                Session.Settings.HudlessCapture.Value && Session.Settings.FrameGeneration != FrameGenerationSetting.Off;
+                Session.Settings.HudlessCapture.Value && Session.Selected.Backend != FrameGenerationSetting.Off;
             if (want == active) return;
             active = want;
             host?.SetActive(want);
@@ -84,7 +85,7 @@ namespace TGFrameGeneration
                     else { Detail = "Unsupported HDR color gamut: " + gamut; return; }
                 }
                 if (rt.sRGB) flags |= 8;
-                var pointer = HdrpInputs.Pointer(ctx.cameraColorBuffer);
+                var pointer = NativeTextures.Pointer(ctx.cameraColorBuffer);
                 if (pointer == IntPtr.Zero) return;
                 var packet = new NativeHudless
                 {

@@ -16,12 +16,9 @@ namespace TGFrameGeneration
         internal VideoCapabilities(bool known, NativeStatus status)
         {
             Known = known;
-            if (!known)
-            {
-                // No native report (backend not loaded): the 0.4.0 DLSS layout, shown but not usable.
-                maxMultiplier[(int)FrameGenerationSetting.DLSS] = 6; DlssDynamic = Reflex = InputSource = true;
-                return;
-            }
+            // No native report: nothing is offered. A technology is only ever offered once this GPU's runtime
+            // reported it, so DLSS Frame Generation never shows up on a GPU without it.
+            if (!known) return;
             foreach (var backend in Technologies)
                 maxMultiplier[(int)backend] = status.Has(backend) ? (int)Math.Min(status.MaxGenerated(backend) + 1, (uint)Settings.MaxMultiplierBound) : 0;
             DlssDynamic = status.DynamicSupported != 0;

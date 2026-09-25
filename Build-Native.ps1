@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: MIT
+# Builds the three native DLLs, runs the native tests and stages each DLL into its mod's folder under
+# artifacts/Native: TGGraphicsBridge, TGFrameGeneration and TGBetterUpscaling.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$StreamlineRoot,
@@ -33,23 +35,13 @@ if($MinHookRoot) { $args+="-DMINHOOK_ROOT=$((Resolve-Path $MinHookRoot).Path)" }
 if($LASTEXITCODE -ne 0) { throw 'Native CMake configure failed.' }
 & cmake --build $build --config Release --parallel
 if($LASTEXITCODE -ne 0) { throw 'Native compilation failed. No game files were modified.' }
-& ctest --test-dir $build -C Release --output-on-failure
-if($LASTEXITCODE -ne 0) { throw 'Native policy or Windows HLSL-compilation tests failed.' }
 $stage=Join-Path $PSScriptRoot 'artifacts\Native'
-& cmake --install $build --config Release --prefix $stage
+& cmake --install $build --config Release --prefix $stage --component TGNative
 if($LASTEXITCODE -ne 0) { throw 'Native staging failed.' }
-[ordered]@{
-    utc=[DateTime]::UtcNow.ToString('o')
-    architecture='x64'
-    version='0.5.0'
-    backend='D3D11 rendering -> shared GPU resources -> private D3D12 presentation (NVIDIA Streamline DLSS-G, AMD FSR, Intel XeSS)'
-    streamline_headers=$StreamlineRoot
-    ngx_headers=$NgxIncludeDir
-    fidelityfx_headers=$FidelityFXRoot
-    xess_headers=$XeSSRoot
-    antilag2_headers=$AntiLag2Root
-    native_sha256=(Get-FileHash (Join-Path $stage 'TGFG.Native.dll') -Algorithm SHA256).Hash
-    launcher_sha256=(Get-FileHash (Join-Path $stage 'TGFG.Launcher.exe') -Algorithm SHA256).Hash
-    game_tested=$false
-} | ConvertTo-Json | Set-Content (Join-Path $stage 'build-manifest.json') -Encoding UTF8
+# After staging: the GPU smoke test loads the staged DLLs and runtimes (it skips without them).
+& ctest --test-dir $build -C Release --output-on-failure
+if($LASTEXITCODE -ne 0) { throw 'Native policy, HLSL or GPU smoke tests failed.' }
+& (Join-Path $PSScriptRoot 'tools\Write-NativeManifest.ps1') -Stage $stage -Headers @{
+    streamline_headers=$StreamlineRoot; ngx_headers=$NgxIncludeDir; fidelityfx_headers=$FidelityFXRoot
+    xess_headers=$XeSSRoot; antilag2_headers=$AntiLag2Root }
 Write-Host "Native files staged to $stage. Add the NVIDIA, AMD and Intel runtimes using Stage-Runtime.ps1. No game installation was touched."

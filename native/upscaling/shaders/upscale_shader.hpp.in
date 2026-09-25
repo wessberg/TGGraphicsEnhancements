@@ -1,0 +1,3 @@
+// Generated at configure time from the auditable HLSL source, not a hand-maintained copy.
+#pragma once
+namespace tgup { inline constexpr const char* upscaleShader=R"TGUPHLSL(@TGUP_UPSCALE_SHADER@)TGUPHLSL"; }

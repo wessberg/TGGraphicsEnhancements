@@ -9,7 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="0Harmony"><HintPath>$(GameDirIl2Cpp)\BepInEx\core\0Harmony.dll</HintPath><Private>false</Private></Reference>
-    <Compile Include="..\src\TGFrameGeneration\Il2CppOptionConditions.cs" Link="Il2CppOptionConditions.cs" />
+    <Compile Include="..\src\TGGraphicsBridge\Il2CppOptionConditions.cs" Link="Il2CppOptionConditions.cs" />
     <Compile Include="il2cpp_option_conditions_tests.cs" />
   </ItemGroup>
 </Project>

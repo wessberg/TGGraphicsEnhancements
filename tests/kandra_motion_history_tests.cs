@@ -6,7 +6,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Awaken.Kandra.Managers;
-using TGFrameGeneration;
+using TGGraphicsBridge;
 
 internal static class Program
 {
@@ -24,7 +24,7 @@ internal static class Program
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         };
         Run();
-        Console.WriteLine("Kandra history: all 3 backends, multiple cameras/managers, Off, failure recovery and unpatch/reinstall passed.");
+        Console.WriteLine("Kandra history: frame generation, upscaling and both, multiple cameras/managers, no request, failure recovery and unpatch/reinstall passed.");
         return 0;
     }
 
@@ -32,10 +32,12 @@ internal static class Program
     private static void Run()
     {
         KandraMotionHistory.Initialize();
-        Require(Session.Log.Installed, "Production Harmony hook failed to install.");
-        foreach (var backend in new[] { FrameGenerationSetting.FSR, FrameGenerationSetting.DLSS, FrameGenerationSetting.XeSS })
+        Require(BridgeLog.Log.Installed, "Production Harmony hook failed to install.");
+        // The mods that read motion vectors ask for the guard; any one request is enough.
+        foreach (var owners in new[] { new[] { "TG Frame Generation" }, new[] { "TG Better Upscaling" }, new[] { "TG Frame Generation", "TG Better Upscaling" } })
         {
-            Session.Settings.FrameGeneration = backend;
+            string backend = string.Join("+", owners);
+            foreach (var owner in owners) MotionVectors.Request(owner, true);
             // No minimap/extra camera: every frame must retain its ordinary copy.
             var single = new SkinningManager { Current = 10 };
             for (int frame = 0; frame < 8; ++frame)
@@ -60,14 +62,14 @@ internal static class Program
             a.RunCopyPrevious(null);
             Require(a.Previous == 120 && a.Copies == 2, backend + ": history did not advance after a frame gap.");
 
-            Session.Settings.FrameGeneration = FrameGenerationSetting.Off;
+            foreach (var owner in owners) MotionVectors.Request(owner, false);
             a.RunSkinning(130); a.RunCopyPrevious(null);
             a.RunSkinning(140); a.RunCopyPrevious(null);
-            Require(a.Previous == 140 && a.Copies == 4, "Off changed original copy behavior.");
-            Session.Settings.FrameGeneration = backend;
+            Require(a.Previous == 140 && a.Copies == 4, "No request changed original copy behavior.");
+            foreach (var owner in owners) MotionVectors.Request(owner, true);
             a.RunSkinning(150); a.RunCopyPrevious(null);
             a.RunSkinning(160); a.RunCopyPrevious(null);
-            Require(a.Previous == 150 && a.Copies == 5, "Re-enabling after Off reused the old guard state.");
+            Require(a.Previous == 150 && a.Copies == 5, "A new request after none reused the old guard state.");
 
             ++UnityEngine.Time.frameCount;
             a.Fail = true;
@@ -79,7 +81,9 @@ internal static class Program
 #if BEPINEX_IL2CPP
             VerifyIl2CppDispatch(backend);
 #endif
+            foreach (var owner in owners) MotionVectors.Request(owner, false);
         }
+        MotionVectors.Request("TG Frame Generation", true);
         KandraMotionHistory.Dispose();
         var plain = new SkinningManager { Current = 1 };
         plain.RunCopyPrevious(null); plain.RunSkinning(2); plain.RunCopyPrevious(null);
@@ -91,7 +95,7 @@ internal static class Program
     }
 
 #if BEPINEX_IL2CPP
-    private static void VerifyIl2CppDispatch(FrameGenerationSetting backend)
+    private static void VerifyIl2CppDispatch(string backend)
     {
         ++UnityEngine.Time.frameCount;
         var a = new SkinningManager { Current = 10, _copyKernel = 17, _skinningKernel = 9 };
@@ -185,16 +189,10 @@ namespace Awaken.Kandra.Managers
 #endif
     }
 }
-namespace TGFrameGeneration
+namespace TGGraphicsBridge
 {
-    internal enum FrameGenerationSetting { Off, DLSS, FSR, XeSS }
-    internal sealed class Settings { internal FrameGenerationSetting FrameGeneration; }
-    internal static class Plugin { internal const string Id = "tgfg.tests"; }
-    internal static class Session
-    {
-        internal static Settings Settings = new Settings();
-        internal static TestLog Log = new TestLog();
-    }
+    internal static class BridgePlugin { internal const string Id = "tgb.tests"; }
+    internal static class BridgeLog { internal static TestLog Log = new TestLog(); }
     internal sealed class TestLog
     {
         internal bool Installed;

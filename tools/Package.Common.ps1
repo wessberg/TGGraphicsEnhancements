@@ -1,52 +1,113 @@
 # SPDX-License-Identifier: MIT
-# Shared package checks. Importing this file does not build, copy, or launch anything.
-function Assert-TgfgFile([string]$Path) {
+# Shared package checks for the two mods built from this repository. Importing this file does not
+# build, copy, or launch anything.
+#   TGFrameGeneration  frame generation (DLSS, FSR, XeSS), a TG Graphics Bridge extension
+#   TGBetterUpscaling  FSR and XeSS upscaling and a newer DLSS DLL, a TG Graphics Bridge extension
+# Each mod bundles TG Graphics Bridge (the DX11-to-DX12 bridge, its preloader and the shared gameplay
+# library) under its own folders, so a player installs one download and two mods never deploy the
+# same file; at run time one copy starts (see src/TGGraphicsBridge.Autoload/Bootstrap.cs).
+$script:TgVersion = '1.2.0'
+$script:TgAbi = '0x00010100'
+function Get-TgVersion { $script:TgVersion }
+function Get-TgAbi { $script:TgAbi }
+function Get-TgModNames { @('TGFrameGeneration','TGBetterUpscaling') }
+# The native DLLs Build-Native.ps1 stages under artifacts/Native, by component.
+function Get-TgNativeComponents {
+    [ordered]@{ TGGraphicsBridge='TGGraphicsBridge/TGGraphicsBridge.Native.dll'
+                TGFrameGeneration='TGFrameGeneration/TGFG.Native.dll'; TGBetterUpscaling='TGBetterUpscaling/TGBetterUpscaling.Native.dll' }
+}
+# TG Graphics Bridge as a mod bundles it: its gameplay plugin beside the mod's own (the same GUID in
+# every mod, BepInEx loads the newest), the mod's own copy of its preloader, and its native DLL.
+function Get-TgBridgeManaged([string]$Mod) {
+    @(@{Relative="BepInEx/plugins/$Mod/TGGraphicsBridge.dll"; Assembly='TGGraphicsBridge'},
+      @{Relative="BepInEx/patchers/$Mod.Autoload.dll"; Assembly="$Mod.Autoload"})
+}
+function Get-TgBridgeNative([string]$Mod) { @{Component='TGGraphicsBridge'; Relative="BepInEx/$Mod/Native/TGGraphicsBridge.Native.dll"} }
+# A 1.1.0 test build installed the bridge as a mod of its own; either mod's deployment removes it.
+function Get-TgStandaloneBridge {
+    @('BepInEx/patchers/TGGraphicsBridge.Autoload.dll','BepInEx/plugins/TGGraphicsBridge/TGGraphicsBridge.dll',
+      'BepInEx/TGGraphicsBridge/Native/TGGraphicsBridge.Native.dll','BepInEx/TGGraphicsBridge/Install-manifest.json')
+}
+# One mod's payload. Managed: the assemblies Build.ps1 stages. Natives: the DLLs Build-Native.ps1
+# stages under artifacts/Native. Signed: vendor runtimes (Stage-Runtime.ps1) with the notices their
+# terms require alongside. Extension: the manifest by which the bridge's preloader finds the mod and
+# the copy of the bridge it bundles.
+function Get-TgMod([string]$Name) {
+    switch ($Name) {
+        'TGFrameGeneration' {
+            @{Name=$Name; Title='TG Frame Generation'
+              Managed=@(@{Relative='BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll'; Assembly='TGFrameGeneration'}) + (Get-TgBridgeManaged $Name)
+              Natives=@(@{Component=$Name; Relative='BepInEx/TGFrameGeneration/Native/TGFG.Native.dll'}, (Get-TgBridgeNative $Name))
+              # TGFG.Streamline.dll is NVIDIA's sl.interposer.dll under a private name (see Stage-Runtime.ps1).
+              Signed=@(
+                @{Folder='Streamline'; Signer='NVIDIA'; Optional=@('nvapi64.dll')
+                  Files=@('TGFG.Streamline.dll','sl.common.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlssg.dll')
+                  Notices=@('LICENSE-Streamline.txt','LICENSE-NVIDIA-RTX-SDKs.txt','LICENSE-NVIDIA-Reflex.txt')},
+                @{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Optional=@()
+                  Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll'); Notices=@('LICENSE-FidelityFX.md')},
+                @{Folder='XeSS'; Signer='Intel Corporation'; Optional=@()
+                  Files=@('libxess_fg.dll','libxell.dll'); Notices=@('LICENSE-XeSS.txt')})
+              Extension='src/TGFrameGeneration/graphics-bridge-extension.json'
+              # Installed by earlier versions: 1.0.x's own preloader, and the interposer under NVIDIA's name.
+              Obsolete=@('BepInEx/patchers/TGFG.Autoload.dll','BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll') + (Get-TgStandaloneBridge)}
+        }
+        'TGBetterUpscaling' {
+            @{Name=$Name; Title='TG Better Upscaling'
+              Managed=@(@{Relative='BepInEx/plugins/TGBetterUpscaling/TGBetterUpscaling.dll'; Assembly='TGBetterUpscaling'}) + (Get-TgBridgeManaged $Name)
+              Natives=@(@{Component=$Name; Relative='BepInEx/TGBetterUpscaling/Native/TGBetterUpscaling.Native.dll'}, (Get-TgBridgeNative $Name))
+              Signed=@(
+                @{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Optional=@()
+                  Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll'); Notices=@('LICENSE-FidelityFX.md')},
+                @{Folder='XeSS'; Signer='Intel Corporation'; Optional=@()
+                  Files=@('libxess.dll'); Notices=@('LICENSE-XeSS.txt')},
+                # For the game's own DLSS, when the nvngx_dlss.dll it loads is older (native/upscaling/src/dlss_dll.cpp).
+                @{Folder='DLSS'; Signer='NVIDIA'; Optional=@()
+                  Files=@('nvngx_dlss.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
+              Extension='src/TGBetterUpscaling/graphics-bridge-extension.json'
+              Obsolete=@(Get-TgStandaloneBridge)}
+        }
+        default { throw "Unknown mod: $Name" }
+    }
+}
+function Resolve-TgModNames([string]$Mod) {
+    if ($Mod -eq 'All') { return @(Get-TgModNames) }
+    if (@(Get-TgModNames) -notcontains $Mod) { throw "Unknown mod: $Mod" }
+    @($Mod)
+}
+function Get-TgExtensionPath([string]$Mod) { "BepInEx/$Mod/graphics-bridge-extension.json" }
+function Get-TgPackageManifestName([string]$Mod) { "$Mod-Package-manifest.json" }
+function Get-TgInstalledManifestPath([string]$Mod) { "BepInEx/$Mod/Install-manifest.json" }
+function Assert-TgFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing file: $Path" }
 }
-function Assert-TgfgGameClosed {
+function Assert-TgGameClosed {
     if (Get-Process -Name 'Fall of Avalon' -ErrorAction SilentlyContinue) {
         throw 'Close FoA before deployment. Start normally through Steam afterward.'
     }
 }
-function Get-TgfgFramework([string]$Runtime) {
+function Get-TgFramework([string]$Runtime) {
     switch ($Runtime) { 'Mono' { 'net472' }; 'IL2CPP' { 'net6.0' }; default { throw "Unknown runtime: $Runtime" } }
 }
-function Get-TgfgRuntimeNames {
-    # TGFG.Streamline.dll is NVIDIA's sl.interposer.dll under a private name (see Stage-Runtime.ps1).
-    @('TGFG.Streamline.dll','sl.common.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlssg.dll')
-}
-# NVIDIA's notices for the Streamline (MIT), DLSS Frame Generation (NVIDIA RTX SDKs) and Reflex runtimes.
-function Get-TgfgNvidiaNotices {
-    @('LICENSE-Streamline.txt','LICENSE-NVIDIA-RTX-SDKs.txt','LICENSE-NVIDIA-Reflex.txt')
-}
-# AMD FSR and Intel XeSS runtimes: signed DLLs plus the license notice their terms require alongside.
-function Get-TgfgVendorRuntimes {
-    @(
-        @{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Notice='LICENSE-FidelityFX.md';
-          Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')},
-        @{Folder='XeSS'; Signer='Intel Corporation'; Notice='LICENSE-XeSS.txt';
-          Files=@('libxess_fg.dll','libxell.dll')}
-    )
-}
-# The Nexus Mods download for each game version: the package under a stable name.
-function Get-TgfgNexusName([string]$Runtime) {
-    switch ($Runtime) { 'Mono' { 'TGFrameGeneration - mono.zip' }; 'IL2CPP' { 'TGFrameGeneration.zip' }; default { throw "Unknown runtime: $Runtime" } }
+# The Nexus Mods download for each mod and game version: the package under a stable name.
+function Get-TgNexusName([string]$Mod, [string]$Runtime) {
+    [void](Get-TgMod $Mod)
+    switch ($Runtime) { 'Mono' { "$Mod - mono.zip" }; 'IL2CPP' { "$Mod.zip" }; default { throw "Unknown runtime: $Runtime" } }
 }
 # Vortex picks a mod type to decide where it deploys an archive, and guesses wrong for a BepInEx
 # payload: it lands under the game's own mod folder instead of the game root. Vortex 1.14 and later
 # read this file from the archive root, and 'dinput' - shown as "Engine Injector" - is the built-in
 # mod type that always deploys to the game root. Only the destination changes; the Vortex game
 # extension still decides which files to copy, and Vortex ignores the type if the game rejects it.
-function Get-TgfgVortexOverrideName { 'vortex_override_instructions.json' }
-function Write-TgfgVortexOverrides([string]$Stage) {
+function Get-TgVortexOverrideName { 'vortex_override_instructions.json' }
+function Write-TgVortexOverrides([string]$Stage) {
     $json = ConvertTo-Json -InputObject @([ordered]@{type='setmodtype'; value='dinput'}) -Depth 3
     # Vortex reads this with Node, whose JSON.parse rejects a UTF-8 BOM.
-    [IO.File]::WriteAllText((Join-Path $Stage (Get-TgfgVortexOverrideName)), $json,
+    [IO.File]::WriteAllText((Join-Path $Stage (Get-TgVortexOverrideName)), $json,
         (New-Object Text.UTF8Encoding $false))
 }
 # Zip entries use forward slashes, as the zip format requires. Compress-Archive in Windows PowerShell
 # 5.1 writes backslashes, which some extractors and archive previews show as flat file names.
-function New-TgfgZip([string]$Stage, [string[]]$Items, [string]$Destination) {
+function New-TgZip([string]$Stage, [string[]]$Items, [string]$Destination) {
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Force }
     $root = [IO.Path]::GetFullPath($Stage).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
@@ -62,44 +123,42 @@ function New-TgfgZip([string]$Stage, [string[]]$Items, [string]$Destination) {
         }
     } finally { $archive.Dispose() }
 }
-function Get-TgfgObsoletePaths {
-    # Installed by earlier versions and superseded by a renamed file; deploy backs them up and removes them.
-    @('BepInEx/TGFrameGeneration/Native/Streamline/sl.interposer.dll')
+function Get-TgRequiredPaths([string]$Mod) {
+    $m = Get-TgMod $Mod
+    foreach ($managed in $m.Managed) { $managed.Relative }
+    foreach ($native in $m.Natives) { $native.Relative }
+    foreach ($group in $m.Signed) {
+        foreach ($name in @($group.Files) + @($group.Notices)) { "BepInEx/$Mod/Native/$($group.Folder)/$name" }
+    }
+    if ($m.Extension) { Get-TgExtensionPath $Mod }
 }
-function Get-TgfgRequiredPaths {
-    @('BepInEx/patchers/TGFG.Autoload.dll',
-      'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll',
-      'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll')
-    foreach ($name in @(Get-TgfgRuntimeNames) + @(Get-TgfgNvidiaNotices)) { "BepInEx/TGFrameGeneration/Native/Streamline/$name" }
-    foreach ($vendor in (Get-TgfgVendorRuntimes)) {
-        foreach ($name in @($vendor.Files) + @($vendor.Notice)) { "BepInEx/TGFrameGeneration/Native/$($vendor.Folder)/$name" }
+function Get-TgAllowedPaths([string]$Mod) {
+    Get-TgRequiredPaths $Mod
+    foreach ($group in (Get-TgMod $Mod).Signed) {
+        foreach ($name in $group.Optional) { "BepInEx/$Mod/Native/$($group.Folder)/$name" }
     }
 }
-function Get-TgfgAllowedPaths {
-    Get-TgfgRequiredPaths
-    'BepInEx/TGFrameGeneration/Native/Streamline/nvapi64.dll'
-}
-function Get-TgfgOwnedPath([string]$Root, [string]$Relative) {
+function Get-TgOwnedPath([string]$Mod, [string]$Root, [string]$Relative) {
     $relative = $Relative.Replace('\','/')
-    if (@(Get-TgfgAllowedPaths) -notcontains $relative) { throw "Not a TGFG package payload path: $Relative" }
+    if (@(Get-TgAllowedPaths $Mod) -notcontains $relative) { throw "Not a $Mod package payload path: $Relative" }
     Join-Path $Root $relative
 }
-function Assert-TgfgFields($Object, [string[]]$Fields, [string]$Label) {
+function Assert-TgFields($Object, [string[]]$Fields, [string]$Label) {
     if ($null -eq $Object) { throw "Empty manifest: $Label" }
     foreach ($field in $Fields) {
         if ($Object.PSObject.Properties.Name -notcontains $field) { throw "$Label is missing field: $field" }
     }
 }
-function Assert-TgfgManagedVersion([string]$Path, [string]$Name, [string]$Version) {
-    Assert-TgfgFile $Path
+function Assert-TgManagedVersion([string]$Path, [string]$Name, [string]$Version) {
+    Assert-TgFile $Path
     # Metadata only: no assembly is loaded into the PowerShell execution context.
     $identity = [Reflection.AssemblyName]::GetAssemblyName($Path)
     if ($identity.Name -ne $Name -or $identity.Version.ToString() -ne $Version) {
         throw "Expected $Name $Version, found $identity at $Path. Rebuild the selected runtime."
     }
 }
-function Assert-TgfgAmd64([string]$Path) {
-    Assert-TgfgFile $Path
+function Assert-TgAmd64([string]$Path) {
+    Assert-TgFile $Path
     $stream = [IO.File]::OpenRead($Path)
     $reader = New-Object IO.BinaryReader($stream)
     try {
@@ -111,102 +170,139 @@ function Assert-TgfgAmd64([string]$Path) {
         if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw "Expected AMD64 image: $Path" }
     } finally { $reader.Dispose(); $stream.Dispose() }
 }
-function Assert-TgfgSignature([string]$Path, [string]$Signer) {
-    Assert-TgfgAmd64 $Path
+function Assert-TgSignature([string]$Path, [string]$Signer) {
+    Assert-TgAmd64 $Path
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
     if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
         $signature.SignerCertificate.Subject -notmatch $Signer) {
         throw "Expected a valid $Signer production signature: $Path ($($signature.Status))"
     }
 }
-function Assert-TgfgNvidiaSignature([string]$Path) { Assert-TgfgSignature $Path 'NVIDIA' }
-function Assert-TgfgGame([string]$GameDir, [string]$Runtime) {
-    Assert-TgfgFile (Join-Path $GameDir 'Fall of Avalon.exe')
-    Assert-TgfgFile (Join-Path $GameDir 'UnityPlayer.dll')
+function Assert-TgGame([string]$GameDir, [string]$Runtime) {
+    Assert-TgFile (Join-Path $GameDir 'Fall of Avalon.exe')
+    Assert-TgFile (Join-Path $GameDir 'UnityPlayer.dll')
     $core = if ($Runtime -eq 'Mono') { 'BepInEx/core/BepInEx.dll' } else { 'BepInEx/core/BepInEx.Unity.IL2CPP.dll' }
-    Assert-TgfgFile (Join-Path $GameDir $core)
-    # Do not delete alternate copies; they may be local development files.
-    $checks = @(
-        @{Name='TGFG.Autoload.dll'; Expected=(Join-Path $GameDir 'BepInEx/patchers/TGFG.Autoload.dll')},
-        @{Name='TGFrameGeneration.dll'; Expected=(Join-Path $GameDir 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll')}
-    )
+    Assert-TgFile (Join-Path $GameDir $core)
+    # Do not delete alternate copies; they may be local development files. The bridge's plugin is
+    # expected once per mod that bundles it.
+    $expected = @{}
+    foreach ($mod in (Get-TgModNames)) {
+        foreach ($managed in (Get-TgMod $mod).Managed) {
+            $name = Split-Path -Leaf $managed.Relative
+            if (-not $expected.ContainsKey($name)) { $expected[$name] = @() }
+            $expected[$name] += [IO.Path]::GetFullPath((Join-Path $GameDir $managed.Relative))
+        }
+    }
     foreach ($folder in @('BepInEx/patchers','BepInEx/plugins')) {
         $scan = Join-Path $GameDir $folder
         if (-not (Test-Path -LiteralPath $scan)) { continue }
-        foreach ($check in $checks) {
-            foreach ($file in @(Get-ChildItem -LiteralPath $scan -Recurse -File -Filter $check.Name)) {
-                if ([IO.Path]::GetFullPath($file.FullName) -ne [IO.Path]::GetFullPath($check.Expected)) {
-                    throw "Duplicate/misplaced TGFG assembly: $($file.FullName). Move it outside patchers/plugins first."
+        $obsolete = @(Get-TgStandaloneBridge | ForEach-Object { [IO.Path]::GetFullPath((Join-Path $GameDir $_)) })
+        foreach ($name in $expected.Keys) {
+            foreach ($file in @(Get-ChildItem -LiteralPath $scan -Recurse -File -Filter $name)) {
+                $full = [IO.Path]::GetFullPath($file.FullName)
+                if ($obsolete -contains $full) { continue }
+                if ($expected[$name] -notcontains $full) {
+                    throw "Duplicate/misplaced assembly: $($file.FullName). Move it outside patchers/plugins first."
                 }
             }
         }
     }
 }
-function Test-TgfgPayload($Manifest, [string]$Root, [string]$Runtime) {
-    Assert-TgfgFields $Manifest @('version','runtime','framework','native_version','native_abi','files') 'Package manifest'
-    if ($Manifest.version -ne '0.5.0' -or $Manifest.runtime -ne $Runtime -or
-        $Manifest.framework -ne (Get-TgfgFramework $Runtime) -or
-        $Manifest.native_version -ne '0.5.0' -or $Manifest.native_abi -ne '0x00050000') {
-        throw 'Package metadata does not match the selected integrated v0.5.0 / native ABI v5 build.'
+# -Installed: an installed mod, checked against its own manifest (a player may have one mod newer than
+# the other); otherwise a package of this repository's build.
+function Test-TgPayload([string]$Mod, $Manifest, [string]$Root, [string]$Runtime, [switch]$Installed) {
+    Assert-TgFields $Manifest @('mod','version','runtime','framework','abi','files') "$Mod package manifest"
+    $version = if ($Installed) { [string]$Manifest.version } else { Get-TgVersion }
+    if ($Manifest.mod -ne $Mod -or $Manifest.runtime -ne $Runtime -or $Manifest.framework -ne (Get-TgFramework $Runtime) -or
+        (-not $Installed -and ($Manifest.version -ne $version -or $Manifest.abi -ne (Get-TgAbi))) -or
+        ($Installed -and $version -notmatch '^\d+\.\d+\.\d+$')) {
+        throw "$Mod package metadata does not match the selected $Runtime v$(Get-TgVersion) / ABI $(Get-TgAbi) build."
     }
+    $m = Get-TgMod $Mod
     $seen = @{}
     foreach ($entry in @($Manifest.files)) {
-        Assert-TgfgFields $entry @('path','sha256') 'Package file entry'
+        Assert-TgFields $entry @('path','sha256') "$Mod package file entry"
         $relative = ([string]$entry.path).Replace('\','/')
         if ($seen.ContainsKey($relative)) { throw "Duplicate payload entry: $relative" }
         $seen[$relative] = $true
-        $path = Get-TgfgOwnedPath $Root $relative
-        Assert-TgfgFile $path
+        $path = Get-TgOwnedPath $Mod $Root $relative
+        Assert-TgFile $path
         if ([string]$entry.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
             (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $entry.sha256) {
             throw "Payload differs from its manifest: $path"
         }
     }
-    foreach ($required in (Get-TgfgRequiredPaths)) {
-        if (-not $seen.ContainsKey($required)) { throw "Missing required payload entry: $required" }
+    foreach ($required in (Get-TgRequiredPaths $Mod)) {
+        if (-not $seen.ContainsKey($required)) { throw "Missing required $Mod payload entry: $required" }
     }
-    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll') 'TGFrameGeneration' '0.5.0.0'
-    Assert-TgfgManagedVersion (Join-Path $Root 'BepInEx/patchers/TGFG.Autoload.dll') 'TGFG.Autoload' '0.5.0.0'
-    Assert-TgfgAmd64 (Join-Path $Root 'BepInEx/TGFrameGeneration/Native/TGFG.Native.dll')
-    foreach ($entry in @($Manifest.files)) {
-        if ($entry.path.Replace('\','/') -like 'BepInEx/TGFrameGeneration/Native/Streamline/*.dll') {
-            Assert-TgfgNvidiaSignature (Get-TgfgOwnedPath $Root $entry.path)
-        }
+    foreach ($managed in $m.Managed) {
+        # The bridge's plugin carries the bridge's version, which a mod of another version may bundle.
+        if ($Installed -and $managed.Assembly -eq 'TGGraphicsBridge') { Assert-TgFile (Join-Path $Root $managed.Relative); continue }
+        Assert-TgManagedVersion (Join-Path $Root $managed.Relative) $managed.Assembly "$version.0"
     }
-    foreach ($vendor in (Get-TgfgVendorRuntimes)) {
-        foreach ($name in $vendor.Files) {
-            Assert-TgfgSignature (Get-TgfgOwnedPath $Root "BepInEx/TGFrameGeneration/Native/$($vendor.Folder)/$name") $vendor.Signer
+    foreach ($native in $m.Natives) { Assert-TgAmd64 (Join-Path $Root $native.Relative) }
+    foreach ($group in $m.Signed) {
+        foreach ($name in @($group.Files) + @($group.Optional)) {
+            $relative = "BepInEx/$Mod/Native/$($group.Folder)/$name"
+            if ($seen.ContainsKey($relative)) { Assert-TgSignature (Get-TgOwnedPath $Mod $Root $relative) $group.Signer }
         }
     }
 }
-function Install-TgfgPayload([string]$Stage, [string]$GameDir, [string]$Runtime) {
-    Assert-TgfgGameClosed
-    Assert-TgfgGame $GameDir $Runtime
-    $manifestPath = Join-Path $Stage 'TGFG-Package-manifest.json'
-    Assert-TgfgFile $manifestPath
+# Copies over a destination by replacing it: a file Vortex deployed is a hard link or symbolic link
+# into its staging folder, and writing through it would change Vortex's copy as well.
+function Copy-TgReplacing([string]$Source, [string]$Dest) {
+    if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Dest) -Force | Out-Null
+    Copy-Item -LiteralPath $Source -Destination $Dest -Force
+}
+# -Together: the mods deployed in the same run, whose bridges come from this same build.
+function Install-TgPayload([string]$Mod, [string]$Stage, [string]$GameDir, [string]$Runtime, [string[]]$Together = @()) {
+    Assert-TgGameClosed
+    Assert-TgGame $GameDir $Runtime
+    $manifestPath = Join-Path $Stage (Get-TgPackageManifestName $Mod)
+    Assert-TgFile $manifestPath
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    Test-TgfgPayload $manifest $Stage $Runtime
-    $optional = 'BepInEx/TGFrameGeneration/Native/Streamline/nvapi64.dll'
-    if ((Test-Path -LiteralPath (Join-Path $GameDir $optional)) -and
-        @($manifest.files | ForEach-Object { $_.path.Replace('\','/') }) -notcontains $optional) {
-        throw 'Installed TGFG runtime has nvapi64.dll but the new package does not. Stage the intended matching runtime set or move that TGFG-owned optional DLL aside first.'
+    Test-TgPayload $Mod $manifest $Stage $Runtime
+    # Copies of one bridge version must be the same files, or the one that wins at run time may be the
+    # stale one. A different version is fine: the newest starts.
+    foreach ($other in @(Get-TgModNames | Where-Object { $_ -ne $Mod -and $Together -notcontains $_ })) {
+        $otherPath = Join-Path $GameDir (Get-TgInstalledManifestPath $other)
+        if (-not (Test-Path -LiteralPath $otherPath -PathType Leaf)) { continue }
+        $installed = Get-Content -LiteralPath $otherPath -Raw | ConvertFrom-Json
+        if (@($installed.PSObject.Properties.Name) -notcontains 'bridge' -or $installed.bridge -ne $manifest.bridge) { continue }
+        foreach ($pair in @(@((Get-TgBridgeManaged $Mod)[0].Relative, (Get-TgBridgeManaged $other)[0].Relative),
+                            @((Get-TgBridgeNative $Mod).Relative, (Get-TgBridgeNative $other).Relative))) {
+            $theirs = Join-Path $GameDir $pair[1]
+            if ((Test-Path -LiteralPath $theirs -PathType Leaf) -and
+                (Get-FileHash -LiteralPath (Join-Path $Stage $pair[0]) -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $theirs -Algorithm SHA256).Hash) {
+                throw "$other is installed with a different build of TG Graphics Bridge $($manifest.bridge). Deploy both mods from the same build (-Mod All), or raise the bridge version."
+            }
+        }
+    }
+    $packaged = @($manifest.files | ForEach-Object { $_.path.Replace('\','/') })
+    foreach ($group in (Get-TgMod $Mod).Signed) {
+        foreach ($name in $group.Optional) {
+            $optional = "BepInEx/$Mod/Native/$($group.Folder)/$name"
+            if ((Test-Path -LiteralPath (Join-Path $GameDir $optional)) -and $packaged -notcontains $optional) {
+                throw "Installed $Mod runtime has $name but the new package does not. Stage the intended matching runtime set or move that optional DLL aside first."
+            }
+        }
     }
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
-    $backup = Join-Path $GameDir "BepInEx/TGFrameGeneration/Backups/$stamp-$Runtime"
+    $backup = Join-Path $GameDir "BepInEx/$Mod/Backups/$stamp-$Runtime"
     $plan = @()
-    foreach ($entry in @($manifest.files)) {
-        $relative = $entry.path.Replace('\','/')
-        $plan += @{Source=(Get-TgfgOwnedPath $Stage $relative); Relative=$relative;
-                   Dest=(Get-TgfgOwnedPath $GameDir $relative); Saved=(Join-Path $backup $relative)}
+    foreach ($relative in $packaged) {
+        $plan += @{Source=(Get-TgOwnedPath $Mod $Stage $relative); Relative=$relative;
+                   Dest=(Get-TgOwnedPath $Mod $GameDir $relative); Saved=(Join-Path $backup $relative)}
     }
-    foreach ($relative in (Get-TgfgObsoletePaths)) {
+    foreach ($relative in (Get-TgMod $Mod).Obsolete) {
         $dest = Join-Path $GameDir $relative
         if (Test-Path -LiteralPath $dest -PathType Leaf) {
             $plan += @{Source=$null; Relative=$relative; Dest=$dest; Saved=(Join-Path $backup $relative); Remove=$true}
         }
     }
     # Installed metadata is written last, so a partial copy never certifies a complete update.
-    $relative = 'BepInEx/TGFrameGeneration/Install-manifest.json'
+    $relative = Get-TgInstalledManifestPath $Mod
     $plan += @{Source=$manifestPath; Relative=$relative; Dest=(Join-Path $GameDir $relative); Saved=(Join-Path $backup $relative)}
     foreach ($entry in $plan) {
         $entry.Existed = Test-Path -LiteralPath $entry.Dest -PathType Leaf
@@ -220,8 +316,7 @@ function Install-TgfgPayload([string]$Stage, [string]$GameDir, [string]$Runtime)
         foreach ($entry in $plan) {
             $attempted.Add($entry)
             if ($entry.ContainsKey('Remove')) { Remove-Item -LiteralPath $entry.Dest -Force; continue }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Dest) -Force | Out-Null
-            Copy-Item -LiteralPath $entry.Source -Destination $entry.Dest -Force
+            Copy-TgReplacing $entry.Source $entry.Dest
             if ((Get-FileHash -LiteralPath $entry.Dest -Algorithm SHA256).Hash -ne
                 (Get-FileHash -LiteralPath $entry.Source -Algorithm SHA256).Hash) {
                 throw "Deployed file hash mismatch: $($entry.Dest)"
@@ -232,15 +327,16 @@ function Install-TgfgPayload([string]$Stage, [string]$GameDir, [string]$Runtime)
         for ($i = $attempted.Count - 1; $i -ge 0; $i--) {
             $entry = $attempted[$i]
             try {
-                if ($entry.Existed) { Copy-Item -LiteralPath $entry.Saved -Destination $entry.Dest -Force }
+                if ($entry.Existed) { Copy-TgReplacing $entry.Saved $entry.Dest }
                 elseif (Test-Path -LiteralPath $entry.Dest -PathType Leaf) { Remove-Item -LiteralPath $entry.Dest -Force }
             } catch { Write-Warning "Could not roll back $($entry.Dest); backup: $($entry.Saved)" }
         }
         throw $cause
     }
-    Write-Host "Deployed full $Runtime package. Existing overwritten files were backed up under $backup"
-    if (Test-Path -LiteralPath (Join-Path $GameDir 'BepInEx/TGFrameGeneration/disable-autoload.txt')) {
-        Write-Warning 'disable-autoload.txt still exists: automatic native loading is intentionally disabled. This deployment does not remove it.'
+    Write-Host "Deployed $Mod ($Runtime). Existing overwritten files were backed up under $backup"
+    foreach ($marker in @("BepInEx/$Mod/disable-autoload.txt", 'BepInEx/TGGraphicsBridge/disable-autoload.txt')) {
+        if (Test-Path -LiteralPath (Join-Path $GameDir $marker)) {
+            Write-Warning "$marker exists: this mod's native DLL is intentionally not loaded. This deployment does not remove it."
+        }
     }
-    Write-Host 'Press Play in Steam. No TGFG launcher, launch arguments, or app-ID workaround is required by this package.'
 }

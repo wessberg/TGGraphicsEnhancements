@@ -43,7 +43,10 @@ namespace TGFrameGeneration
         {
             if(!initialized || failed || Session.Bridge==null || !Session.Bridge.Connected) return;
             try {
-                frameId=unchecked((uint)Time.frameCount); cameraQueued=false;
+                // A new, rising ID per frame. At the start of the PlayerLoop, Time.frameCount can still be the
+                // previous frame's number, and a frame that began in Update the frame before already used it.
+                uint count=unchecked((uint)Time.frameCount);
+                frameId=count>frameId ? count : unchecked(frameId+1); cameraQueued=false;
                 int result=Session.Bridge.Begin(frameId); frameOpen=result==0;
                 if(!frameOpen) Detail="Native frame begin not ready: "+result;
             } catch(Exception ex) { Fail(ex); }
@@ -184,7 +187,7 @@ namespace TGFrameGeneration
         {
             failed=true; frameOpen=false;
             Detail="Render bridge disabled after error: "+ex.Message;
-            Session.Log?.LogError(Detail); Session.Settings.SetFrameGenerationOff();
+            Session.Log?.LogError(Detail); Session.EndTest("stopped: the render bridge failed"); Session.Settings.SetFrameGenerationOff();
         }
         internal static void Dispose()
         {

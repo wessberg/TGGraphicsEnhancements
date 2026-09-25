@@ -1,28 +1,19 @@
 // SPDX-License-Identifier: MIT
-// Native Video-tab integration: the mod's options are real game Setting/PrefOption objects,
-// so they render with the game's own row prefabs, respect Apply Changes / Undo / Restore
-// Defaults, and nest exactly like the built-in Dynamic Resolution or Subsurface Scattering rows.
-// Under IL2CPP the Setting and DependentOption subclasses are registered with Il2CppInterop (see
-// Il2CppTypes); the rows and their rules live in VideoRows, a plain class, in both runtimes.
+// Native Video-tab integration: the mod's options are real game Setting/PrefOption objects (see
+// TG Graphics Bridge's VideoTab). Under IL2CPP the Setting and DependentOption subclasses are
+// registered with Il2CppInterop (see Il2CppTypes); the rows and their rules live in VideoRows, a
+// plain class, in both runtimes.
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Awaken.TG.Main.Settings;
 using Awaken.TG.Main.Settings.Graphics;
 using Awaken.TG.Main.Settings.Options;
-using Awaken.TG.Main.Settings.Options.Views;
-using Awaken.TG.Main.Settings.Windows;
 using Awaken.TG.MVC;
+using TGGraphicsBridge;
 using UnityEngine;
 #if BEPINEX_IL2CPP
-using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.Injection;
-using Il2CppInterop.Runtime.InteropTypes;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
-using SettingList = Il2CppSystem.Collections.Generic.List<Awaken.TG.Main.Settings.ISetting>;
-#else
-using System.Reflection;
-using SettingList = System.Collections.Generic.List<Awaken.TG.Main.Settings.ISetting>;
 #endif
 namespace TGFrameGeneration
 {
@@ -30,30 +21,46 @@ namespace TGFrameGeneration
     // this class is registered with IL2CPP, and only the overrides belong there.
     internal sealed class FrameGenerationVideoSetting : Setting
     {
-        private readonly VideoRows rows;
+        private readonly VideoRowsSlot slot;
 #if BEPINEX_IL2CPP
         private readonly Il2CppSystem.Collections.Generic.IEnumerable<PrefOption> options;
         public FrameGenerationVideoSetting(IntPtr pointer) : base(pointer) { }
-        internal FrameGenerationVideoSetting(VideoRows rows) : base(ClassInjector.DerivedConstructorPointer<FrameGenerationVideoSetting>())
+        internal FrameGenerationVideoSetting(VideoRowsSlot slot) : base(ClassInjector.DerivedConstructorPointer<FrameGenerationVideoSetting>())
         {
             ClassInjector.DerivedConstructorBody(this);
             Il2CppTypes.Construct(this, typeof(Setting), "NativeMethodInfoPtr__ctor_Protected_Void_0");
-            this.rows = rows;
-            var list = new Il2CppSystem.Collections.Generic.List<PrefOption>();
-            foreach (var option in rows.Top) list.Add(option);
-            options = list.Cast<Il2CppSystem.Collections.Generic.IEnumerable<PrefOption>>();
+            this.slot = slot;
+            options = slot.Options.Cast<Il2CppSystem.Collections.Generic.IEnumerable<PrefOption>>(); // the same list, refilled on a rebuild
         }
         public new string SettingName => "Frame Generation";
         public new Il2CppSystem.Collections.Generic.IEnumerable<PrefOption> Options => options;
         public new bool AutoApplyOnInit => false;
-        public new void OnApply() => rows.Apply();
+        public new void OnApply() => slot.Rows.Apply();
 #else
-        internal FrameGenerationVideoSetting(VideoRows rows) { this.rows = rows; }
+        internal FrameGenerationVideoSetting(VideoRowsSlot slot) { this.slot = slot; }
         public override string SettingName => "Frame Generation";
-        public override IEnumerable<PrefOption> Options => rows.Top;
+        public override IEnumerable<PrefOption> Options => slot.Rows.Top;
         protected override bool AutoApplyOnInit => false;
-        protected override void OnApply() => rows.Apply();
+        protected override void OnApply() => slot.Rows.Apply();
 #endif
+    }
+    // The rows behind the setting. The game reads a setting's options each time it builds the screen,
+    // applies or cancels, so new rows take the old ones' place without the setting changing.
+    internal sealed class VideoRowsSlot
+    {
+        internal VideoRows Rows { get; private set; }
+#if BEPINEX_IL2CPP
+        internal readonly Il2CppSystem.Collections.Generic.List<PrefOption> Options = new Il2CppSystem.Collections.Generic.List<PrefOption>();
+#endif
+        internal VideoRowsSlot(VideoRows rows) { Set(rows); }
+        internal void Set(VideoRows rows)
+        {
+            Rows = rows;
+#if BEPINEX_IL2CPP
+            Options.Clear();
+            foreach (var option in rows.Top) Options.Add(option);
+#endif
+        }
     }
     internal sealed class VideoRows
     {
@@ -69,13 +76,19 @@ namespace TGFrameGeneration
         private readonly int multiplierRows, dlssMax;
         internal PrefOption[] Top { get; }
         internal string Layout { get; }
+        internal bool Known => caps.Known; // built from the native side's report, not before it
+        // The switching rows, so a rebuild can withdraw their IL2CPP visibility conditions.
+        internal readonly List<DependentOption> Switches = new List<DependentOption>();
         internal VideoRows(Settings settings, VideoCapabilities caps, UpScaling upscaling)
         {
             this.settings = settings; this.caps = caps; this.upscaling = upscaling;
             backends = caps.Backends;
-            fg = Enum("FrameGeneration", "Frame Generation", 0, out _, backends.Select(b => VideoCapabilities.Label(b)).ToArray());
+            // Without a report from the native side the row's only choice reads Off, greyed out, with the
+            // bridge's alert icon and the reason as its tooltip; the stored value is kept.
+            fg = Enum("FrameGeneration", "Frame Generation", 0, out _, caps.Known ? backends.Select(b => VideoCapabilities.Label(b)).ToArray() : new[] { "Off" });
             Tooltip(fg, () => FrameGenerationTooltip(Selected));
             fg.SetInteractabilityFunction((Func<bool>)Usable);
+            RegisterAlerts(fg);
 
             // One multiplier shared by the technologies: rows up to the highest maximum any runtime reports;
             // higher values than the selected technology's own maximum are blocked and clamped on switching.
@@ -104,6 +117,7 @@ namespace TGFrameGeneration
                 var fixedRows = new PrefOption[] { multiplier };
                 var dynamicRows = new PrefOption[] { maxMultiplierOption, target };
                 var modeRows = SwitchRowsOption.Create(mode, i => i == 1 ? dynamicRows : fixedRows, fixedRows.Concat(dynamicRows));
+                if (modeRows != null) Switches.Add(modeRows);
                 dlssRows = modeRows != null ? new PrefOption[] { modeRows }
                     : new PrefOption[] { mode, new DependentOption(multiplier, (Func<bool>)(() => mode.OptionInt == 1), dynamicRows) }; // older game builds
             }
@@ -116,7 +130,9 @@ namespace TGFrameGeneration
                 return backend != FrameGenerationSetting.Off && caps.MaxMultiplier(backend) > 2 ? multiplierOnly : new PrefOption[0];
             }
             var nested = dlssRows.Concat(multiplierOnly).ToArray();
-            PrefOption fgRow = SwitchRowsOption.Create(fg, RowsFor, nested);
+            var fgSwitch = SwitchRowsOption.Create(fg, RowsFor, nested);
+            if (fgSwitch != null) Switches.Add(fgSwitch);
+            PrefOption fgRow = fgSwitch;
             if (fgRow == null) fgRow = nested.Length > 0 ? new DependentOption(fg, (Func<bool>)(() => fg.OptionInt != 0), nested.Distinct().ToArray()) : (PrefOption)fg; // older game builds
 
             // One Low Latency selector with every technology this GPU offers. The frame generation choice
@@ -148,23 +164,30 @@ namespace TGFrameGeneration
         {
             get { try { return HdrpInputs.Available || upscaling == null || upscaling.IsDLSSEnabled; } catch { return true; } }
         }
-        private bool Usable() => Session.Bridge != null && Session.Bridge.Connected && caps.InputSource && DlssSelected;
+        private bool Usable() => caps.Known && Session.Bridge != null && Session.Bridge.Connected && caps.InputSource && DlssSelected;
         // The game checks a row's interactability when it builds the row. Like its anti-aliasing row does for
         // the upscaler, refresh ours when what they depend on changes.
-        private void RefreshInteractability()
+        private void RefreshInteractability() => VideoTab.RefreshInteractability(Leaves());
+        // The bridge shows this row's problems as an alert icon after its name.
+        private static void RegisterAlerts(PrefOption row)
         {
-            try
-            {
-                var ui = World.Any<AllSettingsUI>();
-                if (ui == null) return;
-                var leaves = new HashSet<object>(Leaves().Select(o => NativeVideoSettings.Identity(o)));
-                foreach (var view in NativeVideoSettings.FocusableViews(ui))
-                    if (leaves.Contains(NativeVideoSettings.Identity(view.GenericOption))) view.UpdateInteractability();
-            }
-            catch { } // cosmetic only
+            // In a method of its own: the runtime resolves the bridge's members when it compiles the method that
+            // uses them, so a bridge from before the alerts fails there, inside this try.
+            try { Register(row); } catch { }
         }
+        private static void Register(PrefOption row) => RowAlerts.Register(AlertRow.FrameGeneration, row);
+        private static string Alert()
+        {
+            try { return AlertText(); } catch { return ""; }
+        }
+        private static string AlertText() => RowAlerts.Text(AlertRow.FrameGeneration);
         private string FrameGenerationTooltip(FrameGenerationSetting selected)
         {
+            // A problem comes first, and alone: the game's tooltip is a narrow column.
+            string alert = Alert();
+            if (alert.Length > 0) return alert;
+            if (!caps.Known)
+                return Session.UnavailableTip(); // the full explanation is in the log and the troubleshooting report
             if (!caps.InputSource)
                 return "Not available on this GPU: without HDRP inputs, frame generation uses the motion vectors and depth of DLSS upscaling, which needs an NVIDIA GPU.";
             if (!DlssSelected)
@@ -186,8 +209,22 @@ namespace TGFrameGeneration
                         (backends.Length > 1 ? string.Join(", ", backends.Skip(1).Select(b => VideoCapabilities.Label(b)).ToArray()) : "none") + ".";
                     break;
             }
-            return text + " Uses the game's own motion vectors and depth, from DLSS upscaling when it's on. Pauses in menus and while the cursor is unlocked." +
-                (Session.Bridge != null && Session.Bridge.Connected ? "" : " The TGFG native backend is not loaded.");
+            // The game's tooltip is a narrow column: a finding takes the place of the general note, not a place after it.
+            string findings = Findings();
+            return text + (findings.Length > 0 ? findings : " Uses the game's own motion vectors and depth, from DLSS upscaling when it's on. Pauses in menus and while the cursor is unlocked.");
+        }
+        // Why a technology isn't offered on this PC (DLSS, XeSS); problems come from the bridge's alerts instead.
+        private static string Findings()
+        {
+            // In a method of its own: the runtime resolves the bridge's members when it compiles the method
+            // that uses them, so a bridge from before the notices fails there, inside this try.
+            try { return FindingsFromBridge(); }
+            catch { return ""; }
+        }
+        private static string FindingsFromBridge()
+        {
+            string dlss = Explain.DlssMissing(Session.HaveStatus ? Session.Status.GpuVendor : 0), xess = Explain.XessMissing();
+            return (dlss.Length > 0 ? " " + dlss : "") + (xess.Length > 0 ? " " + xess : "");
         }
         private string LatencyTooltip()
         {
@@ -199,26 +236,9 @@ namespace TGFrameGeneration
                 "Reflex + Boost also keeps GPU clocks up when the CPU is the limit." +
                 (caps.XeLL && !caps.XeLLStandalone ? " Intel XeLL works on this GPU only together with XeSS Frame Generation." : "");
         }
-        // The game asks a row for its tooltip text when it shows the row's description.
-        private static void Tooltip(PrefOption option, Func<string> text)
-        {
-#if BEPINEX_IL2CPP
-            // Il2CppInterop's delegate bridge (DelegateSupport) turns a returned string into the address of the
-            // managed string, not an IL2CPP string: it maps the return type to IntPtr before its string check.
-            // The game then crashes in String.Trim while building the tooltip. The bridge compares only the
-            // parameter types, so this function returns the IL2CPP string pointer itself.
-            option.AddTooltip(DelegateSupport.ConvertDelegate<Il2CppSystem.Func<string>>(new Func<IntPtr>(() => IL2CPP.ManagedStringToIl2Cpp(text()))));
-#else
-            option.AddTooltip(text);
-#endif
-        }
-        private static ToggleOption Choice(string id, string label) => new ToggleOption(IdPrefix + id, label, false, false);
-        private static EnumArrowsOption Enum(string id, string displayName, int defaultIndex, out ToggleOption[] choices, params string[] labels)
-        {
-            choices = new ToggleOption[labels.Length];
-            for (int i = 0; i < labels.Length; i++) choices[i] = Choice(id + "." + i, labels[i]);
-            return new EnumArrowsOption(IdPrefix + id, displayName, choices[Mathf.Clamp(defaultIndex, 0, choices.Length - 1)], false, choices);
-        }
+        private static void Tooltip(PrefOption option, Func<string> text) => VideoTab.Tooltip(option, text);
+        private static EnumArrowsOption Enum(string id, string displayName, int defaultIndex, out ToggleOption[] choices, params string[] labels) =>
+            VideoTab.Enum(IdPrefix, id, displayName, defaultIndex, out choices, labels);
         private IEnumerable<EnumArrowsOption> Leaves()
         {
             yield return fg;
@@ -271,84 +291,10 @@ namespace TGFrameGeneration
                 target != null ? targetValues[Mathf.Clamp(target.OptionInt, 0, targetValues.Length - 1)] : settings.TargetFps,
                 chosen);
             DisplayMode.ArmFromVideoApply();
+            HybridVsync.ArmFromVideoApply();
             Session.Log.LogInfo("Video settings applied: FG=" + settings.FrameGeneration + " mode=" + settings.Mode +
                 " multiplier=" + settings.Multiplier + "x dynamicMax=" + settings.MaxMultiplier + "x target=" + settings.TargetFps +
                 " lowLatency=" + settings.LowLatency);
-        }
-    }
-    // A row whose nested rows depend on its own value (the frame generation technology, or the DLSS
-    // mode). The game's dependent view spawns OtherOptions when the condition turns true and removes
-    // them when it turns false, so a change swaps the list and keeps the condition false for that
-    // frame to rebuild the rows. Apply, Cancel and Restore Defaults cover every value's rows, shown or not.
-    internal sealed class SwitchRowsOption : DependentOption
-    {
-#if !BEPINEX_IL2CPP
-        private static readonly FieldInfo OthersField = typeof(DependentOption).GetField("<OtherOptions>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
-#endif
-        private static readonly PrefOption[] None = new PrefOption[0];
-        private sealed class Switch
-        {
-            internal EnumArrowsOption Selector;
-            internal Func<int, PrefOption[]> Rows;
-            internal SwitchRowsOption Owner;
-            internal PrefOption[] Current;
-            internal int Shown, HiddenFrame = -1;
-            internal bool Show()
-            {
-                int wanted = Selector.OptionInt;
-                if (wanted != Shown && Owner != null)
-                {
-                    Shown = wanted;
-                    Current = Rows(wanted) ?? None;
-#if BEPINEX_IL2CPP
-                    Owner._OtherOptions_k__BackingField = new Il2CppReferenceArray<PrefOption>(Current);
-#else
-                    OthersField.SetValue(Owner, Current);
-#endif
-                    HiddenFrame = Time.frameCount;
-                }
-                return Current.Length > 0 && Time.frameCount != HiddenFrame;
-            }
-        }
-        private readonly PrefOption[] all; // the selector and every row any of its values shows
-#if BEPINEX_IL2CPP
-        public SwitchRowsOption(IntPtr pointer) : base(pointer) { }
-        private SwitchRowsOption(EnumArrowsOption selector, Switch rows, PrefOption[] every) : base(ClassInjector.DerivedConstructorPointer<SwitchRowsOption>())
-        {
-            ClassInjector.DerivedConstructorBody(this);
-            Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Il2CppReferenceArray_1_PrefOption_0",
-                selector, new Il2CppReferenceArray<PrefOption>(rows.Current));
-            all = new PrefOption[] { selector }.Concat(every).ToArray();
-            Il2CppOptionConditions.Register(this, rows.Show);
-        }
-        public new bool WasChanged => all.Any(o => o.WasChanged);
-        public new bool IsSetToDefault => all.All(o => o.IsSetToDefault);
-        public new void ForceChange() { foreach (var o in all) o.ForceChange(); }
-        public new void Apply() { foreach (var o in all) o.Apply(); }
-        public new void Cancel() { foreach (var o in all) o.Cancel(); }
-        public new void RestoreDefault() { foreach (var o in all) o.RestoreDefault(); }
-#else
-        private SwitchRowsOption(EnumArrowsOption selector, Switch rows, PrefOption[] every) : base(selector, rows.Show, rows.Current)
-        {
-            all = new PrefOption[] { selector }.Concat(every).ToArray();
-        }
-        public override bool WasChanged => all.Any(o => o.WasChanged);
-        public override bool IsSetToDefault => all.All(o => o.IsSetToDefault);
-        public override void ForceChange() { foreach (var o in all) o.ForceChange(); }
-        public override void Apply() { foreach (var o in all) o.Apply(); }
-        public override void Cancel() { foreach (var o in all) o.Cancel(); }
-        public override void RestoreDefault() { foreach (var o in all) o.RestoreDefault(); }
-#endif
-        internal static SwitchRowsOption Create(EnumArrowsOption selector, Func<int, PrefOption[]> rows, IEnumerable<PrefOption> every)
-        {
-#if !BEPINEX_IL2CPP
-            if (OthersField == null || OthersField.FieldType != typeof(PrefOption[])) return null;
-#endif
-            int initial = selector.OptionInt;
-            var sw = new Switch { Selector = selector, Rows = rows, Shown = initial, Current = rows(initial) ?? None };
-            var option = new SwitchRowsOption(selector, sw, every.Where(o => o != null).Distinct().ToArray());
-            sw.Owner = option;
-            return option;
         }
     }
     internal static class NativeVideoSettings
@@ -356,13 +302,11 @@ namespace TGFrameGeneration
         private static float nextPoll, firstTick = -1;
         private static bool failed, subscribed, syncPending;
         private static VideoRows rows;
+        private static VideoRowsSlot slot;
         private static FrameGenerationVideoSetting setting;
         private static SettingsMaster owner;
         internal static string Status { get; private set; } = "Not registered yet.";
-        internal static bool IsSettingsOpen
-        {
-            get { try { return World.Any<AllSettingsUI>() != null; } catch { return false; } }
-        }
+        internal static bool IsSettingsOpen => VideoTab.IsSettingsOpen;
         internal static void Tick(float now)
         {
             if (failed || now < nextPoll) return;
@@ -380,29 +324,44 @@ namespace TGFrameGeneration
                 }
                 var master = World.Any<SettingsMaster>();
                 if (master == null) { Status = "Waiting for the game's settings model."; return; }
-                var list = GraphicSettings(master);
+                var list = VideoTab.GraphicSettings(master);
                 if (list == null) { failed = true; Status = "Game settings API not found (SettingsMaster._graphicSettings, AddGraphicSetting); rows not added."; Session.Log.LogWarning(Status); return; }
-                bool open = World.Any<AllSettingsUI>() != null;
-                if (setting != null && Same(master, owner) && IndexOf(list, setting) >= 0)
+                bool open = VideoTab.IsSettingsOpen;
+                if (setting != null && VideoTab.Same(master, owner) && VideoTab.IndexOf(list, setting) >= 0)
                 {
+                    // Registered before the native side reported: once it has, its rows replace the empty ones.
+                    if (!rows.Known && Session.Settings.Capabilities != null && !open)
+                    {
+                        Build(Session.Settings.Capabilities);
+                        slot.Set(rows);
+                        syncPending = false;
+                        Status = "Video rows rebuilt with the reported capabilities: " + rows.Layout;
+                        Session.Log.LogInfo(Status);
+                        return;
+                    }
                     if (syncPending && !open) { syncPending = false; rows.SyncFromConfig(); }
                     return;
                 }
                 if (open) return; // never mutate the list while the screen is open
                 var caps = Session.Settings.Capabilities;
-                if (caps == null && now - firstTick < 20f) { Status = "Waiting for native capability report..."; return; }
+                // The GPU's report comes within seconds when the native part runs, so the rows wait for it and go in
+                // complete. Without the native part it never comes: the row goes in at once, reading Off with the
+                // alert icon and the reason, so a player who opens the settings right away still finds it.
+                if (caps == null && NativeRunning() && now - firstTick < 20f) { Status = "Waiting for native capability report..."; return; }
 #if BEPINEX_IL2CPP
                 Il2CppTypes.Register<SwitchRowsOption>();
                 Il2CppTypes.Register<FrameGenerationVideoSetting>(genericBase: true);
-                Il2CppOptionConditions.Clear();
 #endif
-                rows = new VideoRows(Session.Settings, caps ?? new VideoCapabilities(false, default(NativeStatus)), World.Any<UpScaling>());
-                setting = new FrameGenerationVideoSetting(rows);
+                Build(caps);
+                slot = new VideoRowsSlot(rows);
+                setting = new FrameGenerationVideoSetting(slot);
                 owner = master;
                 syncPending = false;
-                AddGraphicSetting(master, setting);
-                Reposition(list, setting);
-                Status = "Registered in Video settings: " + rows.Layout + (caps != null ? "" : " (capabilities unknown at registration)");
+                VideoTab.AddGraphicSetting(master, setting);
+                // Directly after the game's upscaling row (or a DLSS 5 block if another mod added one).
+                VideoTab.Reposition(list, setting, "UpScaling", "*Dlss5");
+                // Without a report the row offers Off only, greyed out, and its tooltip says why.
+                Status = "Registered in Video settings: " + rows.Layout + (caps != null ? "" : "; frame generation unavailable. " + Session.UnavailableReason());
                 Session.Log.LogInfo(Status);
             }
             catch (Exception ex)
@@ -412,56 +371,24 @@ namespace TGFrameGeneration
                 Session.Log.LogWarning(Status + "\n" + ex);
             }
         }
-        private static int IndexOf(SettingList list, Setting item)
+        // This mod's native part is loaded (the bridge loads it at startup, before any plugin runs), and the
+        // bridge's with it. Only then can a report come; the bridge alone, for TG Better Upscaling, is not enough.
+        private static bool NativeRunning()
         {
-            for (int i = 0; i < list.Count; i++) if (Same(list[i], item)) return i;
-            return -1;
+            if (!NativeBridge.IsLoaded("TGFG.Native.dll")) return false;
+            try { return GraphicsBridge.Loaded; } catch { return true; }
         }
-        private static void Reposition(SettingList list, Setting item)
+        private static void Build(VideoCapabilities caps)
         {
-            // Directly after the game's upscaling row (or a DLSS 5 block if another mod added one).
-            int anchor = -1, own = -1;
-            for (int i = 0; i < list.Count; i++)
-            {
-                if (Same(list[i], item)) { own = i; continue; }
-                string name = TypeName(list[i]);
-                if (name == "UpScaling" || name.IndexOf("Dlss5", StringComparison.OrdinalIgnoreCase) >= 0) anchor = i;
-            }
-            if (anchor < 0 || own < 0) return;
-            var entry = list[own];
-            list.RemoveAt(own);
-            if (own < anchor) anchor--;
-            list.Insert(Math.Min(anchor + 1, list.Count), entry);
-        }
 #if BEPINEX_IL2CPP
-        // Every IL2CPP read returns a new wrapper object, so an object's identity is its IL2CPP pointer.
-        internal static object Identity(Il2CppObjectBase o) => o?.Pointer ?? IntPtr.Zero;
-        private static bool Same(Il2CppObjectBase a, Il2CppObjectBase b) => a != null && b != null && a.Pointer == b.Pointer;
-        private static SettingList GraphicSettings(SettingsMaster master) => master._graphicSettings;
-        private static void AddGraphicSetting(SettingsMaster master, Setting item) => master.AddGraphicSetting(item);
-        private static string TypeName(ISetting item) => IL2CPP.il2cpp_class_get_name_(item.ObjectClass);
-        internal static List<VFocusableSetting> FocusableViews(AllSettingsUI ui)
-        {
-            var views = new List<VFocusableSetting>();
-            var enumerator = ui.Views.GetEnumerator();
-            var cursor = enumerator.Cast<Il2CppSystem.Collections.IEnumerator>();
-            while (cursor.MoveNext())
-            {
-                var view = enumerator.Current?.TryCast<VFocusableSetting>();
-                if (view != null) views.Add(view);
-            }
-            return views;
-        }
-#else
-        internal static object Identity(object o) => o;
-        private static bool Same(object a, object b) => ReferenceEquals(a, b);
-        // AddGraphicSetting and the backing list are not public; resolved once, like the other Video-tab mods do.
-        private static readonly FieldInfo GraphicList = typeof(SettingsMaster).GetField("_graphicSettings", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
-        private static readonly MethodInfo AddGraphic = typeof(SettingsMaster).GetMethod("AddGraphicSetting", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(Setting) }, null);
-        private static SettingList GraphicSettings(SettingsMaster master) => AddGraphic != null ? GraphicList?.GetValue(master) as SettingList : null;
-        private static void AddGraphicSetting(SettingsMaster master, Setting item) => AddGraphic.Invoke(master, new object[] { item });
-        private static string TypeName(ISetting item) => item.GetType().Name;
-        internal static List<VFocusableSetting> FocusableViews(AllSettingsUI ui) => ui.Views.OfType<VFocusableSetting>().ToList();
+            if (rows != null) foreach (var old in rows.Switches) Il2CppOptionConditions.Remove(old);
 #endif
+#if BEPINEX_IL2CPP
+            var upscaling = VideoTab.GraphicSetting<UpScaling>("UpScaling"); // not World.Any<UpScaling>(): see there
+#else
+            var upscaling = World.Any<UpScaling>();
+#endif
+            rows = new VideoRows(Session.Settings, caps ?? new VideoCapabilities(false, default(NativeStatus)), upscaling);
+        }
     }
 }

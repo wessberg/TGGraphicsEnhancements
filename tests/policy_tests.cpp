@@ -95,6 +95,13 @@ int main() {
     camera.viewToClip[3]=0; camera.worldToView[7]=std::numeric_limits<float>::quiet_NaN(); CHECK(!valid(camera)); camera.worldToView[7]=0;
     camera.viewToClip[3]=0; camera.farPlane=0.01f; CHECK(!valid(camera)); camera.farPlane=10000;
     camera.width=0; CHECK(!valid(camera)); camera.width=3840;camera.fovRadians=4;CHECK(!valid(camera));
+    // XeLL counts presents: a 60 FPS base limit under 2x XeSS-FG is 120 presents, under 4x 240.
+    CHECK(xell_limit_us(60,false,1)==16667); CHECK(xell_limit_us(60,true,1)==8333); CHECK(xell_limit_us(60,true,3)==4167);
+    CHECK(xell_limit_us(0,true,1)==0); CHECK(xell_limit_us(60,true,0)==8333);
+    // DLSS-G's minimum side: either dimension below it, and no minimum means none.
+    CHECK(!below_minimum(1920,1080,0)); CHECK(!below_minimum(1920,1080,480)); CHECK(below_minimum(1920,400,480));
+    CHECK(below_minimum(400,1080,480)); CHECK(!below_minimum(480,480,480));
+    CHECK(kXessMinimumWindowsBuild==19043);
     FrameRing<unsigned> ring;
     for(unsigned id=0;id<6;++id) {auto* slot=ring.acquire(id);CHECK(slot!=nullptr);*slot=id+100;}
     CHECK(ring.acquire(6)==nullptr); CHECK(*ring.find(0)==100); CHECK(ring.find(6)==nullptr);

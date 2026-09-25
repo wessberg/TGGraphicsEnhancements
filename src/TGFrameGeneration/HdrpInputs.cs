@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
+using TGGraphicsBridge;
 #if BEPINEX_IL2CPP
 using Il2CppInterop.Runtime.Injection;
 #endif
@@ -31,13 +32,8 @@ namespace TGFrameGeneration
     internal static class HdrpInputs
     {
         private const int CaptureEvent = 3;
-        private struct Cached { internal IntPtr Pointer; internal int Width, Height; }
         private static GameObject host;
-        // GetNativeTexturePtr waits for the render thread, so it runs once per render texture and
-        // again only when HDRP resizes that texture (which recreates its GPU resource). Keyed by instance
-        // ID: under IL2CPP every property read returns a new wrapper object for the same texture.
-        private static readonly Dictionary<int, Cached> pointers = new Dictionary<int, Cached>();
-        private static int cachedScreenWidth, cachedScreenHeight, lastResult = int.MinValue;
+        private static int lastResult = int.MinValue;
         private static int lastMotionFlags = -1;
         internal static bool Available { get; private set; }
         internal static string Detail { get; private set; } = "Not installed.";
@@ -81,10 +77,10 @@ namespace TGFrameGeneration
             try
             {
                 var bridge = Session.Bridge;
-                if (bridge == null || !bridge.CanSetHdrpInputs || Session.Settings.FrameGeneration == FrameGenerationSetting.Off) return;
+                if (bridge == null || !bridge.CanSetHdrpInputs || Session.Selected.Backend == FrameGenerationSetting.Off) return;
                 var hd = ctx.hdCamera;
                 if (hd == null || !FrameBridge.GameplayFrame(hd.camera, out uint frameId)) return;
-                if (Session.Settings.FrameGeneration != FrameGenerationSetting.Off)
+                if (Session.Selected.Backend != FrameGenerationSetting.Off)
                 {
                     int motionFlags = (hd.frameSettings.IsEnabled(FrameSettingsField.MotionVectors) ? 1 : 0) |
                         (hd.frameSettings.IsEnabled(FrameSettingsField.ObjectMotionVectors) ? 2 : 0);
@@ -96,12 +92,8 @@ namespace TGFrameGeneration
                     }
                 }
                 if (!hd.frameSettings.IsEnabled(FrameSettingsField.MotionVectors)) { Report(-10, "HDRP renders no motion vectors for the gameplay camera."); return; }
-                if (Screen.width != cachedScreenWidth || Screen.height != cachedScreenHeight)
-                {
-                    pointers.Clear(); cachedScreenWidth = Screen.width; cachedScreenHeight = Screen.height;
-                }
-                var depth = Pointer(ctx.cameraDepthBuffer);
-                var motion = Pointer(ctx.cameraMotionVectorsBuffer);
+                var depth = NativeTextures.Pointer(ctx.cameraDepthBuffer);
+                var motion = NativeTextures.Pointer(ctx.cameraMotionVectorsBuffer);
                 if (depth == IntPtr.Zero || motion == IntPtr.Zero) { Report(-11, "The gameplay camera has no depth or motion vector buffer."); return; }
                 var packet = new NativeHdrpInputs
                 {
@@ -124,18 +116,6 @@ namespace TGFrameGeneration
                 Session.Log.LogError("HDRP inputs disabled: " + ex);
             }
         }
-        internal static IntPtr Pointer(RTHandle handle)
-        {
-            var rt = handle?.rt;
-            if (rt == null) return IntPtr.Zero;
-            int id = rt.GetInstanceID();
-            if (pointers.TryGetValue(id, out var cached) && cached.Pointer != IntPtr.Zero && cached.Width == rt.width && cached.Height == rt.height)
-                return cached.Pointer;
-            if (pointers.Count >= 64) pointers.Clear(); // render graph pools cycle through a few textures
-            cached = new Cached { Pointer = rt.GetNativeTexturePtr(), Width = rt.width, Height = rt.height };
-            pointers[id] = cached;
-            return cached.Pointer;
-        }
         private static void Report(int result, string problem)
         {
             if (result == lastResult) return;
@@ -155,7 +135,6 @@ namespace TGFrameGeneration
         {
             if (host != null) UnityEngine.Object.Destroy(host);
             host = null;
-            pointers.Clear();
         }
     }
 }

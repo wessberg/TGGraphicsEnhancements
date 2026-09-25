@@ -1,17 +1,28 @@
 # SPDX-License-Identifier: MIT
+# Stages the signed vendor runtimes, with the license notices their terms require, into each mod's
+# folder under artifacts/Native. Nothing is copied into the game folder.
+#   TGFrameGeneration/Streamline   NVIDIA Streamline, DLSS Frame Generation, Reflex (interposer renamed)
+#   TGFrameGeneration/FidelityFX   AMD FSR API loader and frame generation
+#   TGFrameGeneration/XeSS         Intel XeSS Frame Generation and XeLL
+#   TGBetterUpscaling/FidelityFX   AMD FSR API loader and upscaler (FSR 4 and FSR 3.1)
+#   TGBetterUpscaling/XeSS         Intel XeSS Super Resolution
+#   TGBetterUpscaling/DLSS         NVIDIA DLSS Super Resolution, for the game's own DLSS
 [CmdletBinding()]
 param(
     # NVIDIA Streamline production runtime folder (bin/x64 of the Streamline SDK release).
     [string]$RuntimeDirectory='',
-    # AMD FSR SDK: bin/amd_fidelityfx_loader_dx12.dll, bin/amd_fidelityfx_framegeneration_dx12.dll, Kits/FidelityFX/docs/license.md.
+    # AMD FSR SDK: bin/amd_fidelityfx_loader_dx12.dll, bin/amd_fidelityfx_framegeneration_dx12.dll,
+    # bin/amd_fidelityfx_upscaler_dx12.dll, Kits/FidelityFX/docs/license.md.
     [string]$FidelityFXRoot='',
-    # Intel XeSS SDK: bin/libxess_fg.dll, bin/libxell.dll, LICENSE.txt.
-    [string]$XeSSRoot=''
+    # Intel XeSS SDK: bin/libxess.dll, bin/libxess_fg.dll, bin/libxell.dll, LICENSE.txt.
+    [string]$XeSSRoot='',
+    # NVIDIA DLSS SDK release (github.com/NVIDIA/DLSS): lib/Windows_x86_64/rel/nvngx_dlss.dll, LICENSE.txt.
+    [string]$DlssRoot=''
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if(-not ($RuntimeDirectory -or $FidelityFXRoot -or $XeSSRoot)) {
-    throw 'Pass -RuntimeDirectory (NVIDIA Streamline), -FidelityFXRoot (AMD FSR) and/or -XeSSRoot (Intel XeSS).'
+if(-not ($RuntimeDirectory -or $FidelityFXRoot -or $XeSSRoot -or $DlssRoot)) {
+    throw 'Pass -RuntimeDirectory (NVIDIA Streamline), -FidelityFXRoot (AMD FSR), -XeSSRoot (Intel XeSS) and/or -DlssRoot (NVIDIA DLSS).'
 }
 $native=Join-Path $PSScriptRoot 'artifacts\Native'
 function Assert-Signed([string]$Path,[string]$Signer) {
@@ -26,7 +37,7 @@ function Write-RuntimeManifest([string]$Folder,[object[]]$Entries) {
 # Every group is validated completely before any of its files are copied.
 if($RuntimeDirectory) {
     $source=(Resolve-Path $RuntimeDirectory).Path
-    $dest=Join-Path $native 'Streamline'
+    $dest=Join-Path $native 'TGFrameGeneration\Streamline'
     $required=@('sl.interposer.dll','sl.common.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlssg.dll')
     $optional=@('nvapi64.dll')
     # The interposer is staged, byte-identical and still NVIDIA-signed, under a private name:
@@ -69,17 +80,31 @@ if($RuntimeDirectory) {
     Write-RuntimeManifest $dest $manifest
     Write-Host "Staged signed NVIDIA runtime files and license notices to $dest."
 }
-# AMD and Intel ship signed binaries whose licenses require their notice to travel with them.
+# AMD and Intel ship signed binaries whose licenses require their notice to travel with them. Frame
+# generation and upscaling each carry their own copy of what they load, so either mod works alone.
 $vendors=@()
 if($FidelityFXRoot) {
     $root=(Resolve-Path $FidelityFXRoot).Path
-    $vendors+=@{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Notice=@{Source=(Join-Path $root 'Kits\FidelityFX\docs\license.md'); Name='LICENSE-FidelityFX.md'};
+    $notice=@{Source=(Join-Path $root 'Kits\FidelityFX\docs\license.md'); Name='LICENSE-FidelityFX.md'}
+    $vendors+=@{Folder='TGFrameGeneration\FidelityFX'; Signer='Advanced Micro Devices'; Notice=$notice;
         Files=@((Join-Path $root 'bin\amd_fidelityfx_loader_dx12.dll'),(Join-Path $root 'bin\amd_fidelityfx_framegeneration_dx12.dll'))}
+    $vendors+=@{Folder='TGBetterUpscaling\FidelityFX'; Signer='Advanced Micro Devices'; Notice=$notice;
+        Files=@((Join-Path $root 'bin\amd_fidelityfx_loader_dx12.dll'),(Join-Path $root 'bin\amd_fidelityfx_upscaler_dx12.dll'))}
 }
 if($XeSSRoot) {
     $root=(Resolve-Path $XeSSRoot).Path
-    $vendors+=@{Folder='XeSS'; Signer='Intel Corporation'; Notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-XeSS.txt'};
+    $notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-XeSS.txt'}
+    $vendors+=@{Folder='TGFrameGeneration\XeSS'; Signer='Intel Corporation'; Notice=$notice;
         Files=@((Join-Path $root 'bin\libxess_fg.dll'),(Join-Path $root 'bin\libxell.dll'))}
+    $vendors+=@{Folder='TGBetterUpscaling\XeSS'; Signer='Intel Corporation'; Notice=$notice;
+        Files=@((Join-Path $root 'bin\libxess.dll'))}
+}
+# The DLSS Super Resolution DLL the game's own DLSS gets when its nvngx_dlss.dll is older, under the
+# NVIDIA RTX SDKs license of the same DLSS SDK release.
+if($DlssRoot) {
+    $root=(Resolve-Path $DlssRoot).Path
+    $vendors+=@{Folder='TGBetterUpscaling\DLSS'; Signer='NVIDIA'; Notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-NVIDIA-RTX-SDKs.txt'};
+        Files=@((Join-Path $root 'lib\Windows_x86_64\rel\nvngx_dlss.dll'))}
 }
 foreach($vendor in $vendors) {
     foreach($path in $vendor.Files) {

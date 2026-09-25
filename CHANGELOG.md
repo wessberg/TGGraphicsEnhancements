@@ -1,5 +1,290 @@
 # Unreleased
 
+From 1.1.0 on, the version numbers are the ones the mods have on Nexus Mods, and TG Frame Generation,
+TG Better Upscaling and the bridge they share all carry the same one. Earlier entries use the repository's
+own numbers: v0.5.0 is the release published on Nexus as Frame Generation 1.0.2.
+
+Troubleshooting (1.2.0)
+
+- **Create Troubleshooting Report**'s tooltip and start message say what the test tries with the mods
+  installed, and for about how long: each upscaler with TG Better Upscaling alone, each frame
+  generation and low latency setting with TG Frame Generation alone, both with both. The report names
+  the mods that took part.
+- **Create Troubleshooting Report**, a button nested under Performance Overlay at the bottom of the
+  Video settings, there with the overlay on or off (and a Video entry in FoA Mod Manager). Back in the game it runs a test of about two minutes:
+  the player's own settings first, then each upscaler the game's Upscaling row offers with frame
+  generation off, then frame generation off with each low latency technology, then each frame
+  generation technology with each low latency technology it can run with (Off where that is allowed)
+  at 2x, and once more at the highest multiplier where there is one. Each step is applied, left to
+  settle and measured for a few seconds: the rendered frame rate and its 1% low, CPU, GPU and video
+  memory use, frames on screen, the presenting and latency technology, and where the presentation
+  bridge spends its time per frame. Then the player's settings come back and the report is saved as
+  one text file in the BepInEx folder, beside LogOutput.log (`TG Troubleshooting Report <date>.txt`,
+  about 25 KB), to paste into a bug report on Nexus. It has a summary (system, mods, problems found,
+  the test results, what the native side knows), then this session's part of each log, filtered to
+  what explains a problem: from BepInEx's log the mods' lines, warnings and errors with their stack
+  traces and plugin loading; from the preloader's and native logs this session's lines (found by the
+  process ID), with frame generation's 5 s pipeline lines thinned to the first and last few and one
+  per test step; errors and warnings from Streamline's and the game's logs; the mods' config values;
+  and where each of the mods' files is, with its size, date, version and whether it is a Vortex link.
+  Repeated lines are counted, and the Windows user folder is replaced by `%USERPROFILE%`. A test step never writes the
+  player's settings: frame generation's steps override what it requests, upscaling's steps select
+  the row in the game but leave the mod's config alone, and when the game pauses the player's
+  settings come back until play resumes, so the settings screen never shows a test value. If the game
+  closes during a test, the next start puts upscaling back from the config. Selecting the button
+  again stops the test and saves what was measured; before the test starts, it saves the logs alone.
+- The mods' problems are shown on the Video rows they concern, not as rows of their own: the Frame
+  Generation row for TG Frame Generation and whatever interferes with frame generation, the game's
+  Dynamic Resolution row (the upscaler, which TG Better Upscaling extends) for TG Better Upscaling
+  and whatever interferes with upscaling. Such a row gets an amber alert icon after its name and the
+  most serious problem as its tooltip, as "Source: Label. What to do" in a sentence or two ("TG Better
+  Upscaling: Wrong folder. Its files are in ..."). The full explanation goes in the report. The top of
+  the performance overlay lists all of them the same short way, wrapped to under half the screen.
+  Each mod tells the bridge when it has started; one that BepInEx loaded but that never started (an
+  error while starting, before it could log anything, which this game's missing Unity log hides) gets
+  a "Didn't start" alert on its row. When TG Frame Generation has a problem and no row of its own, a
+  stand-in Frame Generation row reads Off with the icon and the reason. Tooltips name the game's two versions as the Nexus files do (the
+  normal version, and the Mono one whose files end in "mono"), never by runtime names. They cover:
+  - where a mod is installed wrong: its archive's BepInEx folder unpacked into BepInEx, into
+    BepInEx/plugins (what a mod manager does with a plugin-type mod; with Vortex the fix is the
+    Engine Injector type), into a folder of its own, or its contents straight into the game folder;
+    a missing preloader or other files; the build for the other game branch; a plugin BepInEx found
+    and didn't load; TG Frame Generation 1.0 still installed; a `disable-autoload.txt`;
+  - other software that conflicts or limits: OptiScaler (running, or files left over), DLSS Enabler,
+    the DLSSG-to-FSR3 mod, FSR 3 mods, Special K, RivaTuner Statistics Server with a frame rate limit
+    (read from its profiles), Lossless Scaling running, and from the NVIDIA driver's profile for the
+    game: Max Frame Rate, forced VSync, Smooth Motion (ID from NVIDIA Profile Inspector, not yet
+    checked against a driver with it on) and a DLSS Frame Generation override that forces it off.
+- When frame generation turns on and the framerate on screen doesn't rise by 15% over the rate just
+  before, a message says so during play and a row in the Video settings explains it with what this
+  session shows: the game's Framerate Limit, VSync (at the display's refresh rate or every second
+  refresh), a limit outside the game, video memory nearly full, rendering that fell much more than
+  frame generation costs (with Anti-Lag 2 on, hybrid graphics, or AMD Fluid Motion Frames as things
+  to try), or nothing known, with the troubleshooting report as the next step. Dynamic mode that
+  reaches its target counts as a gain.
+- DLSS Frame Generation with VSync on, while the display is connected to another GPU than the one
+  the game renders on (a laptop's panel on its integrated GPU), shows a "High latency" alert: NVIDIA's
+  DLSS-G guide says high latency is expected with VSync on such a system. The fix it gives is VSync
+  off, or the laptop's setting that makes the dedicated GPU drive the display.
+- Frame generation's row reads Off, greyed out, with the alert icon when it can't run, and its tooltip gives the first thing
+  that went wrong with what to do: the install problem, OptiScaler, a preloader that didn't run,
+  another Streamline, and for a Direct3D 12 device Windows refused, why. 0x887E0003 names the Agility
+  SDK versions, the Windows build, and whether the bridge corrected the game's request or something
+  loaded Direct3D 12 before it could, but only when the bridge saw that mismatch. Otherwise it says
+  the game's D3D12Core.dll is missing or doesn't match, and to verify the game's files. The row's
+  own value stays one word, and the tooltip is the short form. When DLSS Frame Generation isn't offered on an NVIDIA GPU, the
+  tooltip says why from Streamline's own answer: Hardware-accelerated GPU scheduling off, an old
+  driver or Windows, or a GPU before the RTX 40 series.
+- The native logs have more to go on: the Windows build, the game's adapter, driver version and video
+  memory, which GPU drives the display (a laptop's hybrid graphics shows as the display on the other
+  GPU), the NVIDIA driver settings above, and in frame generation's 5 s pipeline line, where the
+  presenting thread's time goes per frame (waiting for the GPU, the SDK's Present, handing the frame
+  back to D3D11) and the frame interval with the frames over 50 ms. New optional exports carry these
+  to the plugins: `TGGraphicsBridge_ReadDiagnostics`, `TGGraphicsBridge_LogNote`,
+  `TGFG_ReadDiagnostics`, `TGFG_ReadTimings`, `TGFG_LogNote`. The ABIs are unchanged.
+- The bridge is 1.2.0, so a copy bundled with a 1.1.0 mod stays idle beside it.
+
+Frame generation and compatibility fixes (1.2.0), from a review of hardware the mods haven't been
+tested on (only an RTX 5080 on Windows 11 has been)
+
+- The game's next frame no longer waits for frame generation to finish the current one. After
+  every Present, D3D11 used to wait on the GPU until D3D12 had finished the whole present, frame
+  generation included, before any of the next frame's work could run. With DLSS-G (which blocks the
+  presenting queue until its work is done) and FSR (whose generation runs on that queue) the game's
+  rendering and frame generation took turns instead of overlapping. That fits the reports of frame
+  generation lowering the framerate on slower GPUs. D3D11 now waits only for what it is about to overwrite: a
+  back buffer until D3D12 copied it, and an input texture until the present that used it three
+  frames earlier retired. Usually neither has to wait; the pipeline line counts the times one did.
+  Each direction has its own shared fence now (D3D11 signals the producer fence, only the D3D12 queue
+  the consumer fence): a fence Signal sets its value, and with D3D11 no longer waiting for every
+  retirement, a single fence signalled by both could have moved backwards.
+- Reflex, XeLL and Anti-Lag 2 now wait in Unity's PlayerLoop right after
+  `TimeUpdate.WaitForLastPresentationAndUpdateTime`: after Unity's own wait for the previous frame's
+  presentation (Intel's XeLL guide wants other waits before XeLL's) and before any input is read,
+  Unity's or Rewired's. Their SDKs ask for the wait just before input is sampled; it ran in a
+  MonoBehaviour's Update, after the input it was meant to precede, which made the input each frame
+  used older by the wait. If another mod replaces
+  the PlayerLoop, frames begin in Update as before. The native frame ID is now a counter that rises
+  once per frame instead of `Time.frameCount`, which can still hold the previous frame's number there.
+- VSync is turned off for DLSS Frame Generation when the screen is connected to another GPU than the
+  one the game renders on: a laptop's screen on its integrated GPU (the default hybrid mode of most
+  gaming laptops), or a monitor in the motherboard's port. NVIDIA's DLSS-G guide expects high input
+  delay with VSync and frame generation where Windows composes the frames instead of flipping them
+  straight to the screen, and says it is better not to enable VSync there. Frames copied to another
+  GPU's screen are usually composed, but not always: hybrid laptops can flip them straight to the screen
+  too (the two-copy hybrid path, Windows 11's cross-adapter scan-out), where VSync off would tear. So
+  while VSync is held off, the bridge presents without the tearing flag (`TGFG_SetNoTearing`, a new
+  optional export): the newest frame shows at the next refresh, with no VSync wait and no tear either
+  way. The mod turns the game's own
+  VSync toggle off once, as a player would, and sets Target FPS to Unlimited: the game shares that row
+  between VSync rates and frame limits and would otherwise move it to the nearest limit, a cap the
+  player never chose. It greys the toggle out with a tooltip saying why and shows a short message; a
+  limit the player picks afterwards stays. Choosing FSR or XeSS, or a screen on the rendering GPU, offers the toggle again; VSync
+  stays off until the player turns it on. VSync the NVIDIA driver forces on can't be changed from the
+  game: the "High latency" alert then says where to change it in the NVIDIA App. An advanced setting
+  turns this off. Which GPU the screen is connected to is checked again every 5 s, so moving the
+  window or a laptop switching its screen between GPUs is noticed, and Streamline's measured copy time
+  between the GPUs is in the pipeline line (`crossAdapterCopy`).
+- Alerts for memory while frame generation runs: "VRAM full" when the game stays over the video memory
+  Windows gives it (with how much frame generation added), and "RAM full" when less than 1 GB of system
+  memory is free or 95% is in use. Both make the game stutter as memory moves out and back. System
+  memory also counts as a cause when frame generation gives no framerate gain, and the report lists
+  free memory.
+- DLSS-G's UI recomposition is off. It was on whenever a HUD-less image was supplied, but NVIDIA's
+  guide allows it only when a UI buffer is tagged as well, and the bridge tags none. DLSS-G still
+  gets the verified HUD-less image, and it no longer spends recomposition's memory and GPU time.
+- DLSS-G below its minimum output size (`minWidthOrHeight`) is off until the resolution changes,
+  as NVIDIA's guide requires, with the reason "resolution too low". The runtime's
+  resolution-too-low status used to end frame generation for the session.
+- NVIDIA Reflex is offered in Low Latency only when Streamline reports it available
+  (`lowLatencyAvailable`: an NVIDIA GPU from Maxwell on with driver 456 or later). NVIDIA's guide
+  requires this for the Reflex choice; DLSS-G still runs Reflex whatever the choice. A query that
+  fails is asked again before the plugin reads the capabilities, and without an answer Reflex isn't
+  offered.
+- XeSS Frame Generation generates only from frames XeLL slept for, and only while XeLL's low latency
+  mode is on. Intel requires XeLL with every XeSS-FG frame; the first frame after switching to XeSS
+  began before XeLL existed. A sleep mode XeLL refused is not asked for again every frame (each
+  attempt costs a GPU drain).
+- The Base FPS limit with XeSS Frame Generation capped the frames on screen, not the rendered ones:
+  XeLL's limit counts every Present. XeLL now gets it multiplied by the presents per rendered frame.
+- XeSS Frame Generation and XeLL are loaded only where Intel supports them: Windows 10 21H1 (build
+  19043) or later and the Visual C++ runtime 14.40.33810 or later, checked on the copy they would
+  bind to (one already loaded, one next to them or the game, or System32's). Elsewhere the Frame
+  Generation row's tooltip says which one is missing.
+- The three native DLLs link the C and C++ runtimes statically. The game ships no `msvcp140.dll`, so
+  they used whatever System32 had. Without the Visual C++ Redistributable they didn't load at all,
+  and with one older than 14.40 the first `std::mutex` lock crashed the game: MSVC 14.40 and later
+  construct `std::mutex` in a way older runtimes can't lock. They no longer call
+  `DisableThreadLibraryCalls`, which Microsoft forbids with the static runtime, and their extension
+  factories catch everything before it reaches the bridge's runtime. NVIDIA's, AMD's and Intel's DLLs
+  still need the redistributable, so the bridge records the copy they would use (`windows.vcruntime`,
+  in the report), a "Visual C++ runtime: Missing" alert appears when there is none in Windows or the game
+  folder, and a Streamline that failed to load with Windows error 126 or 127 says which it was.
+- The troubleshooting report is written whole and then renamed, so a full disk or the game closing
+  leaves no half report. A log longer than the 8 MB the report reads says the session may have started
+  before them, instead of that its native part didn't start.
+
+Error handling (1.2.0), from a final review of every failure path
+
+- No C++ exception leaves a native entry point: Unity's render-thread callbacks, the exports the
+  plugins call every frame, the performance sampler's thread (which now starts over after an error)
+  and the bridge's exports catch everything. The three native logs never throw, since they are called
+  from catch handlers, some in functions that must not throw.
+- A removed device signals its fences to their maximum, which also woke the CPU fence waits: they
+  now check again after waking, so device removal is reported as such instead of passing as a
+  finished frame. A bridge whose GPU work was never confirmed finished keeps its GPU objects for the
+  rest of the session instead of freeing them under running work; the upscaler does the same on a new
+  game device.
+- A settings file that can't be written (read-only, locked by an antivirus scan, a full disk) no longer
+  stops a mod: settings bind with BepInEx's saving off and every save goes through one place, which
+  keeps the values for the session and shows a "Can't save" alert on the mod's row. Each plugin's
+  start is guarded and logs why it failed, and the preloader starts the bridge even if it can't create
+  its log folder.
+- The troubleshooting test run starts only once its recovery file is written, keeps that file until
+  TG Better Upscaling has put the upscaler back, reports a step that couldn't be applied as such
+  instead of measuring it, says which mod couldn't put your settings back, and puts them back if the
+  report's own code fails mid-run.
+- After FSR or XeSS stops with an error, STP really takes over at the chosen render scale. The game's
+  upscaling controller knows no FSR or XeSS, so handing it that choice turned upscaling off and
+  rendered at full resolution. Video memory has to stay over 95% of the budget on two 10 s checks in
+  a row before FSR and XeSS give way, not on one sample over 90%.
+- TG Better Upscaling extends the upscaling row for DLSS's quality modes even where FSR and XeSS are
+  unavailable. Its "Add upscalers to Video settings" setting says that the game applies its upscaler
+  through that row.
+- The game builds its display and VSync rows again when the window moves to another monitor; the
+  Exclusive Fullscreen restriction and the VSync hold follow the new rows. An Apply press in the Video
+  tab counts once, so a later Restore Defaults can't apply display rows the player is still editing.
+- The display check follows the game's window when the swapchain is replaced on the same device.
+  Anti-Lag 2's and XeLL's per-frame errors are counted and logged. GPU usage is the busiest engine of
+  the game's GPU, as Task Manager counts it, not engines of one type added together.
+- A disable-autoload.txt in the bridge's folder shows on both mods' rows. RivaTuner's frame limit
+  and Lossless Scaling are checked again every 30 s, so their alerts clear once they are changed or
+  closed.
+
+Two mods and a shared bridge (1.1.0)
+
+- The repository now builds two mods on a shared part. **TG Graphics Bridge** is the DX11-to-DX12
+  bridge and its BepInEx preloader, taken out of TG Frame Generation: it owns the graphics hooks,
+  observes the game's device, creates one D3D12 device inside the game's swapchain creation, and
+  loads the native part of each mod built on it (`BepInEx/<mod>/graphics-bridge-extension.json`).
+  **TG Frame Generation** is now one of those extensions. **TG Better Upscaling** is new.
+- The bridge is bundled with each mod, not a download of its own, under the mod's own folders
+  (`BepInEx/patchers/<mod>.Autoload.dll`, `BepInEx/plugins/<mod>/TGGraphicsBridge.dll`,
+  `BepInEx/<mod>/Native/TGGraphicsBridge.Native.dll`), so installing both deploys no file twice and
+  Vortex reports no conflict. With both installed, the preloader bundled with the newest bridge
+  starts it once for both, and BepInEx loads the newest copy of its plugin; BepInEx logs that it
+  skips the other copy.
+- TG Better Upscaling adds AMD FSR (FSR 4 on Radeon RX 9000, FSR 3.1 elsewhere) and Intel XeSS to the
+  game's own Upscaling row, after None, STP and DLSS, with the row's quality slider as the render
+  scale, and an FSR Sharpness row under FSR. They run where HDRP runs STP, on HDRP's
+  own color, depth and motion vectors, on the bridge's D3D12 device, and return the upscaled image in
+  STP's output texture, so post-processing, RenoDX, ReShade and frame generation see an upscaled frame
+  as they would after STP. A refused frame is enlarged instead of left black; five in a row turn that
+  technology off for the session and STP takes over.
+- FSR has no version row: it runs AMD's default for the GPU, which is FSR 4 on a Radeon RX 9000 and
+  the newest FSR 3.1 elsewhere (3.1.5 on an RTX 5080, checked). AMD asks that a version is either
+  left to that default or chosen by the player, never picked by the application; the native log names
+  the version AMD chose and the newest it offers.
+- A performance overlay, switched on in the last row of the Video settings (Performance Overlay, with
+  Overlay Position and Overlay Size below it), FoA Mod Manager or TG Graphics Bridge's config: frame
+  rate and frame times, render and output resolution, VSync and the frame cap, CPU, GPU and video
+  memory use, and a section from each mod (the upscaler, its mode and version, the DLSS model and DLL;
+  frame generation's technology, mode, multiplier and frame rate on screen). The DLSS model comes from
+  the NVIDIA driver's profile for the game when the NVIDIA App overrides it (preset, performance mode,
+  render scale, DLAA), and is the DLL's default for the mode otherwise.
+- DLSS, FSR and XeSS get their own quality modes in the Video tab (Quality Mode) instead of the game's
+  render-scale slider, which STP keeps. Only the modes each runtime reports are offered, at the ratio
+  it reports: NGX's recommended size per DLSS mode through Unity's NVIDIA module (DLAA only when NGX
+  sizes it), FSR's per-mode ratio from AMD's runtime, XeSS's seven presets from Intel's. DLSS gets the
+  mode as its NGX quality level, so NVIDIA's driver picks that mode's model; the game had given DLSS a
+  level derived from the slider's position. XeSS initializes with the chosen preset. A config without
+  a mode starts each upscaler on the highest-quality mode at or below the game's render scale (never
+  more pixels than before), and the game's graphics presets set the modes by the same rule. The
+  upscaling ABI is 1.2 (`TGUP_GetModes`, `TGUP_Frame.mode`).
+- FSR gets HDRP's exposure, as HDRP's own DLSS pass takes it (a readback requested every frame,
+  limited to 0.2..2): as its pre-exposure, which it divides out so that its history holds while the
+  game's exposure adapts, and as its exposure texture, so it still works on the color HDRP tonemaps.
+  It had a fixed pre-exposure of 1, so every exposure change looked like a change in brightness to
+  its history. XeSS, which has no pre-exposure input, keeps working on the pre-exposed color.
+- With FSR, textures get AMD's recommended mip bias, `log2(render / output width) - 1`: HDRP applies
+  `log2(render / output width)` wherever STP runs (Intel's guidance for XeSS), and FSR adds the
+  extra -1 through the camera's material mip bias while it is selected.
+- TG Better Upscaling brings NVIDIA's DLSS 310.9.1 DLL (`Native/DLSS/nvngx_dlss.dll`, from the DLSS
+  SDK) for the game's own DLSS, which ships 3.8.10. When NVIDIA's runtime loads an older
+  `nvngx_dlss.dll`, it gets the bundled one; an equal or newer file, such as a DLSS mod's, is kept.
+  Nothing in the game folder is replaced. A DLSS mod's own set of DLLs is kept whole as well: with
+  DLSS neural rendering (`nvngx_dlssnr.dll`, DLSS 5) or frame generation or ray reconstruction of the
+  same release beside the game folder's `nvngx_dlss.dll`, that file stays, since the RenoDX DLSS 5
+  add-on's frame rate stopped following the render resolution with ours in its place.
+  Stage-Runtime.ps1 takes `-DlssRoot`.
+- Only FSR gets a sharpness row, at 50% by default. DLSS has no sharpening any more (NVIDIA's headers mark it "not
+  supported" and the game's DLSS 310 ignores it) and XeSS never had one.
+- The bridge hooks the swapchain methods of DXGI factories up front, on a factory of its own created
+  past any hook already on `dxgi.dll`'s exports, before any extension loads. Up to 1.0.x frame
+  generation saw the game's swapchain only because something else created a DXGI factory where its
+  hooks saw it, which happened with NVIDIA's runtimes loaded; with ReShade installed as `dxgi.dll`,
+  which forwards the game's factory calls past later hooks, TG Better Upscaling alone never saw it, and
+  frame generation on AMD and Intel GPUs most likely didn't either. Installed first, the bridge's
+  hook also runs inside ReShade's, so ReShade leaves the bridge's D3D12 device and frame generation's
+  swapchain alone, and the RenoDX DLSS add-on still gets a device of its own.
+- When frame generation's native side reports nothing (it didn't load or start, another mod already
+  loaded NVIDIA Streamline, or it couldn't take over the game's presentation), the Frame Generation row
+  offers Off only, greyed out, and its tooltip says why. Up to 1.0.x it showed DLSS Frame Generation
+  with multi-frame choices on any GPU in that case, which did nothing. A report that arrives later
+  replaces those rows.
+- With TG Frame Generation 1.0.x still installed, which runs a graphics bridge of its own, the bridge
+  does not start and says to update Frame Generation to 1.1.0; two bridges cannot share the game's
+  device.
+- Frame generation and upscaling work on Windows 10 and older Windows 11 builds. The game's exe asks
+  Windows for Direct3D 12 Agility SDK 610 from its `D3D12` folder, which holds D3D12Core.dll 611.
+  Where Windows' own runtime is newer (Windows 11 24H2 and later), Windows uses its own and never looks
+  there; where it is older, Windows loads the game's file and refuses every D3D12 device over the
+  mismatch (0x887E0003, D3D12_ERROR_INVALID_REDIST), so up to 1.0.x frame generation never started
+  there. Before any runtime loads `d3d12.dll`, which reads the request as it loads, the bridge sets the
+  request to the version the game ships, and logs the three versions it found. Reproduced and checked
+  on Windows 11 with an exe asking for 618 beside a D3D12Core.dll 619: 0x887E0003 before, a device
+  from that file after.
+
 Frame generation quality
 
 - DLSS Frame Generation and Intel XeSS-FG receive depth, motion vectors and a camera in the same

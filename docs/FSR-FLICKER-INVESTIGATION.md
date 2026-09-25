@@ -6,6 +6,8 @@ below extended the input-orientation fix from FSR to DLSS-G and XeSS-FG, and the
 confirms all three now look equally good.
 Last worked 2026-09-20. Changes are **uncommitted**. Mono visual verification is complete;
 the IL2CPP hand-history port below is awaiting in-game verification. Read this before touching the FSR path.
+The captures (`fsr-inputs-*`), shader dumps and source checkouts this record names under `build/` were
+deleted on 2026-09-22 after the investigation closed; the figures quoted here are what they showed.
 
 ## The orientation fix was general, not FSR-specific (2026-09-20)
 
@@ -642,7 +644,9 @@ All deployed, none committed. `git diff` shows the full set.
 5. **Low Latency may be Off with FSR.** DLSS-G still requires Reflex and XeSS-FG still requires XeLL,
    which are their vendors' rules. FSR requires neither.
 6. **DLSS-G interface recomposition** now follows the verified HUD-less image. It was hard-coded off,
-   which meant the HUD-less tag had nothing to act on.
+   which meant the HUD-less tag had nothing to act on. (1.2.0 turned it off again: NVIDIA's guide
+   allows recomposition only when a UI buffer is tagged as well, and DLSS-G uses a HUD-less image on
+   its own. That it had nothing to act on was an inference, never measured.)
 
 ## Lead A: the HUD-less capture is one frame late
 

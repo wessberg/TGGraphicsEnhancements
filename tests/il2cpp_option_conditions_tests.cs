@@ -4,7 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Awaken.TG.Main.Settings.Options;
-using TGFrameGeneration;
+using TGGraphicsBridge;
 
 internal static class Program
 {
@@ -17,7 +17,7 @@ internal static class Program
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         };
         Run();
-        Console.WriteLine("Option getter guard: native identity, owned/unowned routing, changing/nested conditions, exception isolation, GC retention, clear and unpatch/reinstall passed.");
+        Console.WriteLine("Option getter guard: native identity, owned/unowned routing, changing/nested conditions, exception isolation, GC retention, per-mod removal and unpatch/reinstall passed.");
     }
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void Run()
@@ -40,16 +40,18 @@ internal static class Program
         var error = new DependentOption(4) { ThrowInOriginal = true };
         Il2CppOptionConditions.Register(error, () => throw new InvalidOperationException("test"));
         Require(!error.ShowDependent && !error.ShowDependent, "Failed managed condition was not contained.");
-        Require(Session.Log.Warnings == 1 && error.OriginalCalls == 0, "Condition failure logged repeatedly or used native callback.");
+        Require(BridgeLog.Log.Warnings == 1 && error.OriginalCalls == 0, "Condition failure logged repeatedly or used native callback.");
         var weak = RegisterTemporary();
         GC.Collect();GC.WaitForPendingFinalizers();GC.Collect();
         Require(weak.IsAlive && new DependentOption(5).ShowDependent, "Registry failed to retain its native owner/condition.");
-        Il2CppOptionConditions.Clear();owned.ThrowInOriginal = false;owned.Value = true;
-        Require(owned.ShowDependent && owned.OriginalCalls == 1, "Clear kept stale pointer registrations.");
+        // One mod rebuilding its rows removes its own registrations and nobody else's.
+        Il2CppOptionConditions.Remove(owned);owned.ThrowInOriginal = false;owned.Value = true;
+        Require(owned.ShowDependent && owned.OriginalCalls == 1, "Remove kept a stale pointer registration.");
+        Require(child.ShowDependent && child.OriginalCalls == 0, "Remove dropped another option's registration.");
         Il2CppOptionConditions.Dispose();
         Require(game.ShowDependent == false && game.OriginalCalls == 3, "Dispose did not restore original getter.");
         Il2CppOptionConditions.Register(owned, () => false);
-        Require(!owned.ShowDependent && owned.OriginalCalls == 1, "Reinstallation failed.");
+        Require(!owned.ShowDependent && owned.OriginalCalls == 2, "Reinstallation failed.");
         Il2CppOptionConditions.Dispose();
     }
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -80,10 +82,10 @@ namespace Awaken.TG.Main.Settings.Options
         }
     }
 }
-namespace TGFrameGeneration
+namespace TGGraphicsBridge
 {
-    internal static class Plugin { internal const string Id = "tgfg.tests"; }
-    internal static class Session { internal static TestLog Log = new TestLog(); }
+    internal static class BridgePlugin { internal const string Id = "tgb.tests"; }
+    internal static class BridgeLog { internal static TestLog Log = new TestLog(); }
     internal sealed class TestLog
     {
         internal int Warnings;

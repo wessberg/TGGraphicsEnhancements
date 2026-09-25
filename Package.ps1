@@ -1,113 +1,125 @@
 # SPDX-License-Identifier: MIT
-# Package/deploy existing builds in THIS repository. No external ProjectRoot.
+# Packages (and with -Deploy installs) existing builds of the two mods in THIS repository: one zip per
+# mod and runtime, each holding only its BepInEx payload (with its copy of TG Graphics Bridge), its
+# manifest and the Vortex mod type.
 [CmdletBinding()]
 param(
     [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
+    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling')][string]$Mod = 'All',
     [switch]$Deploy
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'tools\Package.Common.ps1')
-if ($Deploy) { Assert-TgfgGameClosed }
+if ($Deploy) { Assert-TgGameClosed }
+$version = Get-TgVersion
+$mods = @(Resolve-TgModNames $Mod)
 $nativeRoot = Join-Path $PSScriptRoot 'artifacts\Native'
-$native = Join-Path $nativeRoot 'TGFG.Native.dll'
-Assert-TgfgAmd64 $native
 $nativeManifestPath = Join-Path $nativeRoot 'build-manifest.json'
-Assert-TgfgFile $nativeManifestPath
+Assert-TgFile $nativeManifestPath
 $nativeManifest = Get-Content -LiteralPath $nativeManifestPath -Raw | ConvertFrom-Json
-Assert-TgfgFields $nativeManifest @('version','native_sha256') 'Native build manifest'
-if ($nativeManifest.version -ne '0.5.0' -or
-    $nativeManifest.native_sha256 -ne (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash) {
-    throw 'Expected the existing v0.5.0 native backend and matching hash (ABI 0x00050000). Rebuild/stage with Build-Native.ps1 only if it is missing or mismatched.'
+Assert-TgFields $nativeManifest @('version','abi','native_sha256') 'Native build manifest'
+if ($nativeManifest.version -ne $version -or $nativeManifest.abi -ne (Get-TgAbi)) {
+    throw "Expected the v$version native build (ABI $(Get-TgAbi)) in artifacts/Native. Run Build-Native.ps1."
 }
-$nativeFiles = @(@{Source=$native; Relative='BepInEx/TGFrameGeneration/Native/TGFG.Native.dll'})
-$required = @(Get-TgfgRuntimeNames)
-foreach ($name in $required + @('nvapi64.dll')) {
-    $path = Join-Path $nativeRoot "Streamline/$name"
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        if ($required -contains $name) { throw "Missing NVIDIA runtime: $path. Run Stage-Runtime.ps1 first." }
-        continue
-    }
-    Assert-TgfgNvidiaSignature $path
-    $nativeFiles += @{Source=$path; Relative="BepInEx/TGFrameGeneration/Native/Streamline/$name"}
-}
-foreach ($name in (Get-TgfgNvidiaNotices)) {
-    $path = Join-Path $nativeRoot "Streamline/$name"
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing NVIDIA license notice: $path. Run Stage-Runtime.ps1 -RuntimeDirectory first." }
-    $nativeFiles += @{Source=$path; Relative="BepInEx/TGFrameGeneration/Native/Streamline/$name"}
-}
-foreach ($vendor in (Get-TgfgVendorRuntimes)) {
-    foreach ($name in @($vendor.Files) + @($vendor.Notice)) {
-        $path = Join-Path $nativeRoot "$($vendor.Folder)/$name"
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Missing $($vendor.Folder) runtime file: $path. Run Stage-Runtime.ps1 -FidelityFXRoot/-XeSSRoot first."
+# Every file of every requested mod is validated before anything is packaged or installed.
+$nativeFiles = @{}
+foreach ($name in $mods) {
+    $m = Get-TgMod $name
+    $files = @()
+    $components = Get-TgNativeComponents
+    foreach ($native in $m.Natives) {
+        $artifact = $components[$native.Component]
+        $dll = Join-Path $nativeRoot $artifact
+        Assert-TgAmd64 $dll
+        if ($nativeManifest.native_sha256.($native.Component) -ne (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash) {
+            throw "$artifact does not match artifacts/Native/build-manifest.json. Rebuild with Build-Native.ps1 instead of mixing outputs."
         }
-        if ($vendor.Files -contains $name) { Assert-TgfgSignature $path $vendor.Signer }
-        $nativeFiles += @{Source=$path; Relative="BepInEx/TGFrameGeneration/Native/$($vendor.Folder)/$name"}
+        $files += @{Source=$dll; Relative=$native.Relative}
     }
+    foreach ($group in $m.Signed) {
+        foreach ($file in @($group.Files) + @($group.Optional) + @($group.Notices)) {
+            $path = Join-Path $nativeRoot "$name\$($group.Folder)\$file"
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                if ($group.Optional -contains $file) { continue }
+                throw "Missing $name runtime file: $path. Run Stage-Runtime.ps1 first."
+            }
+            if ($group.Notices -notcontains $file) { Assert-TgSignature $path $group.Signer }
+            $files += @{Source=$path; Relative="BepInEx/$name/Native/$($group.Folder)/$file"}
+        }
+    }
+    if ($m.Extension) {
+        $extension = Join-Path $PSScriptRoot $m.Extension
+        Assert-TgFile $extension
+        $files += @{Source=$extension; Relative=(Get-TgExtensionPath $name)}
+    }
+    $nativeFiles[$name] = $files
 }
-$targets = if ($Runtime -eq 'Both') { @('Mono','IL2CPP') } else { @($Runtime) }
+$targets = @(if ($Runtime -eq 'Both') { 'Mono','IL2CPP' } else { $Runtime })
 $builds = @()
-# Validate all requested managed builds BEFORE writing any game files.
 foreach ($target in $targets) {
     $root = Join-Path $PSScriptRoot "artifacts/$target"
     $metadataPath = Join-Path $root 'build-manifest.json'
-    Assert-TgfgFile $metadataPath
+    Assert-TgFile $metadataPath
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
-    Assert-TgfgFields $metadata @('version','runtime','framework','managed_sha256','autoload_sha256','game_dir') 'Managed build manifest'
-    if ($metadata.version -ne '0.5.0' -or $metadata.runtime -ne $target -or
-        $metadata.framework -ne (Get-TgfgFramework $target)) { throw "Rebuild the integrated managed pair for $target using Build.ps1." }
-    $plugin = Join-Path $root 'BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll'
-    $loader = Join-Path $root 'BepInEx/patchers/TGFG.Autoload.dll'
-    Assert-TgfgManagedVersion $plugin 'TGFrameGeneration' '0.5.0.0'
-    Assert-TgfgManagedVersion $loader 'TGFG.Autoload' '0.5.0.0'
-    if ((Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash -ne $metadata.managed_sha256 -or
-        (Get-FileHash -LiteralPath $loader -Algorithm SHA256).Hash -ne $metadata.autoload_sha256) {
-        throw "The $target DLLs do not match their build manifest. Rebuild instead of mixing outputs."
+    Assert-TgFields $metadata @('version','runtime','framework','managed_sha256','game_dir') 'Managed build manifest'
+    if ($metadata.version -ne $version -or $metadata.runtime -ne $target -or
+        $metadata.framework -ne (Get-TgFramework $target)) { throw "Rebuild the managed assemblies for $target using Build.ps1." }
+    if ($Deploy) { Assert-TgGame $metadata.game_dir $target }
+    foreach ($name in $mods) {
+        $files = @()
+        foreach ($entry in (Get-TgMod $name).Managed) {
+            $path = Join-Path $root $entry.Relative
+            Assert-TgManagedVersion $path $entry.Assembly "$version.0"
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $metadata.managed_sha256.($entry.Relative)) {
+                throw "$($entry.Relative) ($target) does not match its build manifest. Rebuild instead of mixing outputs."
+            }
+            $files += @{Source=$path; Relative=$entry.Relative}
+        }
+        $builds += @{Target=$target; Mod=$name; Game=$metadata.game_dir; Files=($files + $nativeFiles[$name])}
     }
-    if ($Deploy) { Assert-TgfgGame $metadata.game_dir $target }
-    $builds += @{Target=$target; Metadata=$metadata; Files=(@(
-        @{Source=$plugin; Relative='BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll'},
-        @{Source=$loader; Relative='BepInEx/patchers/TGFG.Autoload.dll'}
-    ) + $nativeFiles)}
 }
-if ($Deploy -and $builds.Count -gt 1) {
-    $destinations = @($builds | ForEach-Object { [IO.Path]::GetFullPath($_.Metadata.game_dir).TrimEnd('\','/') } | Sort-Object -Unique)
-    if ($destinations.Count -ne $builds.Count) { throw 'Mono and IL2CPP deployment targets must be different game installations.' }
+if ($Deploy -and $targets.Count -gt 1) {
+    $destinations = @($targets | ForEach-Object { $t = $_; [IO.Path]::GetFullPath(($builds | Where-Object { $_.Target -eq $t } | Select-Object -First 1).Game).TrimEnd('\','/') } | Sort-Object -Unique)
+    if ($destinations.Count -ne $targets.Count) { throw 'Mono and IL2CPP deployment targets must be different game installations.' }
 }
 $packages = @()
 foreach ($build in $builds) {
-    $target = $build.Target
+    $target = $build.Target; $name = $build.Mod; $m = Get-TgMod $name
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
-    $stage = Join-Path $PSScriptRoot "artifacts/Packages/TGFrameGeneration-0.5.0-$target-$stamp"
+    $stage = Join-Path $PSScriptRoot "artifacts/Packages/$name-$version-$target-$stamp"
     $records = @()
     foreach ($entry in $build.Files) {
-        $destination = Get-TgfgOwnedPath $stage $entry.Relative
+        $destination = Get-TgOwnedPath $name $stage $entry.Relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
         Copy-Item -LiteralPath $entry.Source -Destination $destination -Force
         $records += [ordered]@{path=$entry.Relative; sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash}
     }
+    $manifestName = Get-TgPackageManifestName $name
     [ordered]@{
-        version='0.5.0'; runtime=$target; framework=(Get-TgfgFramework $target)
-        native_version='0.5.0'; native_abi='0x00050000'; utc=[DateTime]::UtcNow.ToString('o')
-        requires_launcher=$false; steam_startup_validated=$false; rendering_validated=$false
+        mod=$name; title=$m.Title; version=$version; runtime=$target; framework=(Get-TgFramework $target)
+        abi=(Get-TgAbi); bridge=$version
+        utc=[DateTime]::UtcNow.ToString('o'); requires_launcher=$false; rendering_validated=$false
         files=$records
-    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'TGFG-Package-manifest.json') -Encoding UTF8
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage $manifestName) -Encoding UTF8
     # Vortex would otherwise install the payload under its own mod folder rather than the game root.
-    Write-TgfgVortexOverrides $stage
+    Write-TgVortexOverrides $stage
     # Packages contain the BepInEx payload, its manifest and the Vortex mod type: no build tools,
     # launchers or instructions.
-    New-TgfgZip $stage @('BepInEx','TGFG-Package-manifest.json',(Get-TgfgVortexOverrideName)) ($stage + '.zip')
-    $packages += @{Stage=$stage; Game=$build.Metadata.game_dir; Target=$target}
+    New-TgZip $stage @('BepInEx',$manifestName,(Get-TgVortexOverrideName)) ($stage + '.zip')
+    $packages += @{Stage=$stage; Game=$build.Game; Target=$target; Mod=$name}
     Write-Host "Packaged: $stage.zip"
     # The same package under the name it gets on Nexus Mods, replaced by every packaging run.
-    $nexus = Join-Path $PSScriptRoot ('artifacts/Nexus/' + (Get-TgfgNexusName $target))
+    $nexus = Join-Path $PSScriptRoot ('artifacts/Nexus/' + (Get-TgNexusName $name $target))
     New-Item -ItemType Directory -Path (Split-Path -Parent $nexus) -Force | Out-Null
     Copy-Item -LiteralPath ($stage + '.zip') -Destination $nexus -Force
     Write-Host "Nexus download: $nexus"
 }
 if ($Deploy) {
-    foreach ($package in $packages) { Install-TgfgPayload $package.Stage $package.Game $package.Target }
+    foreach ($name in (Get-TgModNames)) {
+        foreach ($package in @($packages | Where-Object { $_.Mod -eq $name })) { Install-TgPayload $package.Mod $package.Stage $package.Game $package.Target -Together $mods }
+    }
+    Write-Host 'Press Play in Steam. No launcher, launch arguments, or app-ID workaround is required by these packages.'
 }
 Write-Host 'Review the NVIDIA, AMD and Intel runtime distribution terms before publishing these runtime-containing packages.'
 Write-Host 'No game EXE, graphics proxy, Doorstop configuration, Steam setting, or existing mod configuration was changed.'

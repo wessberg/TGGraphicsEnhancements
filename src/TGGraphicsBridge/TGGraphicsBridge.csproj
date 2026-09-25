@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- TG Graphics Bridge's BepInEx plugin and the library TG Frame Generation and TG Better Upscaling build
+       on: native status, the game's Video-tab plumbing, mod-manager integration, IL2CPP class
+       injection and the first-person motion-vector fixes. Each of the two mods bundles a copy
+       (BepInEx/plugins/<Mod>/TGGraphicsBridge.dll); BepInEx loads the newest one. -->
+  <Import Project="..\..\Build.Local.props" Condition="Exists('..\..\Build.Local.props')" />
+  <Import Project="..\Game.References.props" />
+  <PropertyGroup>
+    <AssemblyName>TGGraphicsBridge</AssemblyName>
+    <RootNamespace>TGGraphicsBridge</RootNamespace>
+    <Version>1.2.0</Version>
+    <!-- Its XML documentation ships beside it: the API TG Frame Generation and TG Better Upscaling use. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <!-- BepInEx 6 plugin versions, for the report's list of loaded plugins. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <Reference Include="SemanticVersioning" Condition="Exists('$(BepInExCoreDir)\SemanticVersioning.dll')"><HintPath>$(BepInExCoreDir)\SemanticVersioning.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>
