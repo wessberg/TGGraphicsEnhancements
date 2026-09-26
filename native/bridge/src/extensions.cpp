@@ -101,7 +101,11 @@ uint32_t bootstrap() {
         std::to_string(c.extensions.size())+" extension(s) registered; running "+self.parent_path().parent_path().filename().u8string()+"'s copy");
     note_windows();
     // Before the extensions load their runtimes, the first to load d3d12.dll.
-    log(align_agility_sdk());
+    {
+        std::vector<std::wstring> paths;
+        for(const auto& e:c.extensions) paths.push_back(e.path);
+        log(align_agility_sdk(paths));
+    }
     // Extensions install their own detours during their bootstrap, so the registry comes first.
     if(!initialize_hooks()) { log("MinHook initialization failed; no extension is loaded"); c.status.bootstrapped=2; return c.bootstrapResult; }
     // Before the extensions load their runtimes, which may load dxgi.dll and so let other hooks in first.

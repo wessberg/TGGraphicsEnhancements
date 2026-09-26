@@ -14,6 +14,10 @@
 // its target (which also keeps the pass from being culled), reads color, depth and motion, and issues
 // the native render event that copies them to D3D12, upscales, and writes the result back.
 //
+// DLSS Ray Reconstruction takes STP's pass the same way, in place of HDRP's own DLSS, while TG Path
+// Tracing traces and DLSS is the upscaler: it denoises the path-traced frame and upscales it in one step,
+// on the game's D3D11 device, at the chosen DLSS mode's render scale, with TG Path Tracing's guides.
+//
 // The camera's jitter stays HDRP's: for STP it is a Halton(2,3) sequence over HDRP's 1024-frame index
 // (STP.Jit16, despite its name), longer than the 8 x (output / render width)^2 samples AMD and Intel
 // ask as a minimum, and STP itself derives the jitter it removes from that index.
@@ -60,6 +64,11 @@ namespace TGBetterUpscaling
         private static int memoryFull; // consecutive 10 s checks with video memory over 95% of the budget
         // What the game's controller applied last: FSR or XeSS while this mod hosts the camera.
         internal static UpscalerSetting Hosting { get; private set; } = UpscalerSetting.None;
+        // DLSS hosted as Ray Reconstruction (Hosting is DLSS), at NGX's quality level rrMode.
+        private static bool hostingRr;
+        private static uint rrMode;
+        internal static bool RayReconstruction => !failed && hostingRr && Hosting == UpscalerSetting.DLSS;
+        internal static bool Failed => failed;
         private static float hostScale = 100f;
         private static PerformDynamicRes scaler;
         // The frame recorded in DoStpPasses, completed with the texture pointers when the pass executes.
@@ -68,7 +77,7 @@ namespace TGBetterUpscaling
         private static bool armed;
         private static uint sequence;
         private static int lastWidth, lastHeight, lastRenderWidth, lastRenderHeight;
-        private static UpscalerSetting lastTechnology;
+        private static uint lastBackend;
         // The last Unity frame this mod upscaled: a gap means stale FSR/XeSS history, and STP taking
         // over right after it means stale STP history.
         private static int lastHostedFrame = -100; // negative: none since STP last ran
@@ -76,7 +85,7 @@ namespace TGBetterUpscaling
         internal static ulong Fallbacks { get; private set; }
         internal static string Detail { get; private set; } = "Not installed.";
         internal static string LastFrame { get; private set; } = "none yet";
-        internal static bool Active => !failed && (Hosting == UpscalerSetting.FSR || Hosting == UpscalerSetting.XeSS);
+        internal static bool Active => !failed && (Hosting == UpscalerSetting.FSR || Hosting == UpscalerSetting.XeSS || RayReconstruction);
 #if !BEPINEX_IL2CPP
         private static readonly FieldInfo CameraField = AccessTools.Field(typeof(UpScalingController), "_camera");
         private static readonly FieldInfo ProjectionParams = AccessTools.Field(typeof(HDCamera), "projectionParams");
@@ -273,6 +282,12 @@ namespace TGBetterUpscaling
                 if (up == null) return true;
                 UpscalerRow.OnGameApplied(up);
                 int index = up.ActiveIndex;
+                // DLSS as Ray Reconstruction while TG Path Tracing traces: STP's pass, taken over like FSR's.
+                if (index == (int)UpscalerSetting.DLSS && UpScaling.IsDLSSAvailable && UpScaling.IsSTPAvailable && !failed &&
+                    Session.Settings.Mode(UpscalerSetting.DLSS) is QualityMode rrDlss && PathTracingLink.Wanted &&
+                    Session.HaveStatus && Session.Status.Usable(NativeFlags.BackendRayReconstruction) && ConfigureRayReconstruction(__instance, rrDlss))
+                    return false;
+                hostingRr = false;
                 if (index == (int)UpscalerSetting.DLSS && UpScaling.IsDLSSAvailable && Session.Settings.Mode(UpscalerSetting.DLSS) is QualityMode dlss &&
                     ConfigureDlss(__instance, dlss))
                 {
@@ -327,6 +342,27 @@ namespace TGBetterUpscaling
         }
         private static string configured = "";
         private static uint hostMode;
+        // The camera as for STP, at the DLSS mode's render scale, with Ray Reconstruction in STP's place. HDRP
+        // biases texture sampling for the lower render resolution wherever STP runs, as NVIDIA asks for DLSS.
+        private static bool ConfigureRayReconstruction(UpScalingController owner, QualityMode mode)
+        {
+            var camera = CameraOf(owner);
+            if (camera == null) return false;
+            camera.allowDynamicResolution = true;
+            camera.allowDeepLearningSuperSampling = false;
+            camera.deepLearningSuperSamplingUseCustomQualitySettings = false;
+            hostScale = Mathf.Clamp(QualityModes.RenderScale(mode), 10f, 100f);
+            SetScaler();
+            DynamicResolutionHandler.SetActiveDynamicScalerSlot(DynamicResScalerSlot.User);
+            SetMipBias(camera, UpscalerSetting.None);
+            string now = "RR " + mode.Name + " " + hostScale.ToString("0.#");
+            if (now != configured)
+                Session.Log.LogInfo("Upscaling with DLSS Ray Reconstruction " + mode.Name + " at " + hostScale.ToString("0.#") +
+                    "% render scale (HDRP's STP pass is taken over): it denoises TG Path Tracing's light and upscales in one step.");
+            configured = now;
+            Hosting = UpscalerSetting.DLSS; hostingRr = true; rrMode = (uint)mode.Id;
+            return true;
+        }
         // The camera as the game's controller sets it up for STP, for FSR or XeSS in STP's place.
         private static bool Configure(UpScalingController owner, UpscalerSetting upscaler, float scale, QualityMode mode)
         {
@@ -335,6 +371,7 @@ namespace TGBetterUpscaling
             camera.allowDynamicResolution = true;
             camera.allowDeepLearningSuperSampling = false;
             camera.deepLearningSuperSamplingUseCustomQualitySettings = false;
+            hostingRr = false;
             hostScale = Mathf.Clamp(scale, 10f, 100f);
             SetScaler();
             DynamicResolutionHandler.SetActiveDynamicScalerSlot(DynamicResScalerSlot.User);
@@ -430,7 +467,8 @@ namespace TGBetterUpscaling
             try
             {
                 var technology = Hosting;
-                uint backend = technology == UpscalerSetting.FSR ? NativeFlags.BackendFsr : NativeFlags.BackendXess;
+                bool rr = RayReconstruction;
+                uint backend = rr ? NativeFlags.BackendRayReconstruction : technology == UpscalerSetting.FSR ? NativeFlags.BackendFsr : NativeFlags.BackendXess;
                 if (!IsGameplayCamera(hdCamera)) { ++keptCamera; return true; }
                 if (!Session.Upscaler.Connected || !Session.HaveStatus || !Session.Status.Usable(backend)) { ++keptRuntime; return StpRuns(hdCamera); }
                 var camera = hdCamera.camera;
@@ -450,15 +488,15 @@ namespace TGBetterUpscaling
                 bool fsr = technology == UpscalerSetting.FSR;
                 uint flags = SystemInfo.usesReversedZBuffer ? NativeFlags.DepthInverted : 0u;
                 // A gap since the last upscaled frame (STP or None in between) leaves FSR's or XeSS's history stale.
-                if (HistoryReset(hdCamera) || outputWidth != lastWidth || outputHeight != lastHeight || technology != lastTechnology ||
+                if (HistoryReset(hdCamera) || outputWidth != lastWidth || outputHeight != lastHeight || backend != lastBackend ||
                     Time.frameCount - lastHostedFrame > 1) flags |= NativeFlags.Reset;
                 lastHostedFrame = Time.frameCount;
                 if (fsr && settings.AutoExposure.Value) flags |= NativeFlags.FsrAutoExposure;
                 if (fsr && settings.FsrInputChecker.Value) flags |= NativeFlags.FsrDebugCheck;
                 if (fsr && settings.FsrDebugView.Value) flags |= NativeFlags.FsrDebugView;
-                lastWidth = (int)outputWidth; lastHeight = (int)outputHeight; lastTechnology = technology;
+                lastWidth = (int)outputWidth; lastHeight = (int)outputHeight; lastBackend = backend;
                 lastRenderWidth = (int)renderWidth; lastRenderHeight = (int)renderHeight;
-                pending = new UpscaleFrame
+                var request = new UpscaleFrame
                 {
                     Size = NativeUpscaler.FrameSize, Abi = NativeUpscaler.Abi, Sequence = ++sequence, Backend = backend,
                     RenderWidth = renderWidth, RenderHeight = renderHeight, OutputWidth = outputWidth, OutputHeight = outputHeight,
@@ -468,8 +506,10 @@ namespace TGBetterUpscaling
                     CameraNear = near, CameraFar = far, FovY = fov,
                     FrameTimeMs = Mathf.Clamp(DeltaSeconds(hdCamera) * 1000f, 1f, 200f),
                     Sharpness = fsr ? settings.Sharpness : 0f, PreExposure = PreExposure(__instance, hdCamera),
-                    Flags = flags, Mode = technology == UpscalerSetting.XeSS ? hostMode : 0u
+                    Flags = flags, Mode = rr ? rrMode : technology == UpscalerSetting.XeSS ? hostMode : 0u
                 };
+                if (rr) SetCamera(ref request, hdCamera);
+                pending = request;
                 var output = OutputHandle(__instance, hdCamera, renderGraph, "TG Better Upscaling Output");
                 // The output is the pass's color target; color is declared as a second color target so the
                 // graph keeps it alive (it is not handed to the pass's context, which is fine: this mod reads
@@ -492,6 +532,16 @@ namespace TGBetterUpscaling
                 Fail("Recording the upscaling pass failed; STP upscales instead: " + ex);
                 return StpRuns(hdCamera);
             }
+        }
+        // Ray Reconstruction's camera as NVIDIA takes it (row-major, row vectors on the left): the camera's
+        // world-to-view matrix and HDRP's unjittered projection in its GPU form (reversed Z, the render
+        // target's orientation), the clip space HDRP's depth and motion vectors are in.
+        private static unsafe void SetCamera(ref UpscaleFrame frame, HDCamera hd)
+        {
+            Matrix4x4 view = hd.camera.worldToCameraMatrix, projection = hd.mainViewConstants.nonJitteredProjMatrix;
+            fixed (float* w = frame.WorldToView, c = frame.ViewToClip)
+                for (int r = 0; r < 4; r++)
+                    for (int k = 0; k < 4; k++) { w[r * 4 + k] = view[k, r]; c[r * 4 + k] = projection[k, r]; }
         }
         // STP upscales this frame. Right after a frame this mod upscaled, STP's history is from before
         // FSR or XeSS took over, so it starts afresh (HDRP reads this in PopulateStpConfig, next).
@@ -530,12 +580,19 @@ namespace TGBetterUpscaling
                 var frame = pending;
                 frame.Color = unchecked((ulong)color.ToInt64()); frame.Depth = unchecked((ulong)depth.ToInt64());
                 frame.Motion = unchecked((ulong)motion.ToInt64()); frame.Output = unchecked((ulong)output.ToInt64());
+                bool rr = frame.Backend == NativeFlags.BackendRayReconstruction;
+                // Ray Reconstruction's guides are TG Path Tracing's, written earlier in this frame.
+                if (rr && !PathTracingLink.TryGuides(frame.RenderWidth, frame.RenderHeight, out frame.DiffuseAlbedo, out frame.SpecularAlbedo, out frame.NormalRoughness))
+                {
+                    Fallback(ctx, source, "TG Path Tracing wrote no Ray Reconstruction guides this frame"); return;
+                }
                 int result = Session.Upscaler.SubmitFrame(ref frame);
                 if (result != 0) { Fallback(ctx, source, "the native side refused the frame (" + result + ")"); return; }
                 // One event: the request carries its destination, so the native side upscales and writes it.
                 ctx.cmd.IssuePluginEventAndData(Session.Upscaler.RenderEvent, UpscaleEvent, new IntPtr((long)frame.Sequence));
                 ++Frames; ++submitted;
-                LastFrame = (frame.Backend == NativeFlags.BackendFsr ? "FSR" : "XeSS") + " " + frame.RenderWidth + "x" + frame.RenderHeight +
+                if (rr && Session.RayReconstructionSucceeding()) PathTracingLink.Ran(Time.frameCount);
+                LastFrame = (rr ? "DLSS Ray Reconstruction" : frame.Backend == NativeFlags.BackendFsr ? "FSR" : "XeSS") + " " + frame.RenderWidth + "x" + frame.RenderHeight +
                     " -> " + frame.OutputWidth + "x" + frame.OutputHeight;
             }
             catch (Exception ex)
@@ -561,7 +618,7 @@ namespace TGBetterUpscaling
             Session.Log.LogError(message);
         }
         internal static string Describe() =>
-            Detail + " | hosting " + Hosting + (failed ? " (disabled after an error)" : "") + " at " + hostScale.ToString("0.#") + "% | frames " + Frames +
+            Detail + " | hosting " + (RayReconstruction ? "DLSS Ray Reconstruction" : Hosting.ToString()) + (failed ? " (disabled after an error)" : "") + " at " + hostScale.ToString("0.#") + "% | frames " + Frames +
             ", managed fallbacks " + Fallbacks + " | last: " + LastFrame;
         internal static void Dispose()
         {
@@ -570,7 +627,7 @@ namespace TGBetterUpscaling
             try { installed?.UnpatchSelf(); } catch (Exception ex) { Session.Log?.LogWarning("Upscaling unpatch failed: " + ex.Message); }
             if (host != null) UnityEngine.Object.Destroy(host);
             host = null; volume = null; pass = null; armed = false; presetsHooked = false;
-            Hosting = UpscalerSetting.None;
+            Hosting = UpscalerSetting.None; hostingRr = false;
             try { SetMipBias(null, UpscalerSetting.None); } catch (Exception ex) { Session.Log?.LogWarning("Could not restore the camera's mip bias: " + ex.Message); }
         }
     }

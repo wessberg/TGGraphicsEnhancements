@@ -1,0 +1,30 @@
+// Generated at build time: the path tracing passes compiled by DXC from the HLSL in
+// native/pathtracing/shaders: Shader Model 6.6 (each with the shared root signature embedded), the same
+// in Shader Model 6.9 for DirectX Raytracing 1.2 (<name>Dxr12), and the GI and reflection passes as ray
+// generation libraries with Shader Execution Reordering (<name>Ser).
+#pragma once
+namespace tgpt::shaders {
+#include "pt_prepare.h"
+#include "pt_gi.h"
+#include "pt_gi_spatial.h"
+#include "pt_di.h"
+#include "pt_di_spatial.h"
+#include "pt_specular.h"
+#include "pt_temporal.h"
+#include "pt_atrous.h"
+#include "pt_compose.h"
+#include "pt_omm_bake.h"
+#include "pt_rrg_guides.h"
+#include "pt_skin.h"
+#include "pt_prepare_dxr12.h"
+#include "pt_gi_dxr12.h"
+#include "pt_gi_spatial_dxr12.h"
+#include "pt_di_dxr12.h"
+#include "pt_di_spatial_dxr12.h"
+#include "pt_specular_dxr12.h"
+#include "pt_temporal_dxr12.h"
+#include "pt_atrous_dxr12.h"
+#include "pt_compose_dxr12.h"
+#include "pt_gi_ser.h"
+#include "pt_specular_ser.h"
+}

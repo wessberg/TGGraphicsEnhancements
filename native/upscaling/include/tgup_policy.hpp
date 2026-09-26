@@ -52,14 +52,20 @@ inline bool finite_all(std::initializer_list<float> values) {
 // The mode a request names: XeSS takes its preset (or 0 to choose by ratio); FSR has no mode input.
 inline bool valid_mode(uint32_t backend, uint32_t mode) {
     if(backend==TGUP_BACKEND_XESS) return mode==0 || (mode>=uint32_t(XessPreset::UltraPerformance) && mode<=uint32_t(XessPreset::NativeAA));
+    if(backend==TGUP_BACKEND_RAY_RECONSTRUCTION) return mode<=5; // NGX: MaxPerf, Balanced, MaxQuality, UltraPerformance, UltraQuality, DLAA
     return mode==0;
 }
 // The request the plugin sends; anything outside these bounds is refused before the GPU sees it.
 inline bool valid(const TGUP_Frame& f) {
     if(f.size!=sizeof(TGUP_Frame) || f.abi!=TGUP_ABI) return false;
-    if(f.backend!=TGUP_BACKEND_FSR && f.backend!=TGUP_BACKEND_XESS) return false;
-    // The output may follow in TGUP_SetOutput, from the pass that declares HDRP's destination.
+    if(f.backend!=TGUP_BACKEND_FSR && f.backend!=TGUP_BACKEND_XESS && f.backend!=TGUP_BACKEND_RAY_RECONSTRUCTION) return false;
+    // The output may follow in TGUP_SetOutput, from the pass that declares HDRP's destination; Ray
+    // Reconstruction's comes with the request, as do its guides.
     if(!f.color || !f.depth || !f.motion) return false;
+    const bool rr=f.backend==TGUP_BACKEND_RAY_RECONSTRUCTION;
+    if(rr && (!f.output || !f.diffuseAlbedo || !f.specularAlbedo || !f.normalRoughness)) return false;
+    for(int i=0;i<16 && rr;++i) if(!std::isfinite(f.worldToView[i]) || !std::isfinite(f.viewToClip[i])) return false;
+    if(!rr && (f.diffuseAlbedo || f.specularAlbedo || f.normalRoughness)) return false;
     if(!f.renderWidth || !f.renderHeight || !f.outputWidth || !f.outputHeight) return false;
     if(f.outputWidth>16384 || f.outputHeight>16384) return false;
     if(f.renderWidth>f.outputWidth || f.renderHeight>f.outputHeight) return false; // upscaling, never down

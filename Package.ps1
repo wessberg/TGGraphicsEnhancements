@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
-# Packages (and with -Deploy installs) existing builds of the two mods in THIS repository: one zip per
+# Packages (and with -Deploy installs) existing builds of the mods in THIS repository: one zip per
 # mod and runtime, each holding only its BepInEx payload (with its copy of TG Graphics Bridge), its
 # manifest and the Vortex mod type.
 [CmdletBinding()]
 param(
     [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
-    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling')][string]$Mod = 'All',
+    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling','TGPathTracing')][string]$Mod = 'All',
     [switch]$Deploy
 )
 $ErrorActionPreference = 'Stop'
@@ -67,6 +67,7 @@ foreach ($target in $targets) {
         $metadata.framework -ne (Get-TgFramework $target)) { throw "Rebuild the managed assemblies for $target using Build.ps1." }
     if ($Deploy) { Assert-TgGame $metadata.game_dir $target }
     foreach ($name in $mods) {
+        if (-not (Test-TgModRuntime $name $target)) { Write-Host "$name has no $target version; skipped."; continue }
         $files = @()
         foreach ($entry in (Get-TgMod $name).Managed) {
             $path = Join-Path $root $entry.Relative

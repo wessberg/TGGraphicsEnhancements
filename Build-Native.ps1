@@ -8,6 +8,8 @@ param(
     [string]$FidelityFXRoot='',
     [string]$XeSSRoot='',
     [string]$AntiLag2Root='',
+    # NVIDIA DLSS SDK release (github.com/NVIDIA/DLSS): the NGX headers and static library for DLSS Ray Reconstruction.
+    [string]$DlssRoot='',
     [string]$MinHookRoot='',
     [string]$Generator='Visual Studio 17 2022'
 )
@@ -20,6 +22,8 @@ $NgxIncludeDir=(Resolve-Path $NgxIncludeDir).Path
 if(-not $FidelityFXRoot) { $FidelityFXRoot=Join-Path $PSScriptRoot 'FidelityFX-SDK-2.3.0' }
 if(-not $XeSSRoot) { $XeSSRoot=Join-Path $PSScriptRoot 'XeSS-SDK-3.0.2' }
 if(-not $AntiLag2Root) { $AntiLag2Root=Join-Path $PSScriptRoot 'AntiLag2-SDK-2.0.0a' }
+if(-not $DlssRoot) { $DlssRoot=Join-Path $PSScriptRoot 'DLSS-SDK-310.9.1' }
+$DlssRoot=(Resolve-Path $DlssRoot).Path
 $FidelityFXRoot=(Resolve-Path $FidelityFXRoot).Path
 $XeSSRoot=(Resolve-Path $XeSSRoot).Path
 $AntiLag2Root=(Resolve-Path $AntiLag2Root).Path
@@ -29,7 +33,7 @@ if($Generator -like 'Visual Studio*') { $generatorArgs+=@('-A','x64') }
 else { $generatorArgs+='-DCMAKE_BUILD_TYPE=Release' } # single-config generators ignore --config
 $args=@('-S',$PSScriptRoot,'-B',$build)+$generatorArgs+(
     '-DTGFG_BUILD_NATIVE=ON','-DBUILD_TESTING=ON',"-DSTREAMLINE_ROOT=$StreamlineRoot","-DNGX_INCLUDE_DIR=$NgxIncludeDir",
-    "-DFIDELITYFX_ROOT=$FidelityFXRoot","-DXESS_ROOT=$XeSSRoot","-DANTILAG2_ROOT=$AntiLag2Root")
+    "-DFIDELITYFX_ROOT=$FidelityFXRoot","-DXESS_ROOT=$XeSSRoot","-DANTILAG2_ROOT=$AntiLag2Root","-DDLSS_ROOT=$DlssRoot")
 if($MinHookRoot) { $args+="-DMINHOOK_ROOT=$((Resolve-Path $MinHookRoot).Path)" }
 & cmake @args
 if($LASTEXITCODE -ne 0) { throw 'Native CMake configure failed.' }
@@ -44,4 +48,4 @@ if($LASTEXITCODE -ne 0) { throw 'Native policy, HLSL or GPU smoke tests failed.'
 & (Join-Path $PSScriptRoot 'tools\Write-NativeManifest.ps1') -Stage $stage -Headers @{
     streamline_headers=$StreamlineRoot; ngx_headers=$NgxIncludeDir; fidelityfx_headers=$FidelityFXRoot
     xess_headers=$XeSSRoot; antilag2_headers=$AntiLag2Root }
-Write-Host "Native files staged to $stage. Add the NVIDIA, AMD and Intel runtimes using Stage-Runtime.ps1. No game installation was touched."
+Write-Host "Native files staged to $stage. Add the NVIDIA, AMD, Intel and Microsoft (Agility SDK) runtimes using Stage-Runtime.ps1. No game installation was touched."

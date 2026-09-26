@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The game's D3D11 device, as the swapchain hooks see it (the real device, underneath any wrapper),
 // and the one private D3D12 device every extension shares.
+#include "agility.hpp"
 #include "core.hpp"
 #include "diagnostics.hpp"
 #include <algorithm>
@@ -80,6 +81,7 @@ bool create_d3d12_device_locked() {
         if(device) log("Shared D3D12 device created on the game's adapter");
     }
     if(!device) {
+        note_agility_device(false);
         set_fact("d3d12.device", "failed "+std::to_string(attempt)+" of "+std::to_string(kDeviceAttempts));
         log("No D3D12 device (attempt "+std::to_string(attempt)+" of "+std::to_string(kDeviceAttempts)+")"+retry); return false;
     }
@@ -89,6 +91,7 @@ bool create_d3d12_device_locked() {
         log("The D3D12 device is not on the game's adapter; it is not used"); return false;
     }
     set_fact("d3d12.device", "ready");
+    note_agility_device(true);
     c.device=device; c.devicePtr.store(device.Get());
     c.status.d3d12DeviceReady=1;
     for(auto& e:c.extensions)

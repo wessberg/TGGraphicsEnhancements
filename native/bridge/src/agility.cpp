@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "agility.hpp"
+#include "core.hpp"
 #include "diagnostics.hpp"
 #include <windows.h>
 #include <cstdint>
@@ -85,10 +86,78 @@ std::string outcome(const char* state, uint32_t requested, uint32_t system, uint
 }
 } // namespace
 
-std::string align_agility_sdk() {
+// The note of an extension runtime Direct3D 12 failed on (see note_agility_device), beside the bridge's log.
+std::filesystem::path failure_note() { return std::filesystem::path(core().root)/L"agility-extension-failed.txt"; }
+std::string redirectedKey; // this start's extension runtime and Windows' own, when the request names it
+
+// An extension's newer runtime (see agility.hpp): true when the request now names it. line: what was found,
+// empty when no extension ships one that applies.
+bool use_extension_runtime(const std::vector<std::wstring>& extensions, uint32_t* requested, const char** folder,
+                           uint32_t wanted, uint32_t windows, uint32_t otherwise, const std::string& prefix, std::string& line) {
+    const auto exeDir=module_file(GetModuleHandleW(nullptr)).parent_path();
+    std::filesystem::path best; uint32_t newest=0;
+    for(const auto& extension:extensions) {
+        const auto core=std::filesystem::path(extension).parent_path()/L"D3D12"/L"D3D12Core.dll";
+        std::error_code missing;
+        uint32_t version=0;
+        if(!std::filesystem::exists(core, missing) || !exported_sdk_version(core, version)) continue;
+        if(version<600 || version>=700 || version<=newest) continue;
+        newest=version; best=core.parent_path();
+    }
+    // Only newer than whatever would serve without it: Windows' own, or the game's file (not only its request).
+    if(!newest || newest<=windows || newest<=wanted || newest<=otherwise) return false;
+    const std::string offered=prefix+"; an extension ships Agility SDK "+std::to_string(newest)+" ("+narrow(best.wstring())+")";
+    // What the note is about: this runtime, Windows' own and the Windows build (an update tries again).
+    const std::string key=std::to_string(newest)+" on "+std::to_string(windows)+", Windows build "+fact("windows.build");
+    {
+        std::ifstream note(failure_note());
+        std::string previous;
+        if(note && std::getline(note, previous) && previous==key) {
+            line=outcome("extension-failed-before", wanted, windows, newest, offered+", but Direct3D 12 could not create a device with it on the last "
+                "start, so it is not used (a newer runtime or Windows update tries it again; so does deleting "+narrow(failure_note().wstring())+")");
+            return false;
+        }
+    }
+    std::error_code error;
+    const auto relative=std::filesystem::relative(best, exeDir, error);
+    bool inside=!error && !relative.empty();
+    for(const auto& part:relative) if(part==L"..") inside=false;
+    if(!inside) { line=outcome("extension-outside", wanted, windows, newest, offered+" outside the game folder, so it is not used"); return false; }
+    if(!trusted_signer((best/L"D3D12Core.dll").wstring(), L"MICROSOFT")) { line=outcome("extension-unsigned", wanted, windows, newest, offered+" that is not Microsoft-signed, so it is not used"); return false; }
+    if(GetModuleHandleW(L"d3d12.dll")) { line=outcome("too-late", wanted, windows, newest, offered+"; something loaded d3d12.dll before TG Graphics Bridge started, so it is not used"); return false; }
+    // The exe's D3D12SDKPath export is a pointer to its string: it is pointed at this module's copy of the path.
+    static std::string path;
+    path=".\\"+narrow(relative.wstring())+"\\";
+    DWORD protection=0, pathProtection=0;
+    if(!VirtualProtect(requested, sizeof(*requested), PAGE_READWRITE, &protection)) { line=outcome("failed", wanted, windows, newest, offered+"; pointing the game's request at it failed (error "+std::to_string(GetLastError())+")"); return false; }
+    if(!VirtualProtect(folder, sizeof(*folder), PAGE_READWRITE, &pathProtection)) {
+        VirtualProtect(requested, sizeof(*requested), protection, &protection);
+        line=outcome("failed", wanted, windows, newest, offered+"; pointing the game's request at it failed (error "+std::to_string(GetLastError())+")");
+        return false;
+    }
+    *requested=newest; *folder=path.c_str();
+    redirectedKey=key;
+    VirtualProtect(folder, sizeof(*folder), pathProtection, &pathProtection);
+    VirtualProtect(requested, sizeof(*requested), protection, &protection);
+    line=outcome("extension", wanted, windows, newest, offered+", newer than Windows' "+std::to_string(windows)+": the game's request now names it, from "+path);
+    return true;
+}
+
+void note_agility_device(bool created) {
+    if(redirectedKey.empty()) return;
+    std::error_code error;
+    // A later attempt that succeeds takes a failed one's note back.
+    if(created) { std::filesystem::remove(failure_note(), error); return; }
+    std::ofstream note(failure_note(), std::ios::trunc);
+    note<<redirectedKey<<"\n";
+    log("Direct3D 12 could not create a device with the extension's Agility SDK runtime ("+redirectedKey+
+        "); unless a later attempt succeeds, the next start uses Windows' or the game's runtime instead");
+}
+
+std::string align_agility_sdk(const std::vector<std::wstring>& extensions) {
     const HMODULE exe=GetModuleHandleW(nullptr);
     auto* const requested=reinterpret_cast<uint32_t*>(GetProcAddress(exe, "D3D12SDKVersion"));
-    auto* const folder=reinterpret_cast<const char* const*>(GetProcAddress(exe, "D3D12SDKPath"));
+    auto* const folder=reinterpret_cast<const char**>(GetProcAddress(exe, "D3D12SDKPath"));
     if(!requested || !folder || !*folder) return outcome("none", 0, 0, 0, "Direct3D 12: the game names no Agility SDK, so Windows' own runtime serves every device");
     const uint32_t wanted=*requested;
     const std::string prefix="Direct3D 12: the game asks for Agility SDK "+std::to_string(wanted)+" from "+*folder;
@@ -97,10 +166,17 @@ std::string align_agility_sdk() {
     uint32_t windows=0;
     if(!length || length>=MAX_PATH || !exported_sdk_version(std::filesystem::path(system)/L"D3D12Core.dll", windows))
         return outcome("system", wanted, 0, 0, prefix+"; this Windows has no Agility SDK support, so its own runtime is used");
-    if(windows>=wanted) return outcome("system", wanted, windows, 0, prefix+"; Windows' own runtime is "+std::to_string(windows)+", so that one is used");
+    // What serves without an extension's runtime: Windows' own when it is at least the request, otherwise the
+    // game's own file, whichever version that is (a mismatch with the request is corrected below).
     const auto shipped=module_file(exe).parent_path()/std::filesystem::path(*folder)/L"D3D12Core.dll";
     uint32_t available=0;
-    if(!exported_sdk_version(shipped, available))
+    const bool readable=windows<wanted && exported_sdk_version(shipped, available);
+    const uint32_t otherwise=windows>=wanted ? windows : (readable ? available : wanted);
+    std::string redirected;
+    if(use_extension_runtime(extensions, requested, folder, wanted, windows, otherwise, prefix, redirected)) return redirected;
+    if(!redirected.empty()) log(redirected);
+    if(windows>=wanted) return outcome("system", wanted, windows, 0, prefix+"; Windows' own runtime is "+std::to_string(windows)+", so that one is used");
+    if(!readable)
         return outcome("unreadable", wanted, windows, 0, prefix+"; Windows' own runtime is "+std::to_string(windows)+" and the game's D3D12Core.dll could not be read, so D3D12 devices may fail");
     if(available==wanted) return outcome("shipped", wanted, windows, available, prefix+"; Windows' own runtime is "+std::to_string(windows)+", so the game's D3D12Core.dll is used");
     const std::string found=prefix+" but ships D3D12Core.dll "+std::to_string(available)+". Windows' own runtime is "+std::to_string(windows)+

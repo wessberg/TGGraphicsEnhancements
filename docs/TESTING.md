@@ -182,6 +182,97 @@ Start with both mods installed and every setting as the previous session left it
     `Observed D3D11 DLSS SR feature` line shows `quality=` the chosen mode's NGX level (2 Quality, 1
     Balanced, 0 Performance, 3 Ultra Performance, 5 DLAA) and `preset hints` all 0 (the DLL's default).
 
+## TG Path Tracing (Mono)
+
+Offline first: `ctest --test-dir build/native -R tgpt_gpu_test` must pass and its PNGs in
+`build/native/tgpt-images` look right (`1-path-tracing.png` lights the room's shadowed ceiling and shows the
+box's and the checkered leaf's sun shadows and the warm point light). Its `noise`
+lines measure the built-in denoiser against an undenoised converged frame (48 frames of 8 rays a pixel
+without the denoiser, averaged, the camera still), still, jittered and moving, by day and at night with 24
+torches and a light over the checkered leaf, on flat and on normal-mapped walls; a denoised reference would
+blur like the denoiser and hide it. `17-full-still.png` against `18-full-still-reference.png` shows the sun's
+sharp shadows (the floor's error must stay under 6%), `19`/`20` the night, and `21` to `26` the night's direct
+and bounced light apart, with and without ReSTIR's spatial reuse (`night floor` lines: the mean ratio says
+whether light is lost). Compare them before and after a change to the tracer or the denoiser.
+
+1. Start: BepInEx logs `TG Path Tracing 1.2.0 loaded`, `Hooked HDRP's RenderSSR ...` and `Path tracing
+   is available on this GPU`; `BepInEx/TGPathTracing/Native/TGPathTracing.Native.log` has `Shared D3D12
+   device: DirectX Raytracing tier ...` and, on the first gameplay frame, `Path tracing ready` and
+   `Render size WxH`. The bridge log registers the extension beside the others.
+2. In gameplay (Path Tracing Full, the default): every 10 s BepInEx logs `Path tracing hook 10s:`
+   with `recorded`, `executed` and `handed to the native side` equal and non-zero, and `Path tracing:`
+   with the scene (objects, Drake, terrain, vegetation counts, meshes to register falling to 0) and
+   lights; the native log's `Path tracing 10s:` has `composited` close to `frames`, `gpuWaits=0`, the
+   GPU time and the render-thread split. Shadowed areas and interiors get coloured bounce light;
+   HDRP's baked indirect light is gone (`Replace HDRP indirect light`). An earlier version's config with
+   `Mode = Global Illumination` comes up as Full, and its `Indirect intensity` line is gone.
+3. Debug views (Shift+Insert): Normals and Albedo line up with the scene (not upside down or shifted);
+   Coverage colours most buildings, rocks, trees and terrain, dark where only HDRP draws (characters,
+   grass); Materials shows textures where the objects are; Indirect is smooth after a second of
+   standing still and follows the camera without trails.
+4. Sun shadows are traced (trees included), torches and lamps light their surroundings with traced
+   shadows, reflections on wet or metallic surfaces come from the traced scene. Insert turns path tracing
+   off and on: compare with Off at the same spot for brightness, the same order of magnitude, no black or
+   white surfaces.
+5. Walk and turn quickly: no smearing of bounce light behind the camera's motion beyond a frame, no
+   flicker along silhouettes worse than a few pixels. Fast travel or load a save: the scene rebuilds
+   (meshes to register rises, then falls) without errors.
+6. Performance: note the frame rate with Off and Full, and the native log's GPU
+   time; Bounces 1 and Spatial Samples 2 should cost clearly less.
+7. With TG Frame Generation and TG Better Upscaling on: all three still work; frame generation's
+   pipeline line unchanged.
+8. DirectX Raytracing 1.2 (GeForce RTX 40/50 with a current driver): the bridge log's `Direct3D 12:`
+   line names Agility SDK 619 from `BepInEx\TGPathTracing\Native\D3D12\` (`the game's request now
+   names it`); the native log's `Shared D3D12 device:` line says `DirectX Raytracing 1.2 (opacity
+   micromaps) available; Shader Execution Reordering reorders`, and `Path tracing ready:` says `Shader
+   Model 6.9 passes (opacity micromaps, Shader Execution Reordering)`. After a minute in a forest, the
+   10 s line's `micromaps:` has meshes above 0 and `waiting` near 0; the overlay's path tracing line
+   says `DirectX Raytracing 1.2 with Shader Execution Reordering, opacity micromaps on N meshes`. Leaf
+   shadows look as before. Compare the GPU time with a GPU or driver without DXR 1.2, if one is at hand.
+Offline, the mods together: `ctest --test-dir build/native -R tgup_gpu_smoke` runs upscaling alone, with TG
+Path Tracing (`tgup_gpu_smoke_with_pt`, Ray Reconstruction), and installed as in BepInEx with frame generation
+(`tgup_gpu_smoke_fg_installed`) and with all three (`tgup_gpu_smoke_all_mods`). Frame generation's Streamline
+only starts beside a Unity player: copy the game's `UnityPlayer.dll` next to `build/native/tgup_gpu_smoke.exe`,
+or those two runs cover frame generation's FSR and XeSS paths only (the test prints whether Streamline ran).
+
+10. RenoDX DLSS 5, at each DirectNeuralRenderingHookStage (0 Render, 1 Upscaled, 2 Present in ReShade.ini
+   [RENODX-DLSS]), with all three mods, DLSS selected and Denoising on Ray Reconstruction: DLSS 5's effect and
+   Ray Reconstruction both show, the overlay says `DLSS Ray Reconstruction`, and at no stage does a glow appear
+   over the image or the menus (compare with Path Tracing Off; at Present the add-on processes menus too).
+   Without DLSS 5, turning path tracing on logs `NGX starts for it when TG Path Tracing first asks` once and
+   then `DLSS Ray Reconstruction created ... nvngx_dlssd.dll loaded from ...` (one module, TG Better
+   Upscaling's). A refused frame (`Upscaling refused a frame`) gives TG Path Tracing its own denoiser back
+   for half a second, without trails.
+
+9. Denoisers, with Denoising never picked (it starts on the best). NVIDIA with TG Better Upscaling and DLSS selected: the
+   overlay says `DLSS Ray Reconstruction`, TG Better Upscaling's line says it upscales with Ray
+   Reconstruction, and the lighting is clean without the built-in denoiser's blur; Built-in switches
+   back. A Radeon RX 9000: the native log has `AMD Ray Regeneration available on this GPU` and
+   `AMD Ray Regeneration context for WxH`, the overlay says `AMD Ray Regeneration`; any `AMD Ray
+   Regeneration failed` or `could not start` line means the built-in denoiser took over. Other GPUs log
+   that Ray Regeneration needs an RX 9000.
+11. The Video settings: a Path Tracing row after the upscaling and frame generation rows, with its options nested
+   under it only while it is on (the row offers Off and Full); FoA Mod Manager
+   shows exactly the same rows in the same order, and a change on either side shows on the other after the
+   settings close. Denoising lists None, Built-in, Ray Regeneration (RX 9000 only) and Ray Reconstruction (NVIDIA
+   with TG Better Upscaling), and starts on the best of them; Restore Defaults picks it again. Ray Reconstruction
+   with FSR or XeSS upscaling: its tooltip says to select DLSS, the overlay says built-in denoiser. With DLSS 5
+   loaded, Denoising still starts on Ray Reconstruction and it runs. Indirect Color at 3 visibly tints surfaces
+   next to strongly colored ones (the Indirect debug view shows it), at 0 the bounced light is grey, and neither
+   changes its brightness. An earlier version's config
+   (`Denoiser = Auto`) becomes Denoising on the best; `Denoiser = Built-in` stays Built-in. With FoA Mod Manager
+   open in game, frame generation's pipeline line shows it suspended (0x2) without fgOn bursts.
+12. Characters: people sitting on a bench cast shadows onto it and the floor, their arms shade their
+   bodies, and the floor under them is darker than around them; hair casts no card-shaped shadows. BepInEx logs
+   `Characters: their traced vertices sit where the game draws them` once, a `Characters: shader ...` line per
+   character shader (traced, traced solid, or left out), the 10 s path tracing line has `characters N renderers`,
+   and the native log's 10 s line `characters=N (Mk triangles)`. `A character is left out` warnings name what
+   failed. Arches, walls and floors near the camera show no black patches in their shape, standing still or
+   walking up to them; covered stairwells and rooms stay dark. The scene line counts shadow-only and other-layer
+   Drake entities, and `Traced though the camera does not draw it` lines name such objects.
+   Straw on a floor shows no black blocks under it; a rope net casts its pattern on the wall behind it. Reflection
+   Boost at 1 turns floors and walls into near-mirrors of the room; 0 looks as before.
+
 ## Performance overlay
 
 1. Performance Overlay is the last row of the Video settings, once, with both mods installed as well.

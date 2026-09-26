@@ -6,23 +6,31 @@
 #   TGFrameGeneration/XeSS         Intel XeSS Frame Generation and XeLL
 #   TGBetterUpscaling/FidelityFX   AMD FSR API loader and upscaler (FSR 4 and FSR 3.1)
 #   TGBetterUpscaling/XeSS         Intel XeSS Super Resolution
-#   TGBetterUpscaling/DLSS         NVIDIA DLSS Super Resolution, for the game's own DLSS
+#   TGBetterUpscaling/DLSS         NVIDIA DLSS Super Resolution, for the game's own DLSS, and DLSS Ray
+#                                  Reconstruction, for TG Path Tracing's frames
+#   TGPathTracing/FidelityFX       AMD FSR API loader and FSR Ray Regeneration (the denoiser, Radeon RX 9000)
+#   TGPathTracing/D3D12            Microsoft's DirectX 12 Agility SDK runtime (D3D12Core.dll), for Shader
+#                                  Model 6.9 and DirectX Raytracing 1.2 where Windows' own runtime is older
 [CmdletBinding()]
 param(
     # NVIDIA Streamline production runtime folder (bin/x64 of the Streamline SDK release).
     [string]$RuntimeDirectory='',
     # AMD FSR SDK: bin/amd_fidelityfx_loader_dx12.dll, bin/amd_fidelityfx_framegeneration_dx12.dll,
-    # bin/amd_fidelityfx_upscaler_dx12.dll, Kits/FidelityFX/docs/license.md.
+    # bin/amd_fidelityfx_upscaler_dx12.dll, bin/amd_fidelityfx_denoiser_dx12.dll (Kits/FidelityFX/signedbin
+    # of the SDK's repository), Kits/FidelityFX/docs/license.md.
     [string]$FidelityFXRoot='',
     # Intel XeSS SDK: bin/libxess.dll, bin/libxess_fg.dll, bin/libxell.dll, LICENSE.txt.
     [string]$XeSSRoot='',
-    # NVIDIA DLSS SDK release (github.com/NVIDIA/DLSS): lib/Windows_x86_64/rel/nvngx_dlss.dll, LICENSE.txt.
-    [string]$DlssRoot=''
+    # NVIDIA DLSS SDK release (github.com/NVIDIA/DLSS): lib/Windows_x86_64/rel/nvngx_dlss.dll and nvngx_dlssd.dll, LICENSE.txt.
+    [string]$DlssRoot='',
+    # DirectX 12 Agility SDK (the Microsoft.Direct3D.D3D12 NuGet package, unpacked): build/native/bin/x64/D3D12Core.dll
+    # or bin/x64/D3D12Core.dll, LICENSE.txt.
+    [string]$AgilityRoot=''
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if(-not ($RuntimeDirectory -or $FidelityFXRoot -or $XeSSRoot -or $DlssRoot)) {
-    throw 'Pass -RuntimeDirectory (NVIDIA Streamline), -FidelityFXRoot (AMD FSR), -XeSSRoot (Intel XeSS) and/or -DlssRoot (NVIDIA DLSS).'
+if(-not ($RuntimeDirectory -or $FidelityFXRoot -or $XeSSRoot -or $DlssRoot -or $AgilityRoot)) {
+    throw 'Pass -RuntimeDirectory (NVIDIA Streamline), -FidelityFXRoot (AMD FSR), -XeSSRoot (Intel XeSS), -DlssRoot (NVIDIA DLSS) and/or -AgilityRoot (DirectX 12 Agility SDK).'
 }
 $native=Join-Path $PSScriptRoot 'artifacts\Native'
 function Assert-Signed([string]$Path,[string]$Signer) {
@@ -90,6 +98,8 @@ if($FidelityFXRoot) {
         Files=@((Join-Path $root 'bin\amd_fidelityfx_loader_dx12.dll'),(Join-Path $root 'bin\amd_fidelityfx_framegeneration_dx12.dll'))}
     $vendors+=@{Folder='TGBetterUpscaling\FidelityFX'; Signer='Advanced Micro Devices'; Notice=$notice;
         Files=@((Join-Path $root 'bin\amd_fidelityfx_loader_dx12.dll'),(Join-Path $root 'bin\amd_fidelityfx_upscaler_dx12.dll'))}
+    $vendors+=@{Folder='TGPathTracing\FidelityFX'; Signer='Advanced Micro Devices'; Notice=$notice;
+        Files=@((Join-Path $root 'bin\amd_fidelityfx_loader_dx12.dll'),(Join-Path $root 'bin\amd_fidelityfx_denoiser_dx12.dll'))}
 }
 if($XeSSRoot) {
     $root=(Resolve-Path $XeSSRoot).Path
@@ -99,12 +109,22 @@ if($XeSSRoot) {
     $vendors+=@{Folder='TGBetterUpscaling\XeSS'; Signer='Intel Corporation'; Notice=$notice;
         Files=@((Join-Path $root 'bin\libxess.dll'))}
 }
-# The DLSS Super Resolution DLL the game's own DLSS gets when its nvngx_dlss.dll is older, under the
-# NVIDIA RTX SDKs license of the same DLSS SDK release.
+# The DLSS Super Resolution DLL the game's own DLSS gets when its nvngx_dlss.dll is older, and the DLSS Ray
+# Reconstruction DLL TG Better Upscaling loads through NGX for TG Path Tracing's frames, under the NVIDIA
+# RTX SDKs license of the same DLSS SDK release.
 if($DlssRoot) {
     $root=(Resolve-Path $DlssRoot).Path
     $vendors+=@{Folder='TGBetterUpscaling\DLSS'; Signer='NVIDIA'; Notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-NVIDIA-RTX-SDKs.txt'};
-        Files=@((Join-Path $root 'lib\Windows_x86_64\rel\nvngx_dlss.dll'))}
+        Files=@((Join-Path $root 'lib\Windows_x86_64\rel\nvngx_dlss.dll'),(Join-Path $root 'lib\Windows_x86_64\rel\nvngx_dlssd.dll'))}
+}
+# The Agility SDK runtime TG Graphics Bridge points the game's Direct3D 12 at when Windows' own is older
+# (native/bridge/src/agility.cpp): TG Path Tracing's Shader Model 6.9 passes need it on most Windows builds.
+if($AgilityRoot) {
+    $root=(Resolve-Path $AgilityRoot).Path
+    $core=@((Join-Path $root 'build\native\bin\x64\D3D12Core.dll'),(Join-Path $root 'bin\x64\D3D12Core.dll')) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if(-not $core) { $core=Join-Path $root 'bin\x64\D3D12Core.dll' }
+    $vendors+=@{Folder='TGPathTracing\D3D12'; Signer='Microsoft Corporation'; Notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-DirectX-Agility-SDK.txt'};
+        Files=@($core)}
 }
 foreach($vendor in $vendors) {
     foreach($path in $vendor.Files) {

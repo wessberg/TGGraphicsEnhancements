@@ -300,6 +300,16 @@ namespace TGBetterUpscaling
             SyncModeRows();
             ApplyRefreshing(owner);
         }
+        // Something the camera setup depends on changed outside the Video tab (TG Path Tracing starting or
+        // stopping, which switches DLSS between Super Resolution and Ray Reconstruction): the game applies its
+        // Upscaling setting again, through this mod's hook. Never while the settings screen is open.
+        // false while the settings screen is open (the caller tries again after it closes).
+        internal static bool Reapply()
+        {
+            if (owner == null || VideoTab.IsSettingsOpen) return false;
+            ApplyRefreshing(owner);
+            return true;
+        }
         // The player's upscaler, from the config, after a troubleshooting test.
         internal static void EndTest()
         {

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- TG Path Tracing's copy of TG Graphics Bridge's preloader: its own assembly and patcher ID, so that it
+       loads beside the copy another mod bundles (see src/TGGraphicsBridge.Autoload/Bootstrap.cs). -->
+  <PropertyGroup>
+    <AssemblyName>TGPathTracing.Autoload</AssemblyName>
+  </PropertyGroup>
+  <Import Project="..\TGGraphicsBridge.Autoload\Autoload.props" />
+</Project>

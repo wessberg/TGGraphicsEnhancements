@@ -26,6 +26,10 @@ struct Inputs {
     ID3D12Resource* depth=nullptr;
     ID3D12Resource* motion=nullptr;
     ID3D12Resource* output=nullptr;
+    // Ray Reconstruction's guides (the render size): diffuse albedo, specular albedo, normals with roughness.
+    ID3D12Resource* diffuseAlbedo=nullptr;
+    ID3D12Resource* specularAlbedo=nullptr;
+    ID3D12Resource* normalRoughness=nullptr;
     const TGUP_Frame* frame=nullptr;
     bool reset=false;
 };
@@ -40,6 +44,8 @@ public:
     virtual bool prepare(const TGUP_Frame& frame, std::string& error)=0;
     // Records the upscale into the open list. false: the SDK refused the frame.
     virtual bool record(ID3D12GraphicsCommandList* list, const Inputs& in, std::string& error)=0;
+    // The list record() wrote into never runs (the SDK refused the frame, or closing the list failed).
+    virtual void discarded() {}
     virtual void describe(TGUP_Status&) const {}
 };
 
@@ -61,6 +67,13 @@ uint32_t xess_version();
 std::unique_ptr<Backend> create_xess_backend(ID3D12Device* device);
 // XeSS's quality presets and their ratios as Intel's runtime reports them, after probe_xess.
 std::vector<TGUP_Mode> xess_modes();
+
+// NVIDIA DLSS Ray Reconstruction (NGX, the shared D3D12 device, Native/DLSS/nvngx_dlssd.dll): denoise and
+// upscale of a path-traced frame, with TG Path Tracing's guides. Probed once per device (any thread).
+bool rr_probe(ID3D12Device* device);
+bool rr_available();
+std::string rr_unavailable_reason();
+std::unique_ptr<Backend> create_rr_backend(ID3D12Device* device);
 
 // NVIDIA DLSS Super Resolution for the game's own DLSS: the NVIDIA-signed nvngx_dlss.dll in
 // Native/DLSS replaces an older one wherever NVIDIA's runtime loads it from. false: not bundled, not

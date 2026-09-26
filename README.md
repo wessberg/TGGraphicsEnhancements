@@ -1,11 +1,12 @@
-# TG Graphics Bridge, TG Frame Generation and TG Better Upscaling
+# TG Graphics Bridge, TG Frame Generation, TG Better Upscaling and TG Path Tracing
 
-Two mods for Tainted Grail: The Fall of Avalon, built from this repository, and the part they share:
+Three mods for Tainted Grail: The Fall of Avalon, built from this repository, and the part they share:
 
 | | What it does |
 |---|---|
 | **TG Frame Generation** | Frame generation with NVIDIA DLSS, AMD FSR or Intel XeSS, plus NVIDIA Reflex, Intel XeLL or AMD Anti-Lag 2. |
 | **TG Better Upscaling** | AMD FSR (FSR 4 on Radeon RX 9000, FSR 3.1 elsewhere) and Intel XeSS upscaling, as two more choices of the game's own Upscaling row next to STP and DLSS, and a newer DLSS DLL for the game's own DLSS. |
+| **TG Path Tracing** | A prototype of ReSTIR path traced lighting (the sun, every lamp, bounced light and reflections) for the Mono version, traced with DirectX Raytracing on the bridge's Direct3D 12 device, denoised by DLSS Ray Reconstruction (with TG Better Upscaling), AMD FSR Ray Regeneration or its own denoiser. In testing. |
 | **TG Graphics Bridge** | Bundled with each mod, not a download of its own. Hooks the game's Direct3D 11 device and swapchain from a BepInEx preloader, creates one private Direct3D 12 device on the same GPU, and loads the native part of every mod built on it. Also carries what both mods share in game: the Video-tab plumbing, the mod-manager integration and two fixes to the game's motion vectors. With both mods installed, one copy runs. |
 
 Both mods are native: they work from the game's own motion vectors and depth, the inputs a game
@@ -96,6 +97,123 @@ it sees an upscaled frame exactly as it would after STP: HDRP's post-processing,
 and TG Frame Generation, which then takes HDRP's own depth and motion vectors at render resolution
 as it does with STP. The camera's jitter stays HDRP's own: a Halton(2,3) sequence over 1024 frames,
 more than the 8 x (output / render width)^2 samples AMD and Intel ask for.
+
+## TG Path Tracing
+
+A prototype of path traced lighting, for the Mono version of the game only. Test builds have run in the
+game on an RTX 5080; DirectX Raytracing 1.2, DLSS Ray Reconstruction and AMD FSR Ray Regeneration have
+not yet. It is tested outside the game on an RTX 5080: `tests/pathtracing_gpu_test.cpp` boots the
+real bridge with the extension, registers a small scene the way the plugin registers FoA's (D3D11
+vertex and index buffers in Unity's layout, a texture, materials, a point light, the sun, a sky
+cubemap), rasterizes it into targets laid out as HDRP's GBuffer, and traces and composites it through
+the same render events; it checks the images and writes them as PNGs.
+
+Path Tracing is Full or Off (the Path Tracing config section, also in FoA Mod Manager; Insert turns it on
+and off, Shift+Insert cycles the debug views; F8 writes to the log what is under the crosshair and the
+lights reaching it). Full lights deferred surfaces entirely by the tracer: ReSTIR DI (Bitterli et al.
+2020) over the point and spot lights plus the sun, with traced shadows; ReSTIR GI (Ouyang et al. 2021)
+with temporal and spatial reuse for the light that bounces off the scene, each path vertex sampling the
+sun, one light and, with two bounces (the default), the sky; and traced reflections. HDRP's own indirect
+diffuse light (probes, lightmaps, SSGI) is off while tracing, and only lights that stand for something that
+emits light (a flame, a candle, a lamp, a magic effect) are traced: the ones placed to fake the light raster
+rendering lacks (fill lights, the light that follows the player) are left out. HDRP's emission is kept. Forward-lit
+surfaces (hair, eyes), transparents, water, particles and fog keep HDRP's lighting, with the game's own
+ambient light.
+
+How it fits into HDRP's frame: a Harmony prefix on HDRP's opaque `RenderSSR`, which runs right after
+the GBuffer, records a custom pass that hands GBuffers 0 to 3, depth with stencil, motion vectors and
+the exposure to the bridge's Direct3D 12 device. There, compute shaders with inline ray tracing
+(DirectX Raytracing 1.1, Shader Model 6.6) trace the scene near the camera on an async compute queue,
+alongside HDRP's shadows and lighting. The result is denoised (SVGF-style temporal accumulation and
+a-trous filtering), stored divided by the diffuse color, and applied a frame later by a custom pass
+after opaque lighting and the sky, before fog: reprojected through that frame's motion vectors,
+checked against its depth and multiplied by its own full-resolution albedo. The game's Direct3D 11
+frame never waits for Direct3D 12 work of the same frame; outside the game that keeps the cost of the
+two APIs working together to about 1.5 ms a frame on top of the tracing itself.
+
+The traced scene is rebuilt from what the game draws near the camera every two seconds: GameObjects
+with mesh renderers, the world Awaken's ECS renderer (Drake) draws, the trees and large objects
+Vegetation Studio Pro places (with alpha-tested leaves), and Unity terrains (as heightmap grids), one
+LOD per group or instance. Each mesh is read back from its GPU buffers once, converted to compact
+positions and UVs on a worker thread and given its own bottom-level acceleration structure. Materials
+keep their base color and texture (baked into a 64x64 tile of a shared atlas), emission and alpha
+testing. Lights are HDRP's point and spot lights and its sun, in HDRP's units; rays that escape
+sample HDRP's sky reflection. Not traced, though HDRP still draws and lights them: statically batched
+renderers, particles and water. They cast no traced shadows and bounce no traced light.
+
+Where the GPU and driver offer DirectX Raytracing 1.2 (Shader Model 6.9 and raytracing tier 1.2, for
+example a GeForce RTX 40 or 50 with a current driver), every pass runs its Shader Model 6.9 build:
+alpha-tested meshes (leaves, fences) get opacity micromaps, which settle most of their triangles'
+texels ahead of the alpha test, and on GPUs that reorder (Shader Execution Reordering) the GI and
+reflection passes regroup their threads by the material their rays hit. Windows' own Direct3D 12
+runtime is often too old for Shader Model 6.9, so TG Path Tracing ships Microsoft's Agility SDK runtime
+(`Native/D3D12/D3D12Core.dll`, 1.619) and TG Graphics Bridge points the game's Direct3D 12 at it before
+anything loads Direct3D 12, when it is newer than both Windows' runtime and the game's own request.
+The micromaps change no pixel: outside the game the same frames with and without them are identical.
+
+The options are rows of the game's Video settings, after the upscaling and frame generation rows:
+Path Tracing (Off, Full) and, nested under it while it is on, Denoising, Rays Per Pixel, Bounces,
+Indirect Color, Reflections, Spatial Samples, Ray Distance, Scene Radius, Sky Intensity, Reflection Boost
+and Debug View. FoA Mod Manager lists
+exactly the same rows; the hotkeys are in the config only.
+
+The Denoising row lists what this PC runs: None; Built-in, the tracer's own SVGF-style denoiser; Ray
+Regeneration, AMD's FSR Ray Regeneration (Radeon RX 9000, AMD's signed DLLs in `Native/FidelityFX`); and
+Ray Reconstruction, NVIDIA's DLSS Ray Reconstruction (RTX, with TG Better Upscaling installed, until
+NVIDIA's library says it doesn't run here), which denoises and upscales in one step while DLSS is the
+Upscaling setting (with another upscaler the built-in denoiser serves, and the row's tooltip says so).
+Denoising starts on the best one: Ray Reconstruction, then Ray Regeneration, then Built-in; Restore
+Defaults picks the same. Until the player picks another it follows the PC (a new GPU); a pick of their own
+stays while the PC runs it. Ray Reconstruction works alongside RenoDX's DLSS 5.
+
+Indirect Color scales how much color the bounced light keeps from the surfaces it bounced off, at the same
+brightness: 1 as traced, 0 grey, more exaggerates the tint (a red cloth reddening the floor beside it); the
+default is 2. Reflection Boost makes every surface glossier and more reflective than the game made it: 0 leaves the materials as they are, the default 0.15 adds a little, 1 turns them nearly into mirrors to
+judge the traced reflections.
+
+Characters are traced too. The game skins them on the GPU (its Kandra renderer) into one buffer each frame;
+the renderers within 30 m of the camera (at most 64, a character being several) are copied from it to
+Direct3D 12 every frame and their acceleration structures rebuilt, so they shadow themselves and the floor
+and block the light that bounces around them. Their triangles are read back once (only the submeshes the game
+draws), with their texture coordinates, so hair and torn cloth edges are cut out by their texture's alpha as
+HDRP draws them (skin never is); transparent parts and eyes are left out of the traced scene.
+Rays start from the surfaces HDRP drew, which can lie a few centimetres inside the traced meshes (an arch drawn
+smoother than its triangles): a ray that first meets the inside of a mesh within about 15 cm passes out through
+it rather than finding no light. Lamps cast shadows as sharp as their HDRP Radius makes them.
+Large static sets drawn by Awaken's Medusa renderer are traced from its own instance data (read once per scene
+from its archive, at the LOD it draws), and the entities Entities Graphics draws without Drake (the castle's
+walls, arches and battlements) from its own mesh and material registry. Shadow-only meshes (the castle's
+cluster meshes, coarser copies of its walls the game casts shadows with) are left out, the drawn walls casting
+the shadows; only if Entities Graphics can't be read do they stand in for them. Meshes on layers the camera
+leaves out are not traced. Vegetation drawn by the game's Leshy renderer (grass, plants, bushes, ivy,
+trees) is traced from its loaded cells near the camera: grass and plants within 20 m, at most 60,000 instances. The scene is gathered every 2 seconds, and after half a second once the camera has moved 4 m, so the level of
+detail traced keeps up with the one drawn.
+Alpha-tested materials (straw, rope nets, leaves) are tested against their texture's alpha at 256x256, in an
+atlas of their own; the 64x64 color tile made coarse opaque blocks of them (black patches under straw).
+
+How the three mods share NVIDIA's DLSS library (NGX) and Direct3D 12:
+
+- TG Better Upscaling starts NGX for Ray Reconstruction only when TG Path Tracing asks for it (tracing,
+  with Denoising on Ray Reconstruction), never at start-up; without that, NGX sees exactly what it saw
+  before (the game's own DLSS, frame generation's Streamline, a DLSS mod such as RenoDX's DLSS 5).
+- RenoDX's DLSS 5 (ReShade add-on) hooks NGX's calls, Ray Reconstruction's included, and works alongside
+  it. At its Present hook stage it processes the finished frame, menus included.
+- NGX keeps one session per Direct3D 12 device. With TG Frame Generation installed, that is Streamline's
+  on the shared device, which only searches Streamline's folders for NVIDIA's DLLs. With TG Path Tracing
+  and TG Better Upscaling installed too, TG Frame Generation adds TG Better Upscaling's `Native/DLSS`
+  folder after its own, so Ray Reconstruction is found; DLSS Frame Generation still loads its own files.
+- The Agility SDK runtime TG Path Tracing ships serves every Direct3D 12 device in the game's process.
+  Should Direct3D 12 fail to create a device with it, the bridge notes that, and the next start uses
+  Windows' or the game's runtime as without TG Path Tracing (on Windows 10 that includes the game's
+  610/611 correction); a newer runtime or Windows update tries it again.
+
+It needs DirectX Raytracing 1.1 and Shader Model 6.6 (GeForce RTX 20, Radeon RX 6000, Intel Arc or
+newer, with a recent driver), about 300 MB of video memory at a 1080p render resolution plus the
+scene's geometry. The debug views show what the tracer sees: Albedo, Normals, Coverage (every traced
+object in its own color, dark where HDRP draws something the traced scene lacks), Materials (the
+traced scene's colors), Indirect, Indirect raw and Direct. `BepInEx/TGPathTracing/Native/TGPathTracing.Native.log`
+summarizes every 10 s (GPU time, render-thread time by part, meshes, objects, triangles, memory), and
+BepInEx's log has the scene capture and the HDRP hook's counts.
 
 ## Performance overlay
 
@@ -234,7 +352,7 @@ CMake fetches MinHook v1.3.4 unless `-MinHookRoot` is given. The game needs the 
 already installed. `docs/SOURCES.md` links every SDK release.
 
 ```powershell
-# Native DLLs: TGGraphicsBridge.Native, TGFG.Native, TGBetterUpscaling.Native (VS x64 developer shell)
+# Native DLLs: TGGraphicsBridge.Native, TGFG.Native, TGBetterUpscaling.Native, TGPathTracing.Native (VS x64 developer shell)
 .\Build-Native.ps1 -StreamlineRoot Streamline-2.14.1 `
   -NgxIncludeDir Streamline-2.14.1\external\ngx-sdk\include
 
@@ -242,7 +360,7 @@ already installed. `docs/SOURCES.md` links every SDK release.
 .\Stage-Runtime.ps1 -RuntimeDirectory Streamline-2.14.1-bin\bin\x64 `
   -FidelityFXRoot FidelityFX-SDK-2.3.0 -XeSSRoot XeSS-SDK-3.0.2 -DlssRoot DLSS-SDK-310.9.1
 
-# Plugins and preloader, then package and install all three (game closed)
+# Plugins and preloaders, then package and install the mods (game closed)
 .\Build.ps1 -Runtime Mono `
   -GameDirMono 'C:\Program Files (x86)\Steam\steamapps\common\Tainted Grail FoA' -Deploy
 ```
@@ -250,8 +368,10 @@ already installed. `docs/SOURCES.md` links every SDK release.
 For the standard version, use `-Runtime IL2CPP -GameDirIl2Cpp <game folder>`. BepInEx 6 has to have
 started the game once, so that its interop assemblies exist.
 
-`-Mod TGFrameGeneration|TGBetterUpscaling` limits packaging and deployment to one mod (refused when the
-other installed mod carries a different build of the same bridge version).
+`-Mod TGFrameGeneration|TGBetterUpscaling|TGPathTracing` limits packaging and deployment to one mod (refused when
+another installed mod carries a different build of the same bridge version). TG Path Tracing is built and
+packaged for Mono only; an IL2CPP build skips it. Its path tracing passes are compiled at build time by the
+Windows SDK's `dxc.exe`.
 `-Deploy` backs up every file it replaces under `BepInEx/<mod>/Backups`, replaces files Vortex
 deployed as links instead of writing through them into Vortex's staging folder, and removes what
 Frame Generation 1.0.x installed and 1.1.0 no longer uses (`BepInEx/patchers/TGFG.Autoload.dll`). Every packaging run
@@ -309,6 +429,10 @@ both mods.
 - One window, one adapter and one stable D3D11 back buffer. No stereo, MSAA swapchain, device-loss
   recovery or unloading the native DLLs while the game runs.
 - HDR10 output from frame generation is 10-bit PQ and clips outside its range and gamut.
+- TG Path Tracing traces only what it captures (see its section): statically batched renderers,
+  particles and water are missing from the traced scene. Forward-lit surfaces (hair, eyes) keep HDRP's
+  lighting rather than the traced light. Meshes stay registered as the camera travels; past 2.5 GB of traced geometry the traced scene
+  starts over from what is near the camera.
 
 `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `docs/SOURCES.md` and `docs/AUTOLOAD-INTEGRATION.md`
 cover the implementation, the test plan and the primary sources. `docs/FSR-FLICKER-INVESTIGATION.md`

@@ -9,12 +9,15 @@
 #define TGUP_EXPORT extern "C"
 #define TGUP_CALL
 #endif
-#define TGUP_ABI 0x00010200u
+#define TGUP_ABI 0x00010300u
 
 // Upscaling technologies, values shared with the plugin.
 #define TGUP_BACKEND_NONE 0u
 #define TGUP_BACKEND_FSR 1u
 #define TGUP_BACKEND_XESS 2u
+// NVIDIA DLSS Ray Reconstruction on the game's D3D11 device: denoises a path-traced frame and upscales it,
+// with the guide buffers TG Path Tracing writes (TGUP_Frame.diffuseAlbedo and the two after it).
+#define TGUP_BACKEND_RAY_RECONSTRUCTION 3u
 
 // TGUP_Frame.flags
 #define TGUP_FLAG_RESET 1u              // history is invalid: camera cut, first frame, resolution change
@@ -26,6 +29,7 @@
 // Render events (Unity's IssuePluginEventAndData; the data is the value named here).
 #define TGUP_EVENT_UPSCALE 1            // TGUP_Frame.sequence: inputs, upscale and, with the output known, the write
 #define TGUP_EVENT_OUTPUT 2             // TGUP_Frame.sequence: the write into the output from TGUP_SetOutput
+#define TGUP_EVENT_PREPARE_RAY_RECONSTRUCTION 3 // no data: TG Path Tracing asked for Ray Reconstruction; NGX starts for it
 
 #pragma pack(push,4)
 // One upscaling request, taken where HDRP would run STP. The textures are HDRP's own render textures
@@ -42,7 +46,14 @@ struct TGUP_Frame {
     float cameraNear, cameraFar, fovY, frameTimeMs; // world units, radians, milliseconds
     float sharpness, preExposure;                   // FSR's own sharpening 0..1 (0 off); HDRP's exposure baked into the color (1 = none)
     uint32_t flags;                                 // TGUP_FLAG_*
-    uint32_t mode;                                  // XeSS: the chosen xess_quality_settings_t (100..106); otherwise 0
+    uint32_t mode;                                  // XeSS: the chosen xess_quality_settings_t (100..106); Ray
+                                                    // Reconstruction: NGX's NVSDK_NGX_PerfQuality_Value (0..5); otherwise 0
+    // Ray Reconstruction's guides, exactly the render size (ID3D11Resource*, TG Path Tracing's): the
+    // linear diffuse and specular albedo, and world-space normals with linear roughness in alpha. 0 otherwise.
+    uint64_t diffuseAlbedo, specularAlbedo, normalRoughness;
+    // Ray Reconstruction's camera, as NVIDIA takes it: row-major matrices that multiply row vectors on the
+    // left. The camera's world-to-view matrix, and HDRP's unjittered projection (its GPU form, reversed Z).
+    float worldToView[16], viewToClip[16];
 };
 // A quality mode as the runtime reports it: the vendor's id and its per-axis upscale ratio (output /
 // render). FSR: FfxApiUpscaleQualityMode, 0 (Native AA) to 4 (Ultra Performance). XeSS:
@@ -74,7 +85,7 @@ struct TGUP_Status {
 };
 #pragma pack(pop)
 #ifdef __cplusplus
-static_assert(sizeof(TGUP_Frame)==112, "TG Better Upscaling frame ABI");
+static_assert(sizeof(TGUP_Frame)==264, "TG Better Upscaling frame ABI");
 static_assert(sizeof(TGUP_Status)==88, "TG Better Upscaling status ABI");
 static_assert(sizeof(TGUP_Mode)==8, "TG Better Upscaling mode ABI");
 static_assert(sizeof(TGUP_DlssOverride)==24, "TG Better Upscaling DLSS override ABI");

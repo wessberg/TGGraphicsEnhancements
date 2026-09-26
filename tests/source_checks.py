@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FG = "native/framegen/"
 UP = "native/upscaling/"
 BR = "native/bridge/"
+PT = "native/pathtracing/"
 
 def compiled_for(text, il2cpp):
     """The lines of a C# file that compile for one runtime: #if [!]BEPINEX_IL2CPP/BEPINEX_MONO regions resolved."""
@@ -40,13 +41,13 @@ class SourceConsistency(unittest.TestCase):
         self.assertEqual(props.find(".//PlatformTarget").text, "x64")
         for token in ["BEPINEX_MONO", "BEPINEX_IL2CPP"]:
             self.assertIn(token, self.text("src/Game.References.props"))
-        for project in ["TGGraphicsBridge", "TGFrameGeneration", "TGBetterUpscaling"]:
+        for project in ["TGGraphicsBridge", "TGFrameGeneration", "TGBetterUpscaling", "TGPathTracing"]:
             tree = ET.fromstring(self.text(f"src/{project}/{project}.csproj"))
             self.assertEqual(tree.find(".//Version").text, "1.2.0", project)
         self.assertEqual(ET.fromstring(self.text("src/TGGraphicsBridge.Autoload/Autoload.props")).find(".//Version").text, "1.2.0")
         # The mods built on the bridge reference it without copying it (Build.ps1 bundles it), and build
         # their own copy of its preloader.
-        for project in ["TGFrameGeneration", "TGBetterUpscaling"]:
+        for project in ["TGFrameGeneration", "TGBetterUpscaling", "TGPathTracing"]:
             text = self.text(f"src/{project}/{project}.csproj")
             self.assertIn('<ProjectReference Include="..\\TGGraphicsBridge\\TGGraphicsBridge.csproj" Private="false" />', text)
             self.assertIn(f'<ProjectReference Include="..\\{project}.Autoload\\{project}.Autoload.csproj" ReferenceOutputAssembly="false" Private="false" />', text)
@@ -75,12 +76,15 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("disable-autoload.txt", loader)
         self.assertIn('"TGFG.Autoload.dll"', loader)  # warns about 0.5.0's preloader
         self.assertIn("function Get-TgExtensionPath([string]$Mod) { \"BepInEx/$Mod/graphics-bridge-extension.json\" }", self.text("tools/Package.Common.ps1"))
-        for mod, native in [("TGFrameGeneration", "Native/TGFG.Native.dll"), ("TGBetterUpscaling", "Native/TGBetterUpscaling.Native.dll")]:
+        for mod, native in [("TGFrameGeneration", "Native/TGFG.Native.dll"), ("TGBetterUpscaling", "Native/TGBetterUpscaling.Native.dll"),
+                            ("TGPathTracing", "Native/TGPathTracing.Native.dll")]:
             manifest = json.loads(self.text(f"src/{mod}/graphics-bridge-extension.json"))
             self.assertEqual(manifest["native"], native)
         api = self.text(BR + "include/tgb/bridge_api.hpp")
         self.assertIn("TGGraphicsBridge_CreateExtension", self.text(FG + "src/extension.cpp"))
         self.assertIn("TGGraphicsBridge_CreateExtension", self.text(UP + "src/extension.cpp"))
+        self.assertIn("TGGraphicsBridge_CreateExtension", self.text(PT + "src/extension.cpp"))
+        self.assertIn("uint32_t needs() noexcept override { return tgb::NeedD3D12; }", self.text(PT + "src/extension.cpp"))
         self.assertIn("NeedPresentation", api)
         self.assertIn("uint32_t needs() noexcept override { return tgb::NeedD3D12; }", self.text(UP + "src/extension.cpp"))
 
@@ -107,20 +111,28 @@ class SourceConsistency(unittest.TestCase):
     def test_upscaling_abi(self):
         header = self.text(UP + "include/tgup_api.h")
         managed = self.text("src/TGBetterUpscaling/NativeUpscaler.cs")
-        self.assertIn("#define TGUP_ABI 0x00010200u", header)
-        self.assertIn("internal const uint Abi = 0x00010200;", managed)
+        self.assertIn("#define TGUP_ABI 0x00010300u", header)
+        self.assertIn("internal const uint Abi = 0x00010300;", managed)
         self.assertIn('static_assert(sizeof(TGUP_Mode)==8, "TG Better Upscaling mode ABI");', header)
-        self.assertIn("FrameSize = 112, StatusSize = 88, ModeSize = 8, DlssOverrideSize = 24;", managed)
-        self.assertIn('static_assert(sizeof(TGUP_Frame)==112, "TG Better Upscaling frame ABI");', header)
+        self.assertIn("FrameSize = 264, StatusSize = 88, ModeSize = 8, DlssOverrideSize = 24;", managed)
+        self.assertIn('static_assert(sizeof(TGUP_Frame)==264, "TG Better Upscaling frame ABI");', header)
         self.assertIn('static_assert(sizeof(TGUP_Status)==88, "TG Better Upscaling status ABI");', header)
         events = dict(re.findall(r"#define TGUP_EVENT_(\w+) (\d+)", header))
-        self.assertEqual(events, {"UPSCALE": "1", "OUTPUT": "2"})
+        self.assertEqual(events, {"UPSCALE": "1", "OUTPUT": "2", "PREPARE_RAY_RECONSTRUCTION": "3"})
+        self.assertIn("internal const int EventPrepareRayReconstruction = 3;", managed)
         flags = dict(re.findall(r"#define TGUP_FLAG_(\w+) (\d+)u", header))
         self.assertEqual(flags, {"RESET": "1", "DEPTH_INVERTED": "2", "FSR_AUTO_EXPOSURE": "4", "FSR_DEBUG_CHECK": "8", "FSR_DEBUG_VIEW": "16"})
         self.assertIn("internal const uint Reset = 1, DepthInverted = 2, FsrAutoExposure = 4, FsrDebugCheck = 8, FsrDebugView = 16;", managed)
         self.assertIn("#define TGUP_BACKEND_FSR 1u", header)
         self.assertIn("#define TGUP_BACKEND_XESS 2u", header)
-        self.assertIn("internal const uint BackendFsr = 1, BackendXess = 2;", managed)
+        self.assertIn("#define TGUP_BACKEND_RAY_RECONSTRUCTION 3u", header)
+        self.assertIn("internal const uint BackendFsr = 1, BackendXess = 2, BackendRayReconstruction = 3;", managed)
+        # The request's camera matrices mirror the header's (16 floats each, after the guides).
+        self.assertIn("uint64_t diffuseAlbedo, specularAlbedo, normalRoughness;", header)
+        self.assertIn("float worldToView[16], viewToClip[16];", header)
+        self.assertIn("internal ulong DiffuseAlbedo, SpecularAlbedo, NormalRoughness;", managed)
+        self.assertIn("internal fixed float WorldToView[16];", managed)
+        self.assertIn("internal fixed float ViewToClip[16];", managed)
         exports = self.text(UP + "src/extension.cpp")
         for symbol in re.findall(r"TGUP_CALL\s+(TGUP_\w+)\(", header):
             self.assertIn(symbol + "(", exports)
@@ -223,15 +235,20 @@ class SourceConsistency(unittest.TestCase):
             for call in re.findall(r"new SliderOption\((.*)\);", compiled_for(text, True)):
                 sliders += 1
                 self.assertNotRegex(call, r",\s*null$", str(path))
-        self.assertEqual(sliders, 2)
+        self.assertEqual(sliders, 3) # the bridge's, TG Better Upscaling's, and TG Path Tracing's (Mono only)
         self.assertIn("var step = new Il2CppSystem.Nullable<float>();", compiled_for(self.text("src/TGGraphicsBridge/PerformanceOverlayRow.cs"), True))
         self.assertIn("private static Il2CppSystem.Nullable<float> NoStep => new Il2CppSystem.Nullable<float>();", compiled_for(self.text("src/TGBetterUpscaling/UpscalerRow.cs"), True))
         for path in ["src/TGBetterUpscaling/Session.cs", "src/TGBetterUpscaling/Plugin.cs", "src/TGBetterUpscaling/Settings.cs", "src/TGBetterUpscaling/NativeUpscaler.cs",
                      "src/TGFrameGeneration/Session.cs", "src/TGFrameGeneration/Plugin.cs", "src/TGGraphicsBridge/Plugin.cs"]:
             self.assertIsNone(re.search(r"\bUpScaling\.(Is|Up|DLSS|STP|Quality)", self.text(path)), path)
+        # StpHost reads UpScaling's statics only from the game's own controller (BeforeSettingChanged).
         host = self.text("src/TGBetterUpscaling/StpHost.cs")
-        self.assertEqual(host.count("UpScaling.IsSTPAvailable"), 1)
-        self.assertLess(host.index("private static bool BeforeSettingChanged("), host.index("UpScaling.IsSTPAvailable"))
+        start = host.index("private static bool BeforeSettingChanged(")
+        end = host.index("private static bool ConfigureDlss(")
+        uses = [m.start() for m in re.finditer(r"UpScaling\.IsSTPAvailable", host)]
+        self.assertTrue(uses)
+        for at in uses:
+            self.assertTrue(start < at < end, at)
 
     def test_upscaler_row_is_the_games_own(self):
         # One selector: FSR and XeSS are entries 3 and 4 of the game's Upscaling row, forbidden when unavailable.
@@ -407,7 +424,7 @@ class SourceConsistency(unittest.TestCase):
         self.assertLess(row.index("owner = up;"), row.index("StpHost.HookPresets();"))
         for token in ['AccessTools.Method(typeof(UpScaling), "SetValueForPreset")', "postfix: new HarmonyMethod(typeof(StpHost), nameof(AfterPreset))",
                       "camera.deepLearningSuperSamplingQuality = (uint)mode.Id;", "camera.deepLearningSuperSamplingUseCustomQualitySettings = true;",
-                      "hostScale = QualityModes.RenderScale(mode);", "Mode = technology == UpscalerSetting.XeSS ? hostMode : 0u"]:
+                      "hostScale = QualityModes.RenderScale(mode);", "Mode = rr ? rrMode : technology == UpscalerSetting.XeSS ? hostMode : 0u"]:
             self.assertIn(token, host)
         self.assertIn("FFX_API_QUERY_DESC_TYPE_UPSCALE_GETUPSCALERATIOFROMQUALITYMODE", self.text(UP + "src/fsr_upscaler.cpp"))
         xess = self.text(UP + "src/xess_upscaler.cpp")
@@ -456,10 +473,11 @@ class SourceConsistency(unittest.TestCase):
         extension = self.text(UP + "src/extension.cpp")
         self.assertLess(extension.index("install_dlss_dll(root);"), extension.index("load_fsr_runtime(root)"))
         packaging = self.text("tools/Package.Common.ps1")
-        self.assertIn("@{Folder='DLSS'; Signer='NVIDIA'; Optional=@()\n                  Files=@('nvngx_dlss.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')}", packaging)
+        self.assertIn("@{Folder='DLSS'; Signer='NVIDIA'; Optional=@()\n                  Files=@('nvngx_dlss.dll','nvngx_dlssd.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')}", packaging)
         stage = self.text("Stage-Runtime.ps1")
         self.assertIn("$vendors+=@{Folder='TGBetterUpscaling\\DLSS'; Signer='NVIDIA'", stage)
         self.assertIn("'lib\\Windows_x86_64\\rel\\nvngx_dlss.dll'", stage)
+        self.assertIn("'lib\\Windows_x86_64\\rel\\nvngx_dlssd.dll'", stage)
 
     def test_single_latency_selector(self):
         rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
@@ -598,6 +616,415 @@ class SourceConsistency(unittest.TestCase):
         for path in ["src/TGFrameGeneration/DisplayMode.cs", "src/TGFrameGeneration/HybridVsync.cs"]:
             self.assertIn("bool videoApply = fromVideoApply;\n            fromVideoApply = false;", self.text(path))
         self.assertNotIn("if (failed || (index != UpscalerRow.FsrIndex", self.text("src/TGBetterUpscaling/StpHost.cs"))
+
+    def test_ray_reconstruction_link(self):
+        # TG Better Upscaling finds TG Path Tracing's RayReconstruction class by name; neither references the other.
+        link = self.text("src/TGBetterUpscaling/PathTracingLink.cs")
+        rr = self.text("src/TGPathTracing/RayReconstruction.cs")
+        self.assertIn('Type.GetType("TGPathTracing.RayReconstruction, TGPathTracing", false)', link)
+        self.assertIn("namespace TGPathTracing", rr)
+        self.assertIn("public static class RayReconstruction", rr)
+        self.assertIn("public static bool Wanted =>", rr)
+        self.assertIn("public static bool TryGetGuides(int width, int height, out ulong diffuseAlbedo, out ulong specularAlbedo, out ulong normalRoughness)", rr)
+        self.assertIn("public static void Ran(int frame)", rr)
+        for member in ['GetProperty("Wanted"', 'GetMethod("TryGetGuides"', 'GetMethod("Ran"', "new object[] { (int)width, (int)height, 0ul, 0ul, 0ul }"]:
+            self.assertIn(member, link)
+        for project in ["src/TGBetterUpscaling/TGBetterUpscaling.csproj", "src/TGPathTracing/TGPathTracing.csproj"]:
+            self.assertNotRegex(self.text(project), r"TGPathTracing\.csproj|TGBetterUpscaling\.csproj", project)
+        # Ray Reconstruction runs on the bridge's D3D12 device (NGX's D3D11 path faults in 310.9.1), with NGX linked
+        # statically and the NVIDIA-signed nvngx_dlssd.dll bundled.
+        backend = self.text(UP + "src/rr_upscaler.cpp")
+        self.assertIn("NGX_D3D12_CREATE_DLSSD_EXT(list, 1, 1, &feature_, params_, &create)", backend)
+        self.assertIn("NGX_D3D12_EVALUATE_DLSSD_EXT(list, feature_, params_, &eval)", backend)
+        self.assertNotIn("NGX_D3D11_", backend)
+        self.assertIn("create.InRoughnessMode=NVSDK_NGX_DLSS_Roughness_Mode_Packed;", backend)
+        self.assertIn("eval.pInWorldToViewMatrix=worldToView_; eval.pInViewToClipMatrix=viewToClip_;", backend)
+        cmake = self.text("CMakeLists.txt")
+        self.assertIn("native/upscaling/src/rr_upscaler.cpp", cmake)
+        self.assertIn('"${DLSS_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib"', cmake)
+        self.assertIn('"-DDLSS_ROOT=$DlssRoot"', self.text("Build-Native.ps1"))
+        # TG Path Tracing writes the guides and hands its light out undenoised while Ray Reconstruction runs.
+        tracer = self.text(PT + "src/tracer.cpp")
+        self.assertIn("if((frame.flags&TGPT_FRAME_GUIDES) && work.inputs", tracer)
+        self.assertIn("const bool denoise=!(f.options&(TGPT_OPTION_NO_DENOISER|TGPT_OPTION_RAY_RECONSTRUCTION)) && !rrg;", tracer)
+        self.assertIn("if (Session.WantsRayReconstruction) { frame.Flags |= Tgpt.FrameGuides;", self.text("src/TGPathTracing/HdrpPasses.cs"))
+
+    def test_path_tracing_abi(self):
+        header = self.text(PT + "include/tgpt_api.h")
+        managed = self.text("src/TGPathTracing/NativeTracer.cs")
+        self.assertIn("#define TGPT_ABI 0x00010600u", header)
+        self.assertIn("internal const uint Abi = 0x00010600;", managed)
+        self.assertIn(f"Marshal.SizeOf(typeof(NativeGuides)) != {dict(re.findall(r'sizeof\((TGPT_\w+)\)==(\d+)', header))['TGPT_Guides']}", managed)
+        sizes = dict(re.findall(r"sizeof\((TGPT_\w+)\)==(\d+)", header))
+        mirrored = {"TGPT_Submesh": "NativeSubmesh", "TGPT_MeshDesc": "NativeMeshDesc", "TGPT_CpuMeshDesc": "NativeCpuMeshDesc",
+                    "TGPT_Material": "NativeMaterial", "TGPT_Instance": "NativeInstance", "TGPT_Light": "NativeLight"}
+        for native, csharp in mirrored.items():
+            self.assertIn(f"Marshal.SizeOf(typeof({csharp})) != {sizes[native]}", managed, native)
+        self.assertIn(f"sizeof(NativeFrame) != {sizes['TGPT_Frame']}", managed)
+        self.assertIn(f"Marshal.SizeOf(typeof(NativeStatus)) != {sizes['TGPT_Status']}", managed)
+        self.assertIn(f"Size = {sizes['TGPT_Frame']}, Abi = Tgpt.Abi", self.text("src/TGPathTracing/HdrpPasses.cs"))
+        self.assertIn(f"Size = {sizes['TGPT_Status']}, Abi = Tgpt.Abi", managed)
+        for symbol in re.findall(r"TGPT_CALL\s+(TGPT_\w+)\(", header):
+            self.assertIn(symbol + "(", self.text(PT + "src/extension.cpp"), symbol)
+            if symbol != "TGPT_GetAbiVersion":
+                self.assertIn('"' + symbol + '"', managed, symbol)
+        # The shaders' constant layout is kept in step by hand: the C++ struct's size is asserted.
+        self.assertIn('static_assert(sizeof(FrameConstants)==544, "frame constants layout");', self.text(PT + "src/tracer.cpp"))
+        common = self.text(PT + "shaders/pt_common.hlsli")
+        self.assertEqual(common.count("float4x4 "), 3 + 0)
+        # 3 matrices, then 21 float4/uint4 rows: 3*64 + 21*16 = 528.
+        block = re.search(r"struct FrameConstants \{(.*?)\};", common, re.S).group(1)
+        self.assertEqual(len(re.findall(r"^\s*(?:float4|uint4) \w+;", block, re.M)), 22)
+        self.assertIn("uint4 grid;", common)
+
+    def test_path_tracing_is_mono_only_and_packaged(self):
+        helpers = self.text("tools/Package.Common.ps1")
+        self.assertIn("function Get-TgModNames { @('TGFrameGeneration','TGBetterUpscaling','TGPathTracing') }", helpers)
+        self.assertIn("Runtimes=@('Mono')", helpers)
+        self.assertIn("TGPathTracing='TGPathTracing/TGPathTracing.Native.dll'", helpers)
+        self.assertIn("<TargetFrameworks>net472</TargetFrameworks>", self.text("src/TGPathTracing/TGPathTracing.csproj"))
+        for script in ["Build.ps1", "Package.ps1"]:
+            self.assertIn("Test-TgModRuntime", self.text(script), script)
+        # No d3d12.lib: the tracer only uses the bridge's device, so its DLL never loads d3d12.dll itself.
+        cmake = self.text("CMakeLists.txt")
+        line = re.search(r"target_link_libraries\(TGPathTracing\.Native PRIVATE ([^)]*)\)", cmake).group(1)
+        self.assertNotIn("d3d12", line.split())
+
+    def test_path_tracing_dxr12(self):
+        # DirectX Raytracing 1.2 only where the device has Shader Model 6.9 and tier 1.2: then every pass is the
+        # 6.9 build (a 6.6 ray query must never meet an opacity micromap), a refused 6.9 set falls back to 6.6
+        # without micromaps, and Shader Execution Reordering only where the GPU says it reorders.
+        tracer = self.text(PT + "src/tracer.cpp")
+        self.assertIn("o5.RaytracingTier>=D3D12_RAYTRACING_TIER_1_2", tracer)
+        self.assertIn("sm69.HighestShaderModel>=D3D_SHADER_MODEL_6_9", tracer)
+        self.assertIn("st.scene.ommEnabled=st.useDxr12;", tracer)
+        self.assertIn("if(st.useDxr12 && st.serReorders) {", tracer)
+        for name in ["prepare", "gi", "giSpatial", "di", "diSpatial", "specular", "temporal", "atrous", "compose"]:
+            self.assertIn(f"st.{name}=make_pso(shaders::{name}Dxr12, sizeof(shaders::{name}Dxr12));", tracer, name)
+            self.assertIn(f"st.{name}=make_pso(shaders::{name}, sizeof(shaders::{name}));", tracer, name)
+        common = self.text(PT + "shaders/pt_common.hlsli")
+        self.assertIn("#define PT_RAYQUERY(flags) RayQuery<flags, RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS>", common)
+        for shader in ["pt_common.hlsli", "pt_compose.hlsl"]:
+            self.assertNotRegex(self.text(PT + "shaders/" + shader), r"RayQuery<RAY_FLAG", shader)
+        cmake = self.text("CMakeLists.txt")
+        self.assertIn("-T cs_6_9 -E main -D PT_DXR12", cmake)
+        self.assertIn("-T lib_6_9 -D PT_DXR12 -D PT_SER", cmake)
+        # Micromaps: made for the first alpha-tested instance's materials once their atlas tiles are baked; an
+        # instance whose materials differ, or a frame that turns them off, traces with them disabled.
+        scene = self.text(PT + "src/scene.cpp")
+        self.assertIn("const bool omm=linked && alpha && ommAllowed && omm_matches(*m, inst.materialBase);", scene)
+        self.assertIn("D3D12_RAYTRACING_INSTANCE_FLAG_DISABLE_OMMS", scene)
+        self.assertIn("D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_DISABLE_OMMS", scene)
+        # Micromaps wait for the tile the alpha test reads: the 256x256 alpha tile when the material has one.
+        self.assertIn("const int32_t tile=alphaTile ? mat.alphaTile : mat.albedoTile;", scene)
+        self.assertIn("(size_t(tile)>=ready.size() || !ready[size_t(tile)])", scene)
+        self.assertIn("st.scene.tile_settled(b.tile);", tracer)
+        self.assertIn("st.scene.ommAllowed=!(f.options&TGPT_OPTION_NO_MICROMAPS);", tracer)
+        bake = self.text(PT + "shaders/pt_omm_bake.hlsl")
+        self.assertIn("OMM_SPECIAL_FULLY_TRANSPARENT = -1, OMM_SPECIAL_FULLY_OPAQUE = -2", bake)
+        self.assertIn("if (m.albedoTile < 0) {", bake)
+        # TG Path Tracing ships Microsoft's Agility SDK runtime beside its native DLL, where the bridge looks.
+        helpers = self.text("tools/Package.Common.ps1")
+        self.assertIn("@{Folder='D3D12'; Signer='Microsoft Corporation'", helpers)
+        self.assertIn("Files=@('D3D12Core.dll'); Notices=@('LICENSE-DirectX-Agility-SDK.txt')", helpers)
+        self.assertIn("$vendors+=@{Folder='TGPathTracing\\D3D12'; Signer='Microsoft Corporation'", self.text("Stage-Runtime.ps1"))
+
+    def test_path_tracing_gpu_lifetimes(self):
+        # Descriptor slots, the atlas and sky, a start that fails part-way, and a list that is never submitted:
+        # the GPU may still be reading, or the bookkeeping may describe work that never ran.
+        gpu = self.text(PT + "src/gpu.hpp")
+        self.assertIn("void release(uint32_t index) { if(index!=kInvalid) retiring_.emplace_back(retireAt_, index); }", gpu)
+        tracer = self.text(PT + "src/tracer.cpp")
+        self.assertLess(tracer.index("st.heap.set_retire(st.consumer.value+1);"), tracer.index("st.scene.intake(&st.heap"))
+        self.assertIn("if(!bakes.empty()) wait_for_scene_readers();", tracer)
+        sky = tracer[tracer.index("void update_sky()"):]
+        self.assertLess(sky.index("wait_for_scene_readers();"), sky.index("run_cs("))
+        self.assertIn("if(st.d3d12Ready) return true;", tracer)
+        self.assertIn("if(st.d11 && generation==st.generation && st.d3d11Ready) return true;", tracer)
+        self.assertEqual(tracer.count("} catch(...) { release_all(); throw; }"), 2)
+        self.assertLess(tracer.index("st.recording=true;"), tracer.index("st.scene.record(st.d12.Get()"))
+        self.assertIn("st.recording=false; st.broken=true;", tracer)
+        # Last frame's GI path vertices move with the scene origin, and a scene reset forgets the terrain material.
+        self.assertIn("if (gi_valid(rp) && !gi_sky(rp)) rp.pos += g.prevOriginDelta.xyz;", self.text(PT + "shaders/pt_gi.hlsl"))
+        reset = self.text("src/TGPathTracing/SceneCapture.cs")
+        reset = reset[reset.index("internal static void Reset()"):]
+        self.assertLess(reset.index("terrainMaterial = uint.MaxValue;"), reset.index("}"))
+
+    def test_mods_share_ngx_and_direct3d12_compatibly(self):
+        # Without TG Path Tracing nothing about NGX changes: TG Better Upscaling starts it for Ray Reconstruction
+        # only when TG Path Tracing's DLL runs (the bridge loads every extension before the device exists), and
+        # its status line only then mentions Ray Reconstruction.
+        upscaler = self.text("native/upscaling/src/upscaler.cpp")
+        self.assertIn('const bool pathTracing=GetModuleHandleW(L"TGPathTracing.Native.dll")!=nullptr;', upscaler)
+        # And only once TG Path Tracing asks (a render event), never at start-up.
+        self.assertIn("st.rrPending=vendor==0x10DE && pathTracing;", upscaler)
+        self.assertEqual(upscaler.count("rr_probe("), 1)
+        self.assertLess(upscaler.index("void prepare_ray_reconstruction()"), upscaler.index("rr_probe("))
+        self.assertIn("if(eventId==TGUP_EVENT_PREPARE_RAY_RECONSTRUCTION) { prepare_ray_reconstruction(); return; }", upscaler)
+        session = self.text("src/TGBetterUpscaling/Session.cs")
+        self.assertIn("bool pathTracing = PathTracingLink.Wanted;", session)
+        self.assertIn("if (pathTracing && !rrPrepared", session)
+        self.assertIn("if (rrReapply && UpscalerRow.Reapply()) rrReapply = false;", session)
+        # RenoDX's DLSS 5 needs the game's own DLSS at every hook stage: Denoising never starts on Ray Reconstruction
+        # while it is loaded; picked by the player, Ray Reconstruction runs.
+        self.assertIn('GetModuleHandleW("renodx-dlss.addon64")', self.text("src/TGPathTracing/RenoDxDlss.cs"))
+        pt = self.text("src/TGPathTracing/Session.cs")
+        self.assertIn("Settings.CurrentDenoiser == DenoiserChoice.RayReconstruction;", pt)
+        # Ray Reconstruction is offered and is the default with RenoDX's DLSS 5 loaded too: the two work together.
+        self.assertNotIn("RenoDxDlss.Loaded", pt)
+        self.assertIn("internal static DenoiserChoice BestDenoiser => Settings.Best(OfferedDenoisers);", pt)
+        # Indirect Color scales the bounced light's color around its brightness, where it is shaded.
+        self.assertIn("result = l + (result - l) * g.prevOriginDelta.w;", self.text(PT + "shaders/pt_gi_spatial.hlsl"))
+        self.assertIn("k.prevOriginDelta[3]=std::clamp(f.indirectColor, 0.f, 4.f);", self.text(PT + "src/tracer.cpp"))
+        self.assertIn("IndirectColor = settings.IndirectColor.Value", self.text("src/TGPathTracing/HdrpPasses.cs"))
+        # A refused frame hands TG Path Tracing its own denoiser back; a feature created in a list that never ran is
+        # created again; refusals count against successes.
+        self.assertIn("if (rr && Session.RayReconstructionSucceeding()) PathTracingLink.Ran(Time.frameCount);", self.text("src/TGBetterUpscaling/StpHost.cs"))
+        self.assertIn("if(!recorded) backend->discarded();", upscaler)
+        self.assertIn("if(createdInList_ && feature_) { NVSDK_NGX_D3D12_ReleaseFeature(feature_); feature_=nullptr; }", self.text("native/upscaling/src/rr_upscaler.cpp"))
+        self.assertIn("if (g.size.w & (FLAG_RESET | FLAG_DENOISER_RESET)) == 0) {".replace("if (g", "if ((g"), self.text("native/pathtracing/shaders/pt_temporal.hlsl"))
+        self.assertIn("(PathTracingLink.Found ? \", \" + Tech(NativeFlags.BackendRayReconstruction", self.text("src/TGBetterUpscaling/Session.cs"))
+        # NGX keeps one session per device, Streamline's on the shared device: TG Frame Generation lists TG Better
+        # Upscaling's DLSS folder after its own only when TG Path Tracing and that folder's nvngx_dlssd.dll exist.
+        sl = self.text("native/framegen/src/sl_runtime.cpp")
+        self.assertIn('bepinex/L"TGBetterUpscaling"/L"Native"/L"DLSS"', sl)
+        self.assertIn('!std::filesystem::exists(dlss/L"nvngx_dlssd.dll",error) ||', sl)
+        self.assertIn('!std::filesystem::exists(bepinex/L"TGPathTracing"/L"Native"/L"TGPathTracing.Native.dll",error)) return {};', sl)
+        self.assertLess(sl.index("s.pluginPaths[0]=s.runtimeDir.c_str();"), sl.index("s.pluginPaths[1]=s.rayReconstructionDir.c_str();"))
+        self.assertIn("pref.numPathsToPlugins=pluginPathCount;", sl)
+        # An extension's Agility SDK runtime that Direct3D 12 failed on is not used again on the next start.
+        agility = self.text("native/bridge/src/agility.cpp")
+        self.assertIn('line=outcome("extension-failed-before"', agility)
+        self.assertLess(agility.index('outcome("extension-failed-before"'), agility.index("*requested=newest;"))
+        device = self.text("native/bridge/src/device.cpp")
+        self.assertIn("note_agility_device(false);", device)
+        self.assertIn("note_agility_device(true);", device)
+        # The combinations run on this machine's GPU (skipped where the runtimes are missing).
+        cmake = self.text("CMakeLists.txt")
+        for name in ["tgup_gpu_smoke_with_pt", "tgup_gpu_smoke_all_mods", "tgup_gpu_smoke_fg_installed"]:
+            self.assertIn("add_test(NAME " + name, cmake)
+
+    def test_path_tracing_video_rows(self):
+        # TG Path Tracing's options are Video settings rows, and FoA Mod Manager shows exactly them: the Denoiser
+        # offers only the denoisers this GPU runs (NGX's report from TG Better Upscaling for Ray Reconstruction).
+        settings = self.text("src/TGPathTracing/Settings.cs")
+        self.assertIn('DenoiserNames = { "None", "Built-in", "Ray Regeneration", "Ray Reconstruction" };', settings)
+        self.assertIn("public enum DenoiserChoice { None, BuiltIn, RayRegeneration, RayReconstruction }", settings)
+        # Until the player picks another, Denoising follows the best this PC runs; the old Denoiser key carries over.
+        self.assertIn("bool keep = DenoisingChosen.Value && choices.Contains(Denoiser.Value);", settings)
+        self.assertIn('var legacy = file.Bind(Section, "Denoiser", "", Hidden("Replaced by Denoising."));', settings)
+        self.assertIn('DefaultValue?.SetValue(denoiser, denoiserChoices[(int)best]);', self.text("src/TGPathTracing/PathTracingRow.cs"))
+        self.assertIn("File.Remove(Denoiser.Definition);", settings)
+        self.assertIn("ModManagers.RequestFoARefresh();", settings)
+        self.assertIn('ModeKey = file.Bind(Section, "Mode key", new KeyboardShortcut(KeyCode.Insert), Hidden(', settings)
+        rows = self.text("src/TGPathTracing/PathTracingRow.cs")
+        self.assertIn("internal sealed class PathTracingSetting : Setting", rows)
+        self.assertIn("VideoTab.AddGraphicSetting(master, setting);", rows)
+        self.assertIn("VideoTab.Forbid(denoiser,", rows)
+        self.assertIn("if (open) return; // never change the list while the screen is open", rows)
+        # Rows in FoA's order: the Video tab's nested rows follow the config's SortOrder.
+        order = re.findall(r'Row\(order\+\+, "([^"]+)"', settings)
+        self.assertEqual(order, ["Path Tracing", "Denoising", "Rays Per Pixel", "Bounces", "Indirect Color", "Reflections", "Spatial Samples",
+                                 "Ray Distance", "Scene Radius", "Sky Intensity", "Reflection Boost", "Debug View"])
+        self.assertIn("PathTracingRow.Tick(now);", self.text("src/TGPathTracing/Session.cs"))
+        self.assertIn('public static void Report(bool available)', self.text("src/TGPathTracing/RayReconstruction.cs"))
+        self.assertIn('report = type.GetMethod("Report", BindingFlags.Public | BindingFlags.Static);', self.text("src/TGBetterUpscaling/PathTracingLink.cs"))
+        # Frame generation resumes only once the cursor has stayed locked (mods fighting over it in a menu).
+        self.assertIn("if(Settings.SuspendOnCursor.Value && (unlocked || now-cursorUnlockedAt<0.5f)) flags|=Suspend.CursorUnlocked;",
+                      self.text("src/TGFrameGeneration/Session.cs"))
+
+    def test_path_tracing_grain(self):
+        # Grain and blur, measured in tgpt_gpu_test against an undenoised converged frame: ReSTIR's temporal neighbour
+        # is permuted for every denoiser and it reuses a sample for about a frame (no option: longer reuse made noise
+        # stand still); the direct light (sun and lamps) is a signal of its own with a short filter, apart from the
+        # bounced light; the filters are steered by the accumulated value's noise (a single frame's, and a 3x3
+        # spread, blurred sharp shadows away); ReSTIR DI reuses only lights a pixel sees.
+        restir = self.text(PT + "shaders/pt_restir.hlsli")
+        self.assertIn("    { uint h = pcg(g.size.z * 747796405u + 12345u); q ^= int2(h & 1u, (h >> 1) & 1u); }", restir)
+        self.assertNotIn("(OPTION_RAY_RECONSTRUCTION | OPTION_RAY_REGENERATION)) { uint h", restir)
+        spatial = self.text(PT + "shaders/pt_di_spatial.hlsl")
+        self.assertIn("sun[p] = float4(sunDiffuse + clamp_radiance(localDiffuse, LIMIT_DIRECT), 1.0);", spatial)
+        self.assertNotIn("g.signals.y", spatial) # the bounced light's signal is not written here
+        self.assertIn("float3 diffuse = diffuseFinal[p].rgb + sun[p].rgb; // the direct light, denoised on its own", self.text(PT + "shaders/pt_compose.hlsl"))
+        temporal = self.text(PT + "shaders/pt_temporal.hlsl")
+        self.assertIn("variance /= len;", temporal)
+        self.assertNotIn("spatial.y - spatial.x * spatial.x", temporal)
+        di = self.text(PT + "shaders/pt_di.hlsl")
+        self.assertIn("if (occluded_from_surface(origin, dir, 0.0, max(tmax - offset, 0.0), near_back(s.distance))) r.W = 0.0;", di)
+        # Lamp shadows: each light's own size (no 10 cm minimum), candidates without repeats.
+        common = self.text(PT + "shaders/pt_common.hlsli")
+        self.assertNotIn("SHADOW_LIGHT_RADIUS", common)
+        self.assertIn("float2 disk = disk_sample(u) * light.radius;", common)
+        self.assertIn("uint i = cell_candidate(first, cellCount, candidates, c, start);", di)
+        self.assertIn("LightRecord light = load_light(cell_candidate(first, count, candidates, c, start));", common)
+        # Rays from the G-buffer's surface pass out through a traced mesh they start inside (a back face close by);
+        # paths from traced hits use the plain functions.
+        self.assertIn("bool passes_through(uint instanceId, uint geometry, bool frontFace, float t, float nearBack) {", common)
+        # The material decides whether a back face is a real hit, not the object: hair made a head's inside stop the sun.
+        self.assertIn("return (materials[materialIndices[inst.materialBase + geometry]].flags & MATERIAL_ALPHA_TEST) == 0;", common)
+        self.assertNotIn("INSTANCE_ALPHA_TEST", common)
+        self.assertIn('"rays starting inside an object with alpha-tested parts pass out through its opaque faces"', self.text("tests/pathtracing_gpu_test.cpp"))
+        for name, call in (("pt_gi.hlsl", "trace_from_surface(origin, dir, 0.0, g.params.y, near_back(s.distance), hit)"),
+                           ("pt_specular.hlsl", "trace_from_surface(origin, l, 0.0, g.params.y, near_back(s.distance), hit)"),
+                           ("pt_di_spatial.hlsl", "occluded_from_surface(sunOrigin, l, 0.0, g.params.y, nearBack)"),
+                           ("pt_gi_spatial.hlsl", "occluded_from_surface(origin, dir, 0.0, g.params.y, near_back(s.distance))")):
+            self.assertIn(call, self.text(PT + "shaders/" + name), name)
+        self.assertIn('"rays starting inside the traced mesh pass out through it"', self.text("tests/pathtracing_gpu_test.cpp"))
+        # Shadow-only meshes are stand-ins rays from a drawn surface pass through close by; translucent surfaces
+        # (HDRP's transmission) are lit through from behind; characters carry their texture coordinates.
+        self.assertIn("if (inst.flags & INSTANCE_STAND_IN) return true;", common)
+        self.assertIn("#define TGPT_INSTANCE_STAND_IN 4u", self.text(PT + "include/tgpt_api.h"))
+        self.assertIn("AddMesh(standIn.sharedMesh, renderer.sharedMaterials, renderer.localToWorldMatrix, Tgpt.InstanceStandIn)", self.text("src/TGPathTracing/SceneCapture.cs"))
+        self.assertIn("bool translucent = feature == 2u || feature == 3u;", self.text(PT + "shaders/pt_prepare.hlsl"))
+        self.assertIn("float nl = translucent_cos(s.normal, l, s.translucent);", self.text(PT + "shaders/pt_restir.hlsli"))
+        self.assertIn("character.Handle = Session.Tracer.RegisterSkinnedMesh(key, reads.Indices, vertexCount, reads.SubmeshStarts, reads.Uvs);", self.text("src/TGPathTracing/CharacterCapture.cs"))
+        for check in ('"a translucent surface (grass, leaves) is lit through from behind"', '"a character\'s cut-outs let light through, texel by texel"',
+                      '"rays from a drawn surface pass through a stand-in close by, whichever way it faces"'):
+            self.assertIn(check, self.text("tests/pathtracing_gpu_test.cpp"))
+        tracer = self.text(PT + "src/tracer.cpp")
+        self.assertIn("const uint32_t atrousIterations=denoise ? 5 : 0;", tracer)
+        self.assertIn("k.denoise1[0]=denoise ? st.directOut.uav : st.sunRaw.uav;", tracer)
+        self.assertIn("dispatch(list, st.atrous.Get(), {st.directTmp.uav, st.directOut.uav, 2u, 0u, st.directHist[cur].uav}, b);", tracer)
+        self.assertIn("dispatch(list, st.compose.Get(), {rrg ? 1u : 0u}, b);", tracer)
+        settings = self.text("src/TGPathTracing/Settings.cs")
+        self.assertIn('var legacy = file.Bind(Section, "Temporal history", 0, Hidden("No longer used."));', settings)
+        self.assertNotIn("TemporalHistory =", settings)
+        self.assertIn("TemporalCap = 1, // ReSTIR reuses a sample for about a frame", self.text("src/TGPathTracing/HdrpPasses.cs"))
+        test = self.text("tests/pathtracing_gpu_test.cpp")
+        self.assertIn('{"history 1, still", 1, false, false, false, false, 0.06}', test)
+        self.assertIn("run(TGPT_VIEW_NONE, prev, prev, index++, TGPT_OPTION_NO_DENOISER);", test)
+        # Ray Reconstruction counts as succeeding once no failure is recent: a start of int.MinValue overflowed.
+        session = self.text("src/TGBetterUpscaling/Session.cs")
+        self.assertIn("private static int rrFailedFrame = -1000;", session)
+        self.assertNotIn("rrFailedFrame = int.MinValue", session)
+        self.assertIn("params_->Set(mode, unsigned(NVSDK_NGX_RayReconstruction_Hint_Render_Preset_F));", self.text("native/upscaling/src/rr_upscaler.cpp"))
+        # HDRP's indirect diffuse light is off while tracing: the composite keeps GBuffer3 (where HDRP bakes it) as
+        # emission. AO, contact shadows and SSR go too, and their Video rows grey out with Shadows and SSS.
+        passes = self.text("src/TGPathTracing/HdrpPasses.cs")
+        self.assertIn("profile.Add<IndirectLightingController>(true).indirectDiffuseLightingMultiplier.Override(0f);", passes)
+        self.assertNotIn("noIndirect", passes)
+        self.assertIn("profile.Add<ScreenSpaceReflection>(true).enabled.Override(false);", passes)
+        rows = self.text("src/TGPathTracing/ReplacedRows.cs")
+        for row in ['("Shadows", new[] { "_shadowsToggle", "_shadowsDistance" }', '("Shadows", new[] { "_contactShadowsToggle" }',
+                    '("SSAO", new[] { "<Option>k__BackingField" }', '("Reflections", new[] { "<Option>k__BackingField" }', '("SSS", new[] { "_enableToggle", "_quality" }']:
+            self.assertIn(row, rows)
+        self.assertIn("entry.Wrapper = () => !replaced && (original == null || original());", rows)
+        self.assertIn("ReplacedRows.Tick(now);", self.text("src/TGPathTracing/Session.cs"))
+
+    def test_ray_reconstruction_pre_exposure(self):
+        # Ray Reconstruction gets HDRP's pre-exposure as HDRP's own DLSS pass hands it (clamped GPU exposure): without it
+        # NGX assumed 1 and every auto-exposure change looked like new lighting its history had to catch up with.
+        self.assertIn("eval.InPreExposure=f.preExposure>0.f ? f.preExposure : 1.f;", self.text("native/upscaling/src/rr_upscaler.cpp"))
+        self.assertIn("return float.IsNaN(value) || float.IsInfinity(value) || value <= 0f ? 1f : Mathf.Clamp(value, 0.2f, 2f);",
+                      self.text("src/TGBetterUpscaling/StpHost.cs"))
+
+    def test_path_tracing_shadow_terminator(self):
+        # Opaque surfaces start shadow rays outside (only a translucent leaf switches to the light's side), the light fades
+        # towards the geometric terminator (Chiang et al. 2019), and near the surface the nearest hit decides whether a
+        # ray is passed through (with the first hit accepted a nearer real blocker could be skipped).
+        common = self.text(PT + "shaders/pt_common.hlsli")
+        self.assertIn("return position + geoNormal * (!translucent || dot(geoNormal, dir) >= 0.0 ? offset : -offset);", common)
+        self.assertIn("if (s.translucent) return 1.0;", common)
+        self.assertIn("return g * (1.0 + g * (1.0 - g));", common)
+        self.assertIn("const float nearEnd = min(tmax, nearBack * 3.0);", common)
+        self.assertIn("PT_RAYQUERY(RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) f;", common)
+        self.assertNotIn("skin_shadow_origin", common)
+        spatial = self.text(PT + "shaders/pt_di_spatial.hlsl")
+        self.assertIn("float3 sunOrigin = shadow_origin(s.position, s.geoNormal, l, offset, s.translucent);", spatial)
+        self.assertIn("sunDiffuse = g.sunColor.rgb * nl * terminator_softening(s, l) / PI;", spatial)
+        self.assertIn("diffuse = e * nl * terminator_softening(s, l) / PI;", self.text(PT + "shaders/pt_restir.hlsli"))
+
+    def test_path_tracing_exposure(self):
+        # The radiance clamps are measured against HDRP's exposure averaged over ~10 s, not its current one (which follows
+        # the view), and the composite puts the one-frame-old traced light into this frame's exposure.
+        self.assertIn("float l = luminance(radiance) * (g.params.x > 0.0 ? g.params.x : exposure());", self.text(PT + "shaders/pt_restir.hlsli"))
+        self.assertIn("k.params[0]=std::isfinite(f.clampExposure) && f.clampExposure>0.f ? f.clampExposure : 0.f;", self.text(PT + "src/tracer.cpp"))
+        passes = self.text("src/TGPathTracing/HdrpPasses.cs")
+        self.assertIn("private const float ClampExposureSeconds = 10f;", passes)
+        self.assertIn("frame.ClampExposure = ClampExposure(pipeline, hd, (frame.Flags & Tgpt.FrameReset) != 0);", passes)
+        d3d11 = self.text(PT + "shaders/d3d11.hlsl")
+        self.assertIn("float ratio = (en > 0.0 && et > 0.0 && en < 1e20 && et < 1e20) ? en / et : 1.0;", d3d11)
+        self.assertIn("in.exposure.t.srv.Get(), st.inputs[prev.parity].exposure.t.srv.Get()};", self.text(PT + "src/tracer.cpp"))
+        # A pixel no previous traced texel matches takes the nearest traced light, never HDRP's own lighting (the fill lights).
+        self.assertIn("if (best.x < 0 && tracedA.Load(int3(n, 0)).a > 0.0) best = n;", d3d11)
+
+    def test_path_tracing_no_placed_lights(self):
+        # No fake lights: only lights that stand for a flame, a lamp or an effect (by their own or a parent's name) are
+        # traced; fill, fog and player lights are left out even inside a lamp's prefab.
+        lights = self.text("src/TGPathTracing/SceneLights.cs")
+        for token in ['private static readonly string[] PlacedNames = { "Ambien", "Fill", "Bounce", "Fake", "Indirect", "HeroLight", "Volumetric" };',
+                      "for (int depth = 0; t != null && depth <= 5; depth++, t = t.parent)", "if (Names(t.name, SourceNames)) { placed = false; break; }",
+                      "if (IsPlacedLight(light))"]:
+            self.assertIn(token, lights)
+        for source in ['"Fire"', '"Candle"', '"Candela"', '"Brazier"', '"Lamp"', '"Lantern"', '"Torch"', '"VFX"']:
+            self.assertIn(source, lights)
+        self.assertIn("SceneLights.IsPlacedLight(light)", self.text("src/TGPathTracing/Probe.cs"))
+        # The player's own Conversation Lighting Overhaul portrait light stays.
+        self.assertIn('private static readonly string[] KeptNames = { "TGConversationLightingOverhaul" };', lights)
+        self.assertIn("if (Names(light.name, KeptNames)) placed = false;", lights)
+
+    def test_path_tracing_entities_graphics(self):
+        # The castle's walls are Entities Graphics entities without Drake, their meshes registered with its
+        # BatchRendererGroup at runtime: resolved through EntitiesGraphicsSystem and traced. Shadow-only meshes (coarse
+        # copies the game casts shadows with) are then left out; they stand in only while the entities can't be read.
+        capture = self.text("src/TGPathTracing/SceneCapture.cs")
+        for token in ["var graphics = world.GetExistingSystemManaged<EntitiesGraphicsSystem>();",
+                      "if (!meshCache.TryGetValue(id, out mesh)) meshCache[id] = mesh = graphics.GetMesh(mmi.MeshID);",
+                      "None = new[] { ComponentType.ReadOnly<DrakeMeshMaterialComponent>(), ComponentType.ReadOnly<DisableRendering>() }",
+                      "standIns = !covered;", "if (!standIns) { ++objectsStandIn; continue; }",
+                      "covered = (entityUnresolved + entityPending) * 10 <= renderers.Count + entityUnresolved;",
+                      "for (int j = span.start; j < span.end; j++) added |= Add(pairs[j], v);",
+                      "if (settings.ShadowCastingMode == ShadowCastingMode.ShadowsOnly) { drakeShadowOnly += chunk.Count; if (!standIns) return false; standIn = true; }",
+                      "if (settings.ShadowCastingMode == ShadowCastingMode.ShadowsOnly) { entityShadowOnly += chunk.Count; continue; }"]:
+            self.assertIn(token, capture)
+
+    def test_path_tracing_full_only(self):
+        # Full path tracing or none: Global Illumination mode (HDRP's direct light with the traced bounced light added)
+        # and its Indirect Intensity are gone from the rows, the ABI, the passes and the composite. A config set to it
+        # becomes Full; the Indirect intensity entry leaves the config.
+        settings = self.text("src/TGPathTracing/Settings.cs")
+        self.assertIn("public enum TracingMode { Off, Full }", settings)
+        self.assertIn('internal static readonly string[] ModeNames = { "Off", "Full" };', settings)
+        self.assertIn('bool wasGlobalIllumination = StoredValue(file, "Mode") == "Global Illumination";', settings)
+        self.assertIn("if (wasGlobalIllumination) Mode.Value = ModeNames[(int)TracingMode.Full];", settings)
+        self.assertIn('var legacy = file.Bind(Section, "Indirect intensity", 1f, Hidden("No longer used."));', settings)
+        rows = self.text("src/TGPathTracing/PathTracingRow.cs")
+        self.assertIn('mode = VideoTab.Enum(IdPrefix, "Mode", "Path Tracing", (int)TracingMode.Full, out modeChoices, Settings.ModeNames);', rows)
+        for path in ["src/TGPathTracing/Settings.cs", "src/TGPathTracing/PathTracingRow.cs", "src/TGPathTracing/HdrpPasses.cs",
+                     "src/TGPathTracing/NativeTracer.cs", "src/TGPathTracing/ReplacedRows.cs", "src/TGPathTracing/SceneLights.cs"]:
+            code = self.text(path)
+            for gone in ["TracingMode.GlobalIllumination", "ModeGi", "Intensity = settings.Intensity", "s.Intensity"]:
+                self.assertNotIn(gone, code, path)
+        for path in ["include/tgpt_api.h", "src/tracer.cpp", "src/extension.cpp", "src/ray_regeneration.cpp", "shaders/pt_common.hlsli",
+                     "shaders/pt_compose.hlsl", "shaders/d3d11.hlsl", "shaders/pt_rrg_guides.hlsl"]:
+            code = self.text(PT + path)
+            for gone in ["TGPT_MODE_", "MODE_GI", "MODE_FULL", "f.mode", "frame.mode", "frame.intensity", "full_"]:
+                self.assertNotIn(gone, code, path)
+        self.assertNotIn("TGPT_MODE_", self.text("tests/pathtracing_gpu_test.cpp"))
+
+    def test_path_tracing_ray_regeneration(self):
+        # AMD FSR Ray Regeneration: AMD's signed DLLs from TG Path Tracing's own folder, probed on AMD GPUs only;
+        # it replaces the built-in denoiser only when it runs, and a failure leaves the built-in one for the session.
+        rrg = self.text(PT + "src/ray_regeneration.cpp")
+        self.assertIn('host().load_signed(denoiser.c_str(), L"ADVANCED MICRO DEVICES")', rrg)
+        self.assertIn("if(vendor!=0x1002)", rrg)
+        self.assertIn("FFX_API_RESOURCE_STATE_UNORDERED_ACCESS", rrg)
+        tracer = self.text(PT + "src/tracer.cpp")
+        self.assertIn("!st.rrgFailed && rrg_available()", tracer)
+        self.assertIn("k.settings2[1]=rrg ? f.options : (f.options&~TGPT_OPTION_RAY_REGENERATION);", tracer)
+        # AMD's backend binds its own heap and root signature; the tracer's are bound again before compose.
+        after = tracer[tracer.index("st.rrgActive=st.rrg.dispatch(list, r, error);"):]
+        self.assertLess(after.index("list->SetDescriptorHeaps(1, heaps);"), after.index("dispatch(list, st.compose.Get()"))
+        self.assertIn("list->SetComputeRootSignature(st.root.Get());", after)
+        self.assertIn("dispatch(list, st.compose.Get(), {rrg ? 1u : 0u}, b);", tracer)
+        # The reflections are divided by their albedo for the denoiser and multiplied back by compose alike.
+        self.assertIn("specular_albedo(s.f0, s.roughness", self.text(PT + "shaders/pt_rrg_guides.hlsl"))
+        self.assertIn("if (pass.a.x == 1u) specular *= specular_albedo(s.f0, s.roughness", self.text(PT + "shaders/pt_compose.hlsl"))
+        session = self.text("src/TGPathTracing/Session.cs")
+        self.assertIn("(Status.Features & Tgpt.FeatureRayRegeneration) != 0 &&\n            Settings.CurrentDenoiser == DenoiserChoice.RayRegeneration;", session)
+        helpers = self.text("tools/Package.Common.ps1")
+        self.assertIn("Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_denoiser_dx12.dll')", helpers)
+        self.assertIn("Kits/FidelityFX/denoisers/include/ffx_denoiser.h", self.text("CMakeLists.txt"))
 
     def test_config_keys_are_valid_for_bepinex(self):
         # BepInEx's ConfigDefinition throws on these characters in a section or key, which stops the plugin
@@ -764,7 +1191,8 @@ class SourceConsistency(unittest.TestCase):
         loader = self.text("src/TGGraphicsBridge.Autoload/Bootstrap.cs")
         self.assertIn("// Do NOT move this to ThreadPool/Task.Run or a plugin Awake() callback.", loader)
         self.assertLess(loader.index('Bind<AddExtension>("TGGraphicsBridge_AddExtension")'), loader.index('Bind<NativeBootstrap>("TGGraphicsBridge_Bootstrap")'))
-        for path in ["src/TGFrameGeneration/NativeBridge.cs", "src/TGBetterUpscaling/NativeUpscaler.cs", "src/TGGraphicsBridge/GraphicsBridge.cs"]:
+        for path in ["src/TGFrameGeneration/NativeBridge.cs", "src/TGBetterUpscaling/NativeUpscaler.cs", "src/TGGraphicsBridge/GraphicsBridge.cs",
+                     "src/TGPathTracing/NativeTracer.cs"]:
             text = self.text(path)
             self.assertNotIn("LoadLibrary", text, path)
             self.assertIn("GetModuleHandleW", text, path)
@@ -778,8 +1206,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("tgfg_shader_tests", cmake)
         self.assertIn("interop_shader.hpp.in", cmake)
         self.assertLess(cmake.index("if(TGFG_BUILD_NATIVE)"), cmake.index("tgfg_shader_tests"))
-        # MinHook's own install rules stay out of the staged mods.
-        self.assertEqual(cmake.count("COMPONENT TGNative"), 3)
+        # MinHook's own install rules stay out of the staged mods: one install rule per mod DLL.
+        self.assertEqual(cmake.count("COMPONENT TGNative"), 4)
         self.assertIn("--component TGNative", self.text("Build-Native.ps1"))
 
     def test_installed_preflight(self):
@@ -901,12 +1329,21 @@ class SourceConsistency(unittest.TestCase):
         # (Windows 10), every D3D12 device fails with 0x887E0003 unless the request names what the game ships.
         # d3d12.dll reads the request when it loads, so this comes before any extension loads its runtimes,
         # and none of the native DLLs imports d3d12.dll.
-        self.assertLess(boot.index("log(align_agility_sdk());"), boot.index("prime_swapchain_hooks()"))
+        self.assertLess(boot.index("log(align_agility_sdk(paths));"), boot.index("prime_swapchain_hooks()"))
         agility = self.text(BR + "src/agility.cpp")
         for token in ['GetProcAddress(exe, "D3D12SDKVersion")', 'GetProcAddress(exe, "D3D12SDKPath")',
                       "if(windows>=wanted)", "if(available==wanted)", 'GetModuleHandleW(L"d3d12.dll")', "*requested=available;"]:
             self.assertIn(token, agility)
         self.assertIn("native/bridge/src/agility.cpp", self.text("CMakeLists.txt"))
+        # An extension's newer Agility SDK runtime (TG Path Tracing's, for Shader Model 6.9) becomes the request
+        # only when it is retail, inside the game folder, Microsoft-signed, and d3d12.dll has not loaded yet.
+        for token in ["if(version<600 || version>=700 || version<=newest) continue;",
+                      "if(!newest || newest<=windows || newest<=wanted || newest<=otherwise) return false;",
+                      "const uint32_t otherwise=windows>=wanted ? windows : (readable ? available : wanted);",
+                      'if(part==L"..") inside=false;', 'trusted_signer((best/L"D3D12Core.dll").wstring(), L"MICROSOFT")',
+                      "*requested=newest; *folder=path.c_str();"]:
+            self.assertIn(token, agility)
+        self.assertLess(agility.index("use_extension_runtime(extensions"), agility.index("if(windows>=wanted)"))
         # A failing step of the bridge plugin's start never stops the others, nor BepInEx loading the mods.
         plugin = self.text("src/TGGraphicsBridge/Plugin.cs")
         start = plugin.split("private static void Start()", 1)[1].split("private static void Step(", 1)[0]

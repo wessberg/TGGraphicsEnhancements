@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\Build.Local.props" Condition="Exists('..\..\Build.Local.props')" />
+  <Import Project="..\Game.References.props" />
+  <PropertyGroup>
+    <AssemblyName>TGPathTracing</AssemblyName>
+    <RootNamespace>TGPathTracing</RootNamespace>
+    <Version>1.2.0</Version>
+    <!-- The Mono version only for now: the scene capture reads the game's ECS world (Awaken's Drake renderer)
+         through Unity.Entities' generic API, which the IL2CPP interop does not expose usably. -->
+    <TargetFrameworks>net472</TargetFrameworks>
+  </PropertyGroup>
+  <!-- TG Graphics Bridge, bundled in this mod's package by Build.ps1 (the build does not copy it), and
+       this mod's copy of the bridge's preloader, built alongside but never loaded as a dependency. -->
+  <ItemGroup>
+    <ProjectReference Include="..\TGGraphicsBridge\TGGraphicsBridge.csproj" Private="false" />
+    <ProjectReference Include="..\TGPathTracing.Autoload\TGPathTracing.Autoload.csproj" ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+  <!-- The scene as the game renders it: its ECS world (Drake), addressables, terrain and lights. -->
+  <ItemGroup>
+    <Reference Include="Unity.Entities"><HintPath>$(UnityReferenceDir)\Unity.Entities.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Entities.Graphics"><HintPath>$(UnityReferenceDir)\Unity.Entities.Graphics.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Transforms"><HintPath>$(UnityReferenceDir)\Unity.Transforms.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.ResourceManager"><HintPath>$(UnityReferenceDir)\Unity.ResourceManager.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Addressables"><HintPath>$(UnityReferenceDir)\Unity.Addressables.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Awaken.ECS"><HintPath>$(UnityReferenceDir)\Awaken.ECS.dll</HintPath><Private>false</Private></Reference>
+    <!-- Medusa's manager derives from its MonoBehaviourWithInitAfterLoaded. -->
+    <Reference Include="Awaken.PackageUtilities"><HintPath>$(UnityReferenceDir)\Awaken.PackageUtilities.dll</HintPath><Private>false</Private></Reference>
+    <!-- The probe's ray (Probe.cs). -->
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(UnityReferenceDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+    <!-- Leshy's cell bounds (AABB). -->
+    <Reference Include="Unity.Mathematics.Extensions"><HintPath>$(UnityReferenceDir)\Unity.Mathematics.Extensions.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TerrainModule"><HintPath>$(UnityReferenceDir)\UnityEngine.TerrainModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AwesomeTechnologies.VegetationStudioPro.Runtime"><HintPath>$(UnityReferenceDir)\AwesomeTechnologies.VegetationStudioPro.Runtime.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

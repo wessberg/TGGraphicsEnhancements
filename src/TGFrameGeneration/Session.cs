@@ -25,7 +25,7 @@ namespace TGFrameGeneration
         internal static Selection Selected => Override ?? Selection.From(Settings);
         private static bool checkFailed;
         private static bool stopped=true;
-        private static float nextPoll, nextDiscovery, settleUntil;
+        private static float nextPoll, nextDiscovery, settleUntil, cursorUnlockedAt=-10f;
         private static int width, height;
         private static NativeRequest last;
         private static ulong sequence;
@@ -179,7 +179,12 @@ namespace TGFrameGeneration
         {
             Suspend flags=Suspend.None;
             if(!Application.isFocused) flags|=Suspend.Unfocused;
-            if(Settings.SuspendOnCursor.Value && Cursor.lockState!=CursorLockMode.Locked) flags|=Suspend.CursorUnlocked;
+            // Mods and the game can fight over the cursor while a menu is open (FoA Mod Manager, Tainted Interface and
+            // others set it each frame): frame generation resumes only once the cursor has stayed locked for half a
+            // second, not for the odd frame the game re-locks it, which switched it on and off with hitches.
+            bool unlocked=Cursor.lockState!=CursorLockMode.Locked;
+            if(unlocked) cursorUnlockedAt=now;
+            if(Settings.SuspendOnCursor.Value && (unlocked || now-cursorUnlockedAt<0.5f)) flags|=Suspend.CursorUnlocked;
             if(Time.timeScale<=0) flags|=Suspend.TimePaused;
             if(NativeVideoSettings.IsSettingsOpen) flags|=Suspend.VideoMenu;
             var camera=Camera.main;

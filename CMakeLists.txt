@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Three native DLLs, one per mod:
+# Four native DLLs, one per mod:
 #   TGGraphicsBridge.Native   TG Graphics Bridge: hooks, the game's device, the shared D3D12 device
 #   TGFG.Native               TG Frame Generation extension: presentation bridge, DLSS-G, FSR/XeSS FG
 #   TGBetterUpscaling.Native  TG Better Upscaling extension: FSR and XeSS upscaling where HDRP runs STP, and
 #                             the bundled DLSS DLL for the game's own DLSS
+#   TGPathTracing.Native      TG Path Tracing extension: ReSTIR path tracing on the shared D3D12 device
 cmake_minimum_required(VERSION 3.24)
 project(TGGraphicsMods VERSION 1.2.0 LANGUAGES C CXX)
 # The C and C++ runtimes are linked into each DLL. The game ships no msvcp140.dll, so a shared runtime
@@ -20,6 +21,7 @@ option(TGFG_BUILD_NATIVE "Build the Windows x64 native DLLs" ${WIN32})
 set(BRIDGE_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/native/bridge/include")
 set(FG_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/native/framegen/include")
 set(UP_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/native/upscaling/include")
+set(PT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/include")
 if(BUILD_TESTING)
   add_executable(tgfg_policy_tests tests/policy_tests.cpp)
   target_include_directories(tgfg_policy_tests PRIVATE ${FG_INCLUDE})
@@ -44,6 +46,12 @@ if(TGFG_BUILD_NATIVE)
   set(FIDELITYFX_ROOT "" CACHE PATH "AMD FSR (FidelityFX) SDK v2.3.0 root (contains Kits/FidelityFX/api/include)")
   set(XESS_ROOT "" CACHE PATH "Intel XeSS SDK v3.0.2 root (contains inc/xess_fg)")
   set(ANTILAG2_ROOT "" CACHE PATH "AMD Anti-Lag 2 SDK v2.0.0a root (contains ffx_antilag2_dx12.h)")
+  set(DLSS_ROOT "" CACHE PATH "NVIDIA DLSS SDK 310.9.1 root (include/nvsdk_ngx_helpers_dlssd_d3d.h, lib/Windows_x86_64/x64/nvsdk_ngx_s.lib)")
+  foreach(file include/nvsdk_ngx_helpers_dlssd_d3d.h lib/Windows_x86_64/x64/nvsdk_ngx_s.lib)
+    if(NOT EXISTS "${DLSS_ROOT}/${file}")
+      message(FATAL_ERROR "Missing ${DLSS_ROOT}/${file}. Set DLSS_ROOT to the NVIDIA DLSS SDK 310.9.1 release (github.com/NVIDIA/DLSS).")
+    endif()
+  endforeach()
   foreach(header sl.h sl_core_api.h sl_consts.h sl_dlss_g.h sl_reflex.h sl_pcl.h)
     if(NOT EXISTS "${STREAMLINE_ROOT}/include/${header}")
       message(FATAL_ERROR "Missing ${STREAMLINE_ROOT}/include/${header}. Supply the official v2.14.1 SDK.")
@@ -55,7 +63,7 @@ if(TGFG_BUILD_NATIVE)
   # Headers only: the AMD and Intel runtimes are loaded at run time and are optional.
   foreach(header Kits/FidelityFX/api/include/ffx_api.h Kits/FidelityFX/framegeneration/include/ffx_framegeneration.h
                  Kits/FidelityFX/framegeneration/include/dx12/ffx_api_framegeneration_dx12.h
-                 Kits/FidelityFX/upscalers/include/ffx_upscale.h)
+                 Kits/FidelityFX/upscalers/include/ffx_upscale.h Kits/FidelityFX/denoisers/include/ffx_denoiser.h)
     if(NOT EXISTS "${FIDELITYFX_ROOT}/${header}")
       message(FATAL_ERROR "Missing ${FIDELITYFX_ROOT}/${header}. Supply the AMD FSR SDK v2.3.0 headers.")
     endif()
@@ -87,7 +95,83 @@ if(TGFG_BUILD_NATIVE)
   configure_file(native/framegen/shaders/interop_shader.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/interop_shader.hpp" @ONLY)
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/native/upscaling/shaders/upscale.hlsl" TGUP_UPSCALE_SHADER)
   configure_file(native/upscaling/shaders/upscale_shader.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/upscale_shader.hpp" @ONLY)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/shaders/d3d11.hlsl" TGPT_D3D11_SHADER)
+  configure_file(native/pathtracing/shaders/d3d11_shader.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/d3d11_shader.hpp" @ONLY)
+  # The embedded HLSL is read at configure time: editing it has to configure again, or the DLL keeps the old text.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/shaders/d3d11.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/native/upscaling/shaders/upscale.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/native/framegen/shaders/interop.hlsl")
   set(TG_DEFINES UNICODE _UNICODE _WIN32_WINNT=0x0A00)
+  # The path tracer's passes use Shader Model 6.6 and inline ray tracing, which only DXC compiles. The
+  # Windows SDK's dxc.exe signs the DXIL through the dxil.dll next to it.
+  set(TG_SDK_BIN_HINTS)
+  if(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
+    list(APPEND TG_SDK_BIN_HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64")
+  endif()
+  if(DEFINED ENV{WindowsSdkVerBinPath})
+    list(APPEND TG_SDK_BIN_HINTS "$ENV{WindowsSdkVerBinPath}/x64")
+  endif()
+  file(GLOB TG_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.0.*")
+  list(SORT TG_SDK_BINS ORDER DESCENDING)
+  foreach(dir ${TG_SDK_BINS})
+    list(APPEND TG_SDK_BIN_HINTS "${dir}/x64")
+  endforeach()
+  # DXC 1.9 or newer compiles Shader Model 6.9 (DirectX Raytracing 1.2): a release unpacked beside the SDKs
+  # (DXC-<version>/bin/x64, github.com/microsoft/DirectXShaderCompiler) comes before the Windows SDK's.
+  file(GLOB TG_LOCAL_DXC LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/DXC-*/bin/x64")
+  list(SORT TG_LOCAL_DXC ORDER DESCENDING)
+  find_program(TG_DXC dxc HINTS ${TG_LOCAL_DXC} ${TG_SDK_BIN_HINTS} NO_DEFAULT_PATH)
+  if(NOT TG_DXC)
+    message(FATAL_ERROR "dxc.exe not found. Unpack DXC 1.9 or newer into DXC-<version> beside this file, or set TG_DXC.")
+  endif()
+  set(PT_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/shaders")
+  set(PT_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated/pathtracing")
+  file(MAKE_DIRECTORY "${PT_GENERATED}")
+  configure_file(native/pathtracing/shaders/pt_shaders.hpp.in "${PT_GENERATED}/pt_shaders.hpp" COPYONLY)
+  set(PT_SHADER_HEADERS)
+  # Each pass twice: Shader Model 6.6 for every DXR 1.1 GPU, and 6.9 (DirectX Raytracing 1.2: opacity
+  # micromaps) for where the device offers it; the GI and reflection passes also as ray generation shaders
+  # with Shader Execution Reordering. The tracer picks a set when it starts.
+  set(PT_SHADER_DEPENDS "${PT_SHADER_DIR}/pt_common.hlsli" "${PT_SHADER_DIR}/pt_restir.hlsli" "${PT_SHADER_DIR}/pt_root.hlsli")
+  foreach(entry prepare:pt_prepare gi:pt_gi giSpatial:pt_gi_spatial di:pt_di diSpatial:pt_di_spatial specular:pt_specular
+                temporal:pt_temporal atrous:pt_atrous compose:pt_compose)
+    string(REPLACE ":" ";" parts "${entry}")
+    list(GET parts 0 variable)
+    list(GET parts 1 name)
+    add_custom_command(OUTPUT "${PT_GENERATED}/${name}.h"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
+      DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
+      COMMENT "DXC ${name}.hlsl" VERBATIM)
+    add_custom_command(OUTPUT "${PT_GENERATED}/${name}_dxr12.h"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_9 -E main -D PT_DXR12 -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}_dxr12.h" -Vn ${variable}Dxr12 "${PT_SHADER_DIR}/${name}.hlsl"
+      DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
+      COMMENT "DXC ${name}.hlsl (Shader Model 6.9)" VERBATIM)
+    list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}.h" "${PT_GENERATED}/${name}_dxr12.h")
+  endforeach()
+  foreach(entry gi:pt_gi specular:pt_specular)
+    string(REPLACE ":" ";" parts "${entry}")
+    list(GET parts 0 variable)
+    list(GET parts 1 name)
+    add_custom_command(OUTPUT "${PT_GENERATED}/${name}_ser.h"
+      COMMAND "${TG_DXC}" -nologo -T lib_6_9 -D PT_DXR12 -D PT_SER -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}_ser.h" -Vn ${variable}Ser "${PT_SHADER_DIR}/${name}.hlsl"
+      DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
+      COMMENT "DXC ${name}.hlsl (ray generation, Shader Execution Reordering)" VERBATIM)
+    list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}_ser.h")
+  endforeach()
+  # Passes that trace no rays: one Shader Model 6.6 build serves both sets (the opacity micromap bake, AMD Ray
+  # Regeneration's guides, and characters' skinned positions).
+  foreach(entry ommBake:pt_omm_bake rrgGuides:pt_rrg_guides skinUnpack:pt_skin)
+    string(REPLACE ":" ";" parts "${entry}")
+    list(GET parts 0 variable)
+    list(GET parts 1 name)
+    add_custom_command(OUTPUT "${PT_GENERATED}/${name}.h"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
+      DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
+      COMMENT "DXC ${name}.hlsl" VERBATIM)
+    list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}.h")
+  endforeach()
+  add_custom_target(TGPathTracingShaders DEPENDS ${PT_SHADER_HEADERS})
 
   add_library(TGGraphicsBridge.Native SHARED
     native/bridge/src/core.cpp native/bridge/src/hooks.cpp native/bridge/src/device.cpp
@@ -111,15 +195,28 @@ if(TGFG_BUILD_NATIVE)
   add_library(TGBetterUpscaling.Native SHARED
     native/upscaling/src/extension.cpp native/upscaling/src/upscaler.cpp
     native/upscaling/src/fsr_upscaler.cpp native/upscaling/src/xess_upscaler.cpp native/upscaling/src/dlss_dll.cpp
-    native/upscaling/src/nvidia_profile.cpp)
+    native/upscaling/src/nvidia_profile.cpp native/upscaling/src/rr_upscaler.cpp)
   target_include_directories(TGBetterUpscaling.Native PRIVATE ${UP_INCLUDE} ${BRIDGE_INCLUDE} "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${FIDELITYFX_ROOT}/Kits/FidelityFX/api/include" "${FIDELITYFX_ROOT}/Kits/FidelityFX/upscalers/include"
-    "${XESS_ROOT}/inc/xess")
+    "${XESS_ROOT}/inc/xess" "${DLSS_ROOT}/include")
   target_compile_definitions(TGBetterUpscaling.Native PRIVATE ${TG_DEFINES})
-  target_link_libraries(TGBetterUpscaling.Native PRIVATE dxgi d3d11 d3d12 d3dcompiler dxguid version)
+  # NGX, statically linked (static C runtime, like this DLL), for DLSS Ray Reconstruction on the game's D3D11 device.
+  target_link_libraries(TGBetterUpscaling.Native PRIVATE dxgi d3d11 d3d12 d3dcompiler dxguid version
+    "${DLSS_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")
+
+  # No d3d12.lib: every D3D12 call goes through the bridge's device, so the DLL never loads d3d12.dll itself.
+  add_library(TGPathTracing.Native SHARED
+    native/pathtracing/src/extension.cpp native/pathtracing/src/scene.cpp native/pathtracing/src/tracer.cpp
+    native/pathtracing/src/ray_regeneration.cpp)
+  add_dependencies(TGPathTracing.Native TGPathTracingShaders)
+  # AMD FSR Ray Regeneration: the FSR API's headers; the runtime is AMD's signed DLLs, loaded at run time.
+  target_include_directories(TGPathTracing.Native PRIVATE ${PT_INCLUDE} ${BRIDGE_INCLUDE} "${CMAKE_CURRENT_BINARY_DIR}/generated" "${PT_GENERATED}"
+    "${FIDELITYFX_ROOT}/Kits/FidelityFX/api/include" "${FIDELITYFX_ROOT}/Kits/FidelityFX/denoisers/include")
+  target_compile_definitions(TGPathTracing.Native PRIVATE ${TG_DEFINES})
+  target_link_libraries(TGPathTracing.Native PRIVATE d3d11 d3dcompiler dxguid)
 
   if(MSVC)
-    foreach(target TGGraphicsBridge.Native TGFG.Native TGBetterUpscaling.Native)
+    foreach(target TGGraphicsBridge.Native TGFG.Native TGBetterUpscaling.Native TGPathTracing.Native)
       target_compile_options(${target} PRIVATE /W4 /EHsc /permissive- /utf-8)
     endforeach()
   endif()
@@ -160,9 +257,30 @@ if(TGFG_BUILD_NATIVE)
     # Unity's order: the DXGI factory and D3D11 device exist before the bridge starts.
     add_test(NAME tgup_gpu_smoke_unity_order COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first)
     set_tests_properties(tgup_gpu_smoke_unity_order PROPERTIES SKIP_RETURN_CODE 77)
+    # With TG Path Tracing: DLSS Ray Reconstruction (NGX) starts, and denoises and upscales a noisy frame.
+    add_test(NAME tgup_gpu_smoke_with_pt COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first --with-pt)
+    set_tests_properties(tgup_gpu_smoke_with_pt PROPERTIES SKIP_RETURN_CODE 77)
+    # All three mods on one bridge, installed as in BepInEx: frame generation's Streamline and Ray Reconstruction's
+    # NGX on the same device (Streamline runs when UnityPlayer.dll sits beside the test; see docs/TESTING.md).
+    add_test(NAME tgup_gpu_smoke_all_mods COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first --with-fg --with-pt --installed)
+    set_tests_properties(tgup_gpu_smoke_all_mods PROPERTIES SKIP_RETURN_CODE 77)
+    # Frame generation and upscaling without TG Path Tracing, installed: Ray Reconstruction never starts NGX.
+    add_test(NAME tgup_gpu_smoke_fg_installed COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first --with-fg --installed)
+    set_tests_properties(tgup_gpu_smoke_fg_installed PROPERTIES SKIP_RETURN_CODE 77)
+    # The path tracer end to end on this machine's GPU: the bridge boots with the extension, a synthetic
+    # scene is registered and rasterized into an HDRP-style GBuffer, and frames are traced and composited
+    # through the real render events. Writes PNGs of the result and the debug views; skips (77) without
+    # a DXR 1.1 GPU or the staged DLLs.
+    add_executable(tgpt_gpu_test tests/pathtracing_gpu_test.cpp)
+    target_include_directories(tgpt_gpu_test PRIVATE ${BRIDGE_INCLUDE} ${PT_INCLUDE})
+    target_compile_definitions(tgpt_gpu_test PRIVATE ${TG_DEFINES})
+    target_link_libraries(tgpt_gpu_test PRIVATE dxgi d3d11 d3dcompiler)
+    add_test(NAME tgpt_gpu_test COMMAND tgpt_gpu_test "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" "${CMAKE_CURRENT_BINARY_DIR}/tgpt-images")
+    set_tests_properties(tgpt_gpu_test PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   # Component TGNative: MinHook's own install rules (headers, static library) stay out of the mods.
   install(TARGETS TGGraphicsBridge.Native RUNTIME DESTINATION TGGraphicsBridge COMPONENT TGNative)
   install(TARGETS TGFG.Native RUNTIME DESTINATION TGFrameGeneration COMPONENT TGNative)
   install(TARGETS TGBetterUpscaling.Native RUNTIME DESTINATION TGBetterUpscaling COMPONENT TGNative)
+  install(TARGETS TGPathTracing.Native RUNTIME DESTINATION TGPathTracing COMPONENT TGNative)
 endif()

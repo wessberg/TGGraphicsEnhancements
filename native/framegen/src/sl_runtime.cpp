@@ -157,6 +157,23 @@ static void sl_log(sl::LogType type,const char* text) {
 // private output swapchain is one of those. Streamline itself only uses that module name to look
 // for an optional NGX updater next to the interposer.
 static const wchar_t kInterposerFile[]=L"TGFG.Streamline.dll";
+// NGX keeps one session per D3D12 device, and on the bridge's device that is the one Streamline starts here
+// (TGFG creates the device through Streamline, before any other extension sees it). NGX looks for feature
+// DLLs only in the folders the session started with: Streamline's plugin folder and its pathsToPlugins. TG
+// Better Upscaling runs DLSS Ray Reconstruction on the same device for TG Path Tracing, from its own DLSS
+// folder, which NGX would never search. With both of those mods installed, that folder comes second: it holds
+// NVIDIA's nvngx_dlss.dll and nvngx_dlssd.dll, no Streamline plugin and no nvngx_dlssg.dll, so Streamline and
+// DLSS Frame Generation still load everything from this mod's own folder. Without them, nothing changes.
+static std::wstring ray_reconstruction_folder() {
+    const wchar_t* root=host().bepinex_root();
+    if(!root || !*root) return {};
+    const std::filesystem::path bepinex(root);
+    const auto dlss=bepinex/L"TGBetterUpscaling"/L"Native"/L"DLSS";
+    std::error_code error;
+    if(!std::filesystem::exists(dlss/L"nvngx_dlssd.dll",error) ||
+       !std::filesystem::exists(bepinex/L"TGPathTracing"/L"Native"/L"TGPathTracing.Native.dll",error)) return {};
+    return dlss.wstring();
+}
 bool load_runtime() {
     auto& s=state();
     if(const HMODULE other=GetModuleHandleW(L"sl.interposer.dll")) {
@@ -183,8 +200,15 @@ bool load_runtime() {
     if(version.empty()) { fact("streamline","no-engine-version"); log("Cannot read UnityPlayer.dll version. Native integration requires a Unity player beside the target executable."); return false; }
     log("Engine identity: Unity file-version "+version+"; applicationId=0; mod-specific project GUID. No application-ID spoofing.");
     s.pluginPaths[0]=s.runtimeDir.c_str();
+    uint32_t pluginPathCount=1;
+    s.rayReconstructionDir=ray_reconstruction_folder();
+    if(!s.rayReconstructionDir.empty()) {
+        s.pluginPaths[1]=s.rayReconstructionDir.c_str(); pluginPathCount=2;
+        log("TG Better Upscaling and TG Path Tracing are installed: NGX on this device also looks in "+
+            std::filesystem::path(s.rayReconstructionDir).u8string()+" for DLSS Ray Reconstruction");
+    }
     sl::Preferences pref{};
-    pref.pathsToPlugins=s.pluginPaths.data(); pref.numPathsToPlugins=1;
+    pref.pathsToPlugins=s.pluginPaths.data(); pref.numPathsToPlugins=pluginPathCount;
     pref.pathToLogsAndData=s.root.c_str(); pref.logMessageCallback=sl_log;
     pref.logLevel=sl::LogLevel::eDefault;
     pref.featuresToLoad=s.features.data(); pref.numFeaturesToLoad=3;

@@ -22,6 +22,9 @@ namespace TGBetterUpscaling
                 case UpscalerSetting.STP:
                     lines.Add("STP (the game's own) at " + GameScale() + " render scale");
                     break;
+                case UpscalerSetting.DLSS when StpHost.RayReconstruction:
+                    lines.Add("DLSS Ray Reconstruction " + modeText + " · denoises TG Path Tracing's light");
+                    break;
                 case UpscalerSetting.DLSS:
                 {
                     int source = Session.Upscaler.DlssDll(out ulong loaded, out ulong requested, out ulong bundled);
@@ -43,7 +46,7 @@ namespace TGBetterUpscaling
                         (Session.HaveStatus && Session.Status.XessPreset != 0 ? " · runs " + Session.XessPreset(Session.Status.XessPreset) : ""));
                     break;
             }
-            if ((upscaler == UpscalerSetting.FSR || upscaler == UpscalerSetting.XeSS) && Session.HaveStatus && Session.Status.OutputWidth > 0)
+            if ((upscaler == UpscalerSetting.FSR || upscaler == UpscalerSetting.XeSS || StpHost.RayReconstruction) && Session.HaveStatus && Session.Status.OutputWidth > 0)
             {
                 var s = Session.Status;
                 lines.Add("Upscales " + s.RenderWidth + "x" + s.RenderHeight + " → " + s.OutputWidth + "x" + s.OutputHeight +

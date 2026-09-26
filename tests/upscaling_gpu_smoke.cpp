@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -42,8 +43,8 @@ static uint16_t float_to_half(float f) {
 static float halton(int index, int base) { float f=1, r=0; while(index>0) { f/=float(base); r+=f*float(index%base); index/=base; } return r; }
 // The bundled DLSS: a load of an older nvngx_dlss.dll by full path (a system DLL under that name,
 // version 10.0) maps the bundled copy instead. Loaded as a data file, so none of NVIDIA's code runs.
-static void check_bundled_dlss(const fs::path& root) {
-    if(!fs::exists(root/"TGBetterUpscaling"/"DLSS"/"nvngx_dlss.dll")) { std::printf("      no DLSS staged in TGBetterUpscaling/DLSS; its check is skipped\n"); return; }
+static void check_bundled_dlss(const fs::path& upscaling) {
+    if(!fs::exists(upscaling/"DLSS"/"nvngx_dlss.dll")) { std::printf("      no DLSS staged in TGBetterUpscaling/DLSS; its check is skipped\n"); return; }
     wchar_t temp[MAX_PATH]{}, system[MAX_PATH]{};
     GetTempPathW(MAX_PATH, temp); GetSystemDirectoryW(system, MAX_PATH);
     const auto folder=fs::path(temp)/("tgup-dlss-"+std::to_string(GetCurrentProcessId()));
@@ -56,8 +57,10 @@ static void check_bundled_dlss(const fs::path& root) {
     if(mapped) GetMappedFileNameW(GetCurrentProcess(), reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mapped)&~uintptr_t(3)), name, MAX_PATH);
     std::wstring mappedName(name);
     for(auto& c:mappedName) c=wchar_t(towlower(c));
-    const std::wstring suffix=L"\\tgbetterupscaling\\dlss\\nvngx_dlss.dll";
-    expect(mappedName.size()>suffix.size() && mappedName.compare(mappedName.size()-suffix.size(), suffix.size(), suffix)==0,
+    // TG Better Upscaling's DLSS folder: TGBetterUpscaling/DLSS staged, TGBetterUpscaling/Native/DLSS installed.
+    const std::wstring suffix=L"\\dlss\\nvngx_dlss.dll";
+    expect(mappedName.find(L"tgbetterupscaling")!=std::wstring::npos && mappedName.size()>suffix.size() &&
+           mappedName.compare(mappedName.size()-suffix.size(), suffix.size(), suffix)==0,
         "an older nvngx_dlss.dll loads the bundled DLSS");
     if(mapped) FreeLibrary(mapped);
     fs::remove_all(folder, error);
@@ -78,15 +81,59 @@ static void check_bundled_dlss(const fs::path& root) {
     if(own) FreeLibrary(own);
     fs::remove_all(setFolder, error);
 }
+// A crash names the module and offset it happened in, for a report without a debugger.
+static LONG CALLBACK report_crash(EXCEPTION_POINTERS* info) {
+    const DWORD code=info->ExceptionRecord->ExceptionCode;
+    if(code!=EXCEPTION_ACCESS_VIOLATION && code!=EXCEPTION_ILLEGAL_INSTRUCTION && code!=EXCEPTION_STACK_OVERFLOW) return EXCEPTION_CONTINUE_SEARCH;
+    void* address=info->ExceptionRecord->ExceptionAddress;
+    HMODULE module=nullptr; wchar_t name[MAX_PATH]=L"?";
+    if(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(address), &module))
+        GetModuleFileNameW(module, name, MAX_PATH);
+    std::printf("CRASH 0x%08lX at %ls+0x%llX (accessing 0x%llX)\n", code, name,
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address)-reinterpret_cast<uintptr_t>(module)),
+        info->ExceptionRecord->NumberParameters>1 ? static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]) : 0ull);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0); // vendor runtimes may end the process without the CRT flushing stdio
+    AddVectoredExceptionHandler(1, report_crash);
     const fs::path root=argc>1 ? fs::path(argv[1]) : fs::current_path()/"artifacts"/"Native";
-    bool withFg=false, factoryFirst=false;
-    for(int i=2;i<argc;++i) { if(std::strcmp(argv[i], "--with-fg")==0) withFg=true; if(std::strcmp(argv[i], "--factory-first")==0) factoryFirst=true; }
-    const auto bridgePath=root/"TGGraphicsBridge"/"TGGraphicsBridge.Native.dll";
-    const auto upPath=root/"TGBetterUpscaling"/"TGBetterUpscaling.Native.dll";
-    const auto fgPath=root/"TGFrameGeneration"/"TGFG.Native.dll";
-    if(!fs::exists(bridgePath) || !fs::exists(upPath)) { std::printf("SKIP: build and stage the native DLLs first (%s)\n", root.string().c_str()); return 77; }
+    // --with-fg: TG Frame Generation too (Streamline's NGX on the same device); --with-pt: TG Path Tracing too,
+    // the one extension DLSS Ray Reconstruction (and so NGX in this DLL) starts for.
+    // --installed: the native files as a player's BepInEx folder holds them (BepInEx/<mod>/Native, the bridge in
+    // each), beside this exe, so what the extensions find through the bridge's BepInEx root is what they find in
+    // the game. Frame generation's Streamline also needs a Unity player (UnityPlayer.dll) beside this exe.
+    bool withFg=false, withPt=false, factoryFirst=false, installed=false;
+    for(int i=2;i<argc;++i) {
+        if(std::strcmp(argv[i], "--with-fg")==0) withFg=true;
+        if(std::strcmp(argv[i], "--with-pt")==0) withPt=true;
+        if(std::strcmp(argv[i], "--factory-first")==0) factoryFirst=true;
+        if(std::strcmp(argv[i], "--installed")==0) installed=true;
+    }
+    if(!fs::exists(root/"TGGraphicsBridge"/"TGGraphicsBridge.Native.dll") || !fs::exists(root/"TGBetterUpscaling"/"TGBetterUpscaling.Native.dll")) {
+        std::printf("SKIP: build and stage the native DLLs first (%s)\n", root.string().c_str()); return 77;
+    }
+    std::function<fs::path(const char*)> native=[&](const char* mod) { return root/mod; };
+    fs::path bridgePath=root/"TGGraphicsBridge"/"TGGraphicsBridge.Native.dll";
+    if(installed) {
+        wchar_t exe[MAX_PATH]{}; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        const fs::path bepinex=fs::path(exe).parent_path()/"smoke-install"/"BepInEx";
+        for(const char* mod:{"TGBetterUpscaling", "TGFrameGeneration", "TGPathTracing"}) {
+            if(!fs::exists(root/mod)) continue;
+            std::error_code ec;
+            const auto target=bepinex/mod/"Native";
+            fs::create_directories(target, ec);
+            fs::copy(root/mod, target, fs::copy_options::recursive|fs::copy_options::update_existing, ec);
+            if(!ec) fs::copy(root/"TGGraphicsBridge"/"TGGraphicsBridge.Native.dll", target, fs::copy_options::update_existing, ec);
+            if(ec) { std::printf("FAIL: stage %s as installed: %s\n", mod, ec.message().c_str()); return 1; }
+        }
+        native=[bepinex](const char* mod) { return bepinex/mod/"Native"; };
+        bridgePath=native("TGBetterUpscaling")/"TGGraphicsBridge.Native.dll";
+        std::printf("      installed layout: %s\n", bepinex.string().c_str());
+    }
+    const auto upPath=native("TGBetterUpscaling")/"TGBetterUpscaling.Native.dll";
+    const auto fgPath=native("TGFrameGeneration")/"TGFG.Native.dll";
+    const auto ptPath=native("TGPathTracing")/"TGPathTracing.Native.dll";
     if(!fs::exists(root/"TGBetterUpscaling"/"FidelityFX") && !fs::exists(root/"TGBetterUpscaling"/"XeSS")) { std::printf("SKIP: no upscaler runtimes staged\n"); return 77; }
     const HMODULE bridge=LoadLibraryW(bridgePath.c_str());
     if(!bridge) { std::printf("FAIL: load bridge %lu\n", GetLastError()); return 1; }
@@ -109,8 +156,12 @@ int main(int argc, char** argv) {
     }
     expect(addExtension(upPath.c_str())==0, "upscaling extension registered");
     if(withFg && fs::exists(fgPath)) expect(addExtension(fgPath.c_str())==0, "frame generation extension registered");
+    if(withPt) {
+        if(!fs::exists(ptPath)) { std::printf("SKIP: TG Path Tracing's DLL is not staged (%s)\n", ptPath.string().c_str()); return 77; }
+        expect(addExtension(ptPath.c_str())==0, "path tracing extension registered");
+    }
     expect(bootstrap(nullptr)==0, "bridge bootstrap");
-    check_bundled_dlss(root);
+    check_bundled_dlss(native("TGBetterUpscaling"));
     WNDCLASSW wc{}; wc.lpfnWndProc=DefWindowProcW; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=L"TGGraphicsBridgeSmoke";
     RegisterClassW(&wc);
     const HWND window=CreateWindowExW(0, wc.lpszClassName, L"TG Graphics Bridge smoke test", WS_OVERLAPPEDWINDOW, 0, 0, 1296, 759, nullptr, nullptr, wc.hInstance, nullptr);
@@ -142,6 +193,9 @@ int main(int argc, char** argv) {
             perf.valid, perf.cpuProcess, perf.cpuSystem, perf.gpuProcess, perf.gpuSystem,
             perf.vramProcess/1073741824.0, perf.vramBudget/1073741824.0, perf.vramTotal/1073741824.0);
     }
+    // Streamline (DLSS Frame Generation) starts NGX on the shared device before any other extension sees it.
+    const bool streamline=GetModuleHandleW(L"sl.common.dll")!=nullptr;
+    if(withFg) std::printf("      Streamline: %s\n", streamline ? "running on the shared device" : "not running (it needs UnityPlayer.dll beside this exe)");
     if(withFg) {
         expect(bs.swapchainsProvided==1, "frame generation replaced the swapchain");
         for(int i=0;i<30 && swapchain;++i) if(FAILED(swapchain->Present(0, 0))) { expect(false, "present through the frame generation bridge"); break; }
@@ -282,6 +336,99 @@ int main(int argc, char** argv) {
             expect(us.xessPreset==101, "XeSS runs the preset the request names");
         }
     }
+    // Ray Reconstruction starts NGX only for TG Path Tracing, and only once it asks (render event 3, which the
+    // plugin issues when TG Path Tracing traces with its Denoiser on Auto): nothing is started before that.
+    if(us.gpuVendor==0x10DE) {
+        expect(!(us.available&(1u<<TGUP_BACKEND_RAY_RECONSTRUCTION)), "Ray Reconstruction does not start NGX before TG Path Tracing asks");
+        render(TGUP_EVENT_PREPARE_RAY_RECONSTRUCTION, nullptr);
+        us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
+    }
+    if(us.gpuVendor==0x10DE) {
+        const bool rr=(us.available&(1u<<TGUP_BACKEND_RAY_RECONSTRUCTION))!=0;
+        if(withPt) expect(rr, streamline ? "with TG Path Tracing, DLSS Ray Reconstruction is available through Streamline's NGX session"
+                                         : "with TG Path Tracing, DLSS Ray Reconstruction is available on this NVIDIA GPU");
+        else expect(!rr, "without TG Path Tracing, DLSS Ray Reconstruction (and NGX for it) is never started");
+    }
+    // DLSS Ray Reconstruction (NVIDIA RTX): a noisy image, as a one-sample path tracer leaves it, with the
+    // guides TG Path Tracing writes, denoised and upscaled on the D3D11 device through NGX in render event 1.
+    if(us.available&(1u<<TGUP_BACKEND_RAY_RECONSTRUCTION)) {
+        D3D11_TEXTURE2D_DESC g{}; g.MipLevels=g.ArraySize=g.SampleDesc.Count=1; g.Usage=D3D11_USAGE_DEFAULT; g.Width=RW; g.Height=RH;
+        g.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS;
+        ComPtr<ID3D11Texture2D> diffuse, specular, normals;
+        g.Format=DXGI_FORMAT_R8G8B8A8_UNORM; device->CreateTexture2D(&g, nullptr, &diffuse); device->CreateTexture2D(&g, nullptr, &specular);
+        g.Format=DXGI_FORMAT_R16G16B16A16_FLOAT; device->CreateTexture2D(&g, nullptr, &normals);
+        expect(diffuse && specular && normals, "Ray Reconstruction guide textures");
+        std::vector<uint32_t> gray(size_t(RW)*RH, 0xFF808080u), dim(size_t(RW)*RH, 0xFF0A0A0Au);
+        context->UpdateSubresource(diffuse.Get(), 0, nullptr, gray.data(), RW*4, 0);
+        context->UpdateSubresource(specular.Get(), 0, nullptr, dim.data(), RW*4, 0);
+        std::vector<uint16_t> up(size_t(RW)*RH*4);
+        for(size_t i=0;i<size_t(RW)*RH;++i) { up[i*4]=float_to_half(0.f); up[i*4+1]=float_to_half(0.f); up[i*4+2]=float_to_half(1.f); up[i*4+3]=float_to_half(0.6f); }
+        context->UpdateSubresource(normals.Get(), 0, nullptr, up.data(), RW*8, 0);
+        us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
+        const uint64_t before=us.framesUpscaled, fallbackBefore=us.framesFallback;
+        const int frames=32; uint32_t seed=7;
+        for(int n=0;n<frames;++n) {
+            for(UINT y=0;y<AH;++y) for(UINT x=0;x<AW;++x) {
+                const bool square=x>=100+UINT(n) && x<160+UINT(n) && y>=150 && y<210;
+                seed=seed*1664525u+1013904223u;
+                const float noise=float(seed>>8)/16777216.f*2.f; // mean 1: each pixel an independent sample
+                const float v=(square ? 4.f : 0.1f+0.4f*float(x)/float(RW))*noise;
+                for(int c=0;c<3;++c) pixels[(size_t(y)*AW+x)*4+c]=float_to_half(v);
+                pixels[(size_t(y)*AW+x)*4+3]=float_to_half(1.f);
+            }
+            context->UpdateSubresource(color.Get(), 0, nullptr, pixels.data(), AW*8, 0);
+            std::vector<uint16_t> mv(size_t(AW)*AH*2, 0);
+            for(UINT y=150;y<210;++y) for(UINT x=100+UINT(n);x<160+UINT(n);++x) mv[(size_t(y)*AW+x)*2]=float_to_half(1.f/float(RW));
+            context->UpdateSubresource(motion.Get(), 0, nullptr, mv.data(), AW*4, 0);
+            TGUP_Frame f{}; f.size=sizeof(f); f.abi=TGUP_ABI; f.sequence=sequence++; f.backend=TGUP_BACKEND_RAY_RECONSTRUCTION;
+            f.mode=0; // NGX's Performance: 2x per axis
+            f.color=uint64_t(uintptr_t(color.Get())); f.depth=uint64_t(uintptr_t(depth.Get()));
+            f.motion=uint64_t(uintptr_t(motion.Get())); f.output=uint64_t(uintptr_t(output.Get()));
+            f.diffuseAlbedo=uint64_t(uintptr_t(diffuse.Get())); f.specularAlbedo=uint64_t(uintptr_t(specular.Get()));
+            f.normalRoughness=uint64_t(uintptr_t(normals.Get()));
+            // A camera at the origin looking down +Z with a reversed-Z perspective (row vectors on the left).
+            for(int i=0;i<16;++i) { f.worldToView[i]=(i%5==0) ? 1.f : 0.f; f.viewToClip[i]=0.f; }
+            const float ys=1.f/std::tan(0.5f), xs=ys*float(RH)/float(RW), zn=0.1f, zf=1000.f;
+            f.viewToClip[0]=xs; f.viewToClip[5]=ys; f.viewToClip[10]=zn/(zn-zf); f.viewToClip[11]=1.f; f.viewToClip[14]=-zf*zn/(zn-zf);
+            f.renderWidth=RW; f.renderHeight=RH; f.outputWidth=OW; f.outputHeight=OH;
+            f.jitterX=halton(n+1, 2)-0.5f; f.jitterY=halton(n+1, 3)-0.5f;
+            f.motionScaleX=-float(RW); f.motionScaleY=-float(RH);
+            f.cameraNear=0.1f; f.cameraFar=1000.f; f.fovY=1.0f; f.frameTimeMs=16.6f; f.preExposure=1.f;
+            f.flags=TGUP_FLAG_DEPTH_INVERTED|(n==0 ? TGUP_FLAG_RESET : 0u);
+            if(submit(&f)!=0) { expect(false, "submit a Ray Reconstruction request"); break; }
+            render(1, reinterpret_cast<void*>(uintptr_t(f.sequence)));
+        }
+        context->Flush();
+        us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
+        expect(us.framesUpscaled-before==uint64_t(frames), "DLSS Ray Reconstruction upscaled every frame");
+        expect(us.framesFallback==fallbackBefore, "DLSS Ray Reconstruction never fell back to the bilinear copy");
+        expect(us.activeBackend==TGUP_BACKEND_RAY_RECONSTRUCTION, "DLSS Ray Reconstruction is the active technology");
+        D3D11_TEXTURE2D_DESC s{}; output->GetDesc(&s); s.Usage=D3D11_USAGE_STAGING; s.BindFlags=0; s.CPUAccessFlags=D3D11_CPU_ACCESS_READ; s.MiscFlags=0;
+        ComPtr<ID3D11Texture2D> staging; device->CreateTexture2D(&s, nullptr, &staging);
+        context->CopyResource(staging.Get(), output.Get());
+        D3D11_MAPPED_SUBRESOURCE mapped{}; context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        auto red=[&](UINT x, UINT y) {
+            uint32_t packed; std::memcpy(&packed, static_cast<uint8_t*>(mapped.pData)+size_t(y)*mapped.RowPitch+size_t(x)*4, 4);
+            const uint32_t r=packed&0x7FF; return r==0 ? 0.f : std::ldexp(float((r&63)|64), int(r>>6)-15-6);
+        };
+        // A band of background where the input's noise is +-100%: the mean must stay, the pixel-to-pixel noise go.
+        double mean=0, rough=0; int count=0;
+        for(UINT x=200;x<400;++x) { const float a=red(x, 600), b=red(x+1, 600); mean+=a; rough+=std::fabs(a-b); ++count; }
+        mean/=count; rough/=count;
+        const double expected=0.1+0.4*(300.0/2.0)/RW;
+        const float squareCenter=red(2*(130+frames-1), 2*180);
+        // Bloom-like halos: the background just above and below the bright square (10 to 40 output pixels from its
+        // edge), against what the background is there. Light spread out of the square reads as a glow.
+        double ring=0, ringExpected=0;
+        for(UINT x=2*(100+frames-1);x<2*(160+frames-1);++x)
+            for(UINT y:{2*150-40, 2*150-25, 2*150-10, 2*210+10, 2*210+25, 2*210+40}) { ring+=red(x, y); ringExpected+=0.1+0.4*(x/2.0)/RW; }
+        context->Unmap(staging.Get(), 0);
+        std::printf("      DLSS Ray Reconstruction: background mean %.3f (expected %.3f), pixel-to-pixel noise %.4f (input +-100%%), moving square %.3f, "
+            "ring around it %.3f of its background\n", mean, expected, rough, squareCenter, ring/ringExpected);
+        expect(std::fabs(mean-expected)<0.25*expected, "DLSS Ray Reconstruction keeps the background's brightness");
+        expect(rough<0.1*expected, "DLSS Ray Reconstruction removes the per-pixel noise");
+        expect(squareCenter>1.5f, "DLSS Ray Reconstruction keeps the moving square where it is this frame");
+    } else std::printf("      DLSS Ray Reconstruction not available here; skipped\n");
     // XeSS just below native: the narrowest preset by ratio (Native Anti-Aliasing) refuses the size, so
     // a wider one serves it. That choice is made once, not re-made (with a blocking re-initialization)
     // every frame.
@@ -292,7 +439,7 @@ int main(int argc, char** argv) {
         n.Format=DXGI_FORMAT_R16G16B16A16_FLOAT; n.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET; device->CreateTexture2D(&n, nullptr, &ncolor);
         n.Format=DXGI_FORMAT_R32_TYPELESS; n.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_DEPTH_STENCIL; device->CreateTexture2D(&n, nullptr, &ndepth);
         n.Format=DXGI_FORMAT_R16G16_FLOAT; n.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET; device->CreateTexture2D(&n, nullptr, &nmotion);
-        const auto logPath=root/"TGBetterUpscaling"/"TGBetterUpscaling.Native.log";
+        const auto logPath=native("TGBetterUpscaling")/"TGBetterUpscaling.Native.log";
         auto inits=[&]() {
             FILE* file=nullptr; size_t count=0;
             if(_wfopen_s(&file, logPath.c_str(), L"rb")==0 && file) {

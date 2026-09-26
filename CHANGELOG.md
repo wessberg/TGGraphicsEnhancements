@@ -4,6 +4,147 @@ From 1.1.0 on, the version numbers are the ones the mods have on Nexus Mods, and
 TG Better Upscaling and the bridge they share all carry the same one. Earlier entries use the repository's
 own numbers: v0.5.0 is the release published on Nexus as Frame Generation 1.0.2.
 
+TG Path Tracing (new, prototype, Mono version)
+
+- Full path tracing or none: the Global Illumination mode (HDRP's direct light and shadows with the traced
+  bounced light added) is gone, and with it Indirect Intensity. The Path Tracing row offers Off and Full, Full
+  by default; a config set to Global Illumination becomes Full. Insert turns path tracing on and off.
+- Lighting that changed with the camera's direction and caught up as it settled: the tracer's clamp on bright bounced
+  light and reflections was measured against HDRP's current auto exposure, so looking at a dark wall raised the
+  exposure and cut the bounce a sunlit courtyard sent into a hall, and looking back let it through again. It is
+  measured against the exposure averaged over about ten seconds now. The one-frame-old traced light is also put into
+  the current frame's exposure before it is applied, and DLSS Ray Reconstruction gets HDRP's pre-exposure, as HDRP's
+  own DLSS pass and NVIDIA's Streamline hand it over (it assumed 1).
+- Hard, jagged shadow edges across faces where they turn from the sun: an opaque surface's shadow ray started some
+  4 cm inside it wherever its own flat triangle faced away from the light (a rule meant for leaves lit from behind),
+  and the jump drew the edge. Opaque surfaces start outside now, and the light fades out towards that edge (Chiang,
+  Li and Burley 2019, "Taming the Shadow Terminator"). Shadow rays near a surface also could skip a real blocker
+  nearer than something they passed through; there the nearest hit decides now.
+- The castle's walls, arches and battlements are traced as the game draws them: they are Entities Graphics
+  entities without Drake, whose meshes and materials Entities Graphics registers at runtime, and the tracer now
+  reads them from its registry. The shadow-only meshes that stood in for them (coarser copies the game casts
+  shadows with) are left out: they cast shadows the drawn walls don't (a battlement's shadow on the walkway with
+  blocks that aren't there) and let sunlight leak into corridors where rays passed through them.
+- Hard-edged shadows across faces: rays leaving a face into its own flatter triangles where it turns away from
+  the sun were stopped by the inside of the head, because the head's object also had alpha-tested hair. Whether
+  a back face is a real hit now depends on its material (alpha-tested cards), not on the object. Harness: a slab
+  in an object with an alpha-tested material turned 3052 floor pixels black before, 1 now.
+- A third mod built on TG Graphics Bridge: ReSTIR path traced lighting on the bridge's Direct3D 12
+  device with inline ray tracing (DXR 1.1, Shader Model 6.6). Deferred surfaces are lit by the tracer:
+  ReSTIR DI over the lights and the sun with traced shadows, traced bounced light (ReSTIR GI) in place of
+  HDRP's indirect diffuse light, and traced reflections. An SVGF-style denoiser, and a composite one frame later through the next frame's motion vectors, so
+  Direct3D 11 never waits for Direct3D 12 work of its own frame.
+- The traced scene is captured from mesh renderers, Awaken's Drake ECS world, Vegetation Studio Pro's
+  trees and large objects, and Unity terrains near the camera; meshes are read back from the game's GPU buffers once and built into acceleration
+  structures on the render thread, materials reduced to base color, texture (a shared atlas),
+  emission and alpha testing.
+- Config section Path Tracing (on or off, bounces, ReSTIR reuse, ray distance, scene radius, debug views);
+  Insert turns it on and off, Shift+Insert cycles the debug views; a performance overlay section.
+- `tests/pathtracing_gpu_test.cpp` runs the whole path on this machine's GPU with a synthetic HDRP-style
+  frame.
+- DirectX Raytracing 1.2 where the GPU has it (Shader Model 6.9, raytracing tier 1.2): opacity micromaps
+  for alpha-tested meshes, made on the GPU from the same atlas texels the alpha test reads, and Shader
+  Execution Reordering for the GI and reflection passes on GPUs that reorder. TG Path Tracing ships
+  Microsoft's Agility SDK runtime (D3D12Core.dll 1.619), which TG Graphics Bridge points the game's
+  Direct3D 12 at when Windows' own is older; the bridge only takes one from inside the game folder,
+  Microsoft-signed, before anything has loaded Direct3D 12.
+- Denoisers: DLSS Ray Reconstruction through TG Better Upscaling on NVIDIA GPUs (the tracer writes its
+  guides and hands its light over undenoised, with ReSTIR's temporal reuse permuted), AMD FSR Ray
+  Regeneration on a Radeon RX 9000 (AMD's signed DLLs ship in `Native/FidelityFX`), the built-in
+  SVGF-style denoiser elsewhere. Ray Regeneration is untested: no RX 9000 was available.
+- The mods together: TG Better Upscaling starts NGX for Ray Reconstruction only when TG Path Tracing asks
+  for it (tracing, Denoising on Ray Reconstruction); RenoDX's DLSS 5 works alongside Ray Reconstruction. A refused Ray
+  Reconstruction frame gives TG Path Tracing its own denoiser back (with fresh history), a feature created in
+  a list that never ran is created again, and refusals count against successes. With TG Frame Generation, NGX runs as Streamline's session on the shared device, which never
+  looked in TG Better Upscaling's folder, so Ray Reconstruction could not start (0xBAD0000B); TG Frame
+  Generation now lists that folder after its own when TG Path Tracing is installed. The bridge stops using
+  an extension's Agility SDK runtime on the next start if Direct3D 12 could not create a device with it.
+- TG Path Tracing's options are Video settings rows (Path Tracing, with its options nested under it), mirrored
+  exactly in FoA Mod Manager. Denoising offers None, Built-in, Ray Regeneration and Ray Reconstruction, each
+  only where this PC runs it, and starts on the best (Ray Reconstruction where it runs, RenoDX's DLSS 5 loaded
+  or not). It replaces the Denoiser setting (Auto, None, Built-in): a pick carries over, Auto becomes the best.
+  Indirect Color scales how much color the bounced light keeps, at the same brightness (1 as traced, 2 by default).
+- TG Path Tracing's built-in denoiser keeps sharp shadows and leaves less grain, measured outside the game against
+  an undenoised converged frame (48 frames of 8 rays a pixel, averaged): the sunlit floor's error fell from 10.6% to
+  4.4%, and the box's and the checkered leaf's shadows are sharp again. The direct light (the sun and every lamp)
+  is a signal of its own with a short filter, apart from the bounced light, whose heavy filter blurred a chair's or a
+  rope net's shadow away; the filters are steered by the noise of the accumulated light, not of a single frame, and
+  no longer by a 3x3 spread that took every shadow edge for noise; ReSTIR DI reuses only lights a pixel sees
+  (visibility reuse). ReSTIR's temporal neighbour is permuted for the built-in denoiser too, and reflections are
+  filtered across normal-map detail by their roughness. The Temporal History option is gone: every denoiser
+  averages over time and needs samples that change from frame to frame, and its old default of 20 left two to four
+  times the noise of 1 on normal-mapped surfaces. ReSTIR now always reuses a sample for about a frame.
+- Characters are in the traced scene: the game's GPU-skinned characters (Kandra) near the camera are posed
+  in it every frame, from the game's own skinning output, so they shadow themselves, cast traced shadows and
+  contact shadows, and darken the bounced light around them. Tested outside the game with a skinned box in a
+  buffer laid out like the game's: it casts a shadow that follows its vertices frame by frame.
+- Black patches and stripes on arches, vaults and battlements: the game casts its castle's shadows with
+  shadow-only meshes that are mostly the drawn walls' own geometry but coarser on curves, and in places all the
+  tracer has of a building. They are traced as stand-ins: a ray leaving a drawn surface passes through a stand-in
+  within about half a metre, whichever way it faces, and farther away it shadows and bounces light as before.
+  Large static sets drawn by Awaken's Medusa renderer are traced too, from its own instance data; meshes on
+  layers the camera does not draw are left out.
+- Grass blades and leaves facing away from the sun were black: HDRP lights translucent surfaces through from
+  behind. Pixels with HDRP's transmission feature now take half the light arriving from behind them.
+- Grass, plants, bushes, ivy and trees drawn by the game's own vegetation renderer (Leshy, which replaced
+  Vegetation Studio) are traced: its loaded cells near the camera, at the LOD it draws each instance with
+  (grass and plants within 20 m, at most 60,000 instances, nearest cells first; billboards left out), so grass
+  shadows itself and the ground under it.
+- Only lights that stand for something that emits light are traced: a flame, a candle, a brazier, a lamp, a
+  lantern, a magic effect (the light or one of its parents names one). The lights placed to fake the light raster
+  rendering lacks are left out, since the bounced light is traced and they lit rooms a second time: fill lights
+  (PointLight_Ambience, groups of plain "Point Light"s, unnamed lights up to 25 m across), the light that follows
+  the player and light meant for volumetric fog. A fill light inside a lamp's prefab is left out too; Conversation
+  Lighting Overhaul's portrait light stays. HDRP still lights fog, transparents and hair with every light.
+  The 10 s log line counts them, and F8 says of each light reaching a point whether it is traced.
+  The log lists the scene's lights by name and its light-effect meshes once a session.
+- Forward-drawn surfaces (eyes, hair: HDRP's Eye and Hair shaders) got no ambient light and were black in
+  shade: they take the game's own ambient light again, after the GBuffer is written.
+- Hair casts traced shadows: strands a few texels wide averaged out in the 256x256 alpha tile and let light
+  through; hair is cut out at a fifth of a texel covered.
+- F8 writes to the log what the game has under the crosshair and the lights reaching it.
+- Characters' eyes were black: the eye the game draws lies just inside the traced eyeball, so every ray from it
+  started inside. Eyes are left out of the traced scene, as is the game's invisible material (TG/NoRender, which
+  hides body parts under armour and was traced as a solid surface).
+- Characters are traced with their textures: their texture coordinates are read with their triangles, so bounced
+  light takes their colors and hair and torn cloth are cut out texel by texel (skin never is).
+- Black patches in the shape of the traced triangles on arches, battlements and walls: where the game draws a
+  surface a few centimetres inside the mesh the tracer has (an arch drawn as a smoother curve than its triangles),
+  every ray from it started inside the traced mesh and found no light. A ray from the drawn surface that first
+  meets the inside of a mesh close by now passes out through it. Tested with a traced-only slab around part of
+  the floor: none of its pixels turn black (3075 did without the change).
+- Lamp shadows are crisp: lights keep the size the game gives them (HDRP's Radius, normally 2.5 cm) instead of
+  at least 10 cm, and a pixel weighs every lamp near it once (or eight spread evenly) instead of eight drawn at
+  random with repeats. Harness: a 2 cm lamp's shadow edge is 0.8 px wide against 4 px for a 10 cm one.
+- Black, flickering patches in the shape of walls, arches and floors: the scene is gathered again half a second
+  after the camera has moved 4 m (it was every 2 seconds), so a coarser level of detail no longer stands in for
+  the one on screen while walking up to it.
+- Characters' hair and transparent parts are left out of the traced scene; they were traced as black, solid
+  cards (shadows on faces, dark blotches on clothing).
+- Alpha-tested materials (straw, rope nets, leaves) are tested against a 256x256 copy of their texture's alpha
+  instead of the 64x64 color tile, which made coarse opaque blocks of them: black, flickering patches under
+  straw, and no rope-net shadows. Opacity micromaps are baked from the same texels.
+- Reflection Boost: makes every surface glossier and more reflective; 0.15 by default, 1 nearly a
+  mirror to judge the traced reflections.
+- DLSS Ray Reconstruction: TG Better Upscaling never told TG Path Tracing that it ran (its "no failure yet" start
+  overflowed), so TG Path Tracing kept denoising its light itself and Ray Reconstruction denoised it a second time.
+  It asks for preset F, the SDK's newest model ("Default model RR2"), in every quality mode.
+- While path tracing is on, the game's Video rows it replaces are greyed out with the reason as their
+  tooltip: Shadows and their distance, Contact Shadows, Ambient Occlusion, Reflections and Subsurface Scattering.
+  They follow the Path Tracing row before Apply, keep the game's own conditions, and apply again once path tracing
+  is off; HDRP's ambient occlusion, contact shadows and screen-space reflections are off
+  meanwhile, and its shadow maps still cast light shafts in fog. Characters and the player's hands are deferred
+  (the game's character shaders draw into the GBuffer): the traced light shades them, though they are not in the
+  traced scene.
+- TG Frame Generation: with mods fighting over the cursor in a menu (FoA Mod Manager open in game), frame
+  generation resumes only once the cursor has stayed locked for half a second, not for single frames, which
+  switched it on and off with hitches.
+- Lighting fixes from the first test builds in the game: the capture no longer stops at HDRP's
+  transparent SSR call, the composite recognises the game's device behind ReShade, a light grid with
+  resampled light choice replaces a uniform pick among all lights (the fireflies), geometric normals and
+  a spatial variance estimate remove the grain a longer temporal history added, area-light shadow rays
+  replace hard point-light shadows, and Rays Per Pixel (1-8) trades GPU time for less noise.
+
 Troubleshooting (1.2.0)
 
 - **Create Troubleshooting Report**'s tooltip and start message say what the test tries with the mods

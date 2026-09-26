@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
-# Shared package checks for the two mods built from this repository. Importing this file does not
+# Shared package checks for the mods built from this repository. Importing this file does not
 # build, copy, or launch anything.
 #   TGFrameGeneration  frame generation (DLSS, FSR, XeSS), a TG Graphics Bridge extension
 #   TGBetterUpscaling  FSR and XeSS upscaling and a newer DLSS DLL, a TG Graphics Bridge extension
+#   TGPathTracing      ReSTIR path tracing on the bridge's D3D12 device, a TG Graphics Bridge extension (Mono only)
 # Each mod bundles TG Graphics Bridge (the DX11-to-DX12 bridge, its preloader and the shared gameplay
 # library) under its own folders, so a player installs one download and two mods never deploy the
 # same file; at run time one copy starts (see src/TGGraphicsBridge.Autoload/Bootstrap.cs).
@@ -10,11 +11,19 @@ $script:TgVersion = '1.2.0'
 $script:TgAbi = '0x00010100'
 function Get-TgVersion { $script:TgVersion }
 function Get-TgAbi { $script:TgAbi }
-function Get-TgModNames { @('TGFrameGeneration','TGBetterUpscaling') }
+function Get-TgModNames { @('TGFrameGeneration','TGBetterUpscaling','TGPathTracing') }
+# The game versions a mod is built for: both unless its table says otherwise.
+function Get-TgModRuntimes([string]$Name) {
+    $m = Get-TgMod $Name
+    if ($m.ContainsKey('Runtimes')) { return @($m.Runtimes) }
+    @('Mono','IL2CPP')
+}
+function Test-TgModRuntime([string]$Name, [string]$Runtime) { @(Get-TgModRuntimes $Name) -contains $Runtime }
 # The native DLLs Build-Native.ps1 stages under artifacts/Native, by component.
 function Get-TgNativeComponents {
     [ordered]@{ TGGraphicsBridge='TGGraphicsBridge/TGGraphicsBridge.Native.dll'
-                TGFrameGeneration='TGFrameGeneration/TGFG.Native.dll'; TGBetterUpscaling='TGBetterUpscaling/TGBetterUpscaling.Native.dll' }
+                TGFrameGeneration='TGFrameGeneration/TGFG.Native.dll'; TGBetterUpscaling='TGBetterUpscaling/TGBetterUpscaling.Native.dll'
+                TGPathTracing='TGPathTracing/TGPathTracing.Native.dll' }
 }
 # TG Graphics Bridge as a mod bundles it: its gameplay plugin beside the mod's own (the same GUID in
 # every mod, BepInEx loads the newest), the mod's own copy of its preloader, and its native DLL.
@@ -60,10 +69,28 @@ function Get-TgMod([string]$Name) {
                   Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll'); Notices=@('LICENSE-FidelityFX.md')},
                 @{Folder='XeSS'; Signer='Intel Corporation'; Optional=@()
                   Files=@('libxess.dll'); Notices=@('LICENSE-XeSS.txt')},
-                # For the game's own DLSS, when the nvngx_dlss.dll it loads is older (native/upscaling/src/dlss_dll.cpp).
+                # For the game's own DLSS, when the nvngx_dlss.dll it loads is older (native/upscaling/src/dlss_dll.cpp),
+                # and DLSS Ray Reconstruction for TG Path Tracing's frames (native/upscaling/src/rr_upscaler.cpp).
                 @{Folder='DLSS'; Signer='NVIDIA'; Optional=@()
-                  Files=@('nvngx_dlss.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
+                  Files=@('nvngx_dlss.dll','nvngx_dlssd.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
               Extension='src/TGBetterUpscaling/graphics-bridge-extension.json'
+              Obsolete=@(Get-TgStandaloneBridge)}
+        }
+        'TGPathTracing' {
+            # The tracer is this repository's code on the bridge's D3D12 device; Microsoft's Agility SDK runtime
+            # comes along for Shader Model 6.9 (DirectX Raytracing 1.2), which the bridge points the game at
+            # where Windows' own runtime is older (native/bridge/src/agility.cpp), and AMD's FSR Ray Regeneration
+            # denoises on a Radeon RX 9000 (native/pathtracing/src/ray_regeneration.cpp). The Mono version only:
+            # its scene capture reads the game's ECS world through Unity.Entities' generic API.
+            @{Name=$Name; Title='TG Path Tracing'; Runtimes=@('Mono')
+              Managed=@(@{Relative='BepInEx/plugins/TGPathTracing/TGPathTracing.dll'; Assembly='TGPathTracing'}) + (Get-TgBridgeManaged $Name)
+              Natives=@(@{Component=$Name; Relative='BepInEx/TGPathTracing/Native/TGPathTracing.Native.dll'}, (Get-TgBridgeNative $Name))
+              Signed=@(
+                @{Folder='D3D12'; Signer='Microsoft Corporation'; Optional=@()
+                  Files=@('D3D12Core.dll'); Notices=@('LICENSE-DirectX-Agility-SDK.txt')},
+                @{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Optional=@()
+                  Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_denoiser_dx12.dll'); Notices=@('LICENSE-FidelityFX.md')})
+              Extension='src/TGPathTracing/graphics-bridge-extension.json'
               Obsolete=@(Get-TgStandaloneBridge)}
         }
         default { throw "Unknown mod: $Name" }

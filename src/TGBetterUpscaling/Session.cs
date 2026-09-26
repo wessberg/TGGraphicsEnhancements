@@ -4,6 +4,7 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using TGGraphicsBridge;
 using UnityEngine;
+using UnityEngine.Rendering;
 namespace TGBetterUpscaling
 {
     internal static class Session
@@ -15,6 +16,13 @@ namespace TGBetterUpscaling
         internal static bool HaveStatus;
         private static bool stopped = true;
         private static float nextPoll, nextDiscovery;
+        private static bool rrWanted; // TG Path Tracing wants Ray Reconstruction, and it can run
+        private static bool rrReapply; // the game's Upscaling setting still has to be applied again for it
+        private static bool rrPrepared; // NGX was asked to start for Ray Reconstruction
+        private static float rrPreparedAt;
+        // No failure yet: long enough ago. Not int.MinValue, whose distance to any frame overflows to a negative
+        // number, so Ray Reconstruction never counted as succeeding and TG Path Tracing kept denoising itself.
+        private static ulong rrFailedSeen; private static int rrFailedFrame = -1000;
         private static string lastReport = "";
         internal static void Start(ConfigFile config, ManualLogSource log)
         {
@@ -37,6 +45,16 @@ namespace TGBetterUpscaling
             try { ClaimRow(); } catch { }
         }
         private static void ClaimRow() => RowAlerts.Claim(AlertRow.Upscaling);
+        // Whether Ray Reconstruction's last frames were upscaled: read each frame it runs. After a refused frame,
+        // TG Path Tracing denoises its own light again for half a second (it hands it over undenoised only while
+        // Ray Reconstruction keeps succeeding).
+        internal static bool RayReconstructionSucceeding()
+        {
+            if (!Upscaler.Connected || !Upscaler.ReadStatus(out var s)) return false;
+            if (s.FramesFailed != rrFailedSeen) { rrFailedSeen = s.FramesFailed; rrFailedFrame = Time.frameCount; }
+            return s.Usable(NativeFlags.BackendRayReconstruction) && Time.frameCount - rrFailedFrame > 30;
+        }
+
         internal static string StatusText
         {
             get
@@ -46,8 +64,11 @@ namespace TGBetterUpscaling
                 if (s.DeviceReady == 0) return "TG Graphics Bridge has no D3D12 device yet (" + GraphicsBridge.Describe() + ")";
                 string Tech(uint backend, string name) => name + " " + (!s.Has(backend) ? "unavailable" : (s.Disabled & (1u << (int)backend)) != 0 ? "off after failures" : "available");
                 string active = s.ActiveBackend == NativeFlags.BackendFsr ? "FSR (version " + ActiveFsrVersion() + ")"
-                    : s.ActiveBackend == NativeFlags.BackendXess ? "XeSS (preset " + XessPreset(s.XessPreset) + ")" : "none";
+                    : s.ActiveBackend == NativeFlags.BackendXess ? "XeSS (preset " + XessPreset(s.XessPreset) + ")"
+                    : s.ActiveBackend == NativeFlags.BackendRayReconstruction ? "DLSS Ray Reconstruction" : "none";
                 return Tech(NativeFlags.BackendFsr, "FSR") + " (" + s.FsrVersionCount + " versions), " + Tech(NativeFlags.BackendXess, "XeSS") + " " + s.XessVersionText +
+                    // Ray Reconstruction only exists for TG Path Tracing: without it, the line reads as before.
+                    (PathTracingLink.Found ? ", " + Tech(NativeFlags.BackendRayReconstruction, "DLSS Ray Reconstruction") : "") +
                     " | active " + active +
                     " " + s.RenderWidth + "x" + s.RenderHeight + " -> " + s.OutputWidth + "x" + s.OutputHeight +
                     " | upscaled " + s.FramesUpscaled + ", refused " + s.FramesFailed + ", enlarged " + s.FramesFallback +
@@ -68,8 +89,34 @@ namespace TGBetterUpscaling
                 HaveStatus = Upscaler.ReadStatus(out Status);
                 // The capabilities are settled by UpscalerRow once the game has created its Upscaling setting.
                 // TG Graphics Bridge corrects the game's motion vectors while FSR or XeSS reads them.
-                uint backend = StpHost.Hosting == UpscalerSetting.FSR ? NativeFlags.BackendFsr : NativeFlags.BackendXess;
+                uint backend = StpHost.RayReconstruction ? NativeFlags.BackendRayReconstruction
+                    : StpHost.Hosting == UpscalerSetting.FSR ? NativeFlags.BackendFsr : NativeFlags.BackendXess;
                 MotionVectors.Request(UpscalingPlugin.Name, StpHost.Active && HaveStatus && Status.Usable(backend));
+                // TG Path Tracing starting or stopping to trace switches DLSS between Super Resolution and Ray
+                // Reconstruction: the game applies its Upscaling setting again, which the hook sets up for either.
+                // TG Path Tracing decides (its Denoising row); RenoDX's DLSS 5 works alongside Ray Reconstruction.
+                bool pathTracing = PathTracingLink.Wanted;
+                // NGX starts for Ray Reconstruction only once TG Path Tracing asks for it, on the render thread.
+                if (pathTracing && !rrPrepared && HaveStatus && Status.GpuVendor == 0x10DE && !Status.Has(NativeFlags.BackendRayReconstruction))
+                {
+                    rrPrepared = true; rrPreparedAt = now;
+                    var prepare = new CommandBuffer { name = "TG Better Upscaling: start NGX for Ray Reconstruction" };
+                    prepare.IssuePluginEventAndData(Upscaler.RenderEvent, NativeFlags.EventPrepareRayReconstruction, IntPtr.Zero);
+                    Graphics.ExecuteCommandBuffer(prepare);
+                    prepare.Release();
+                }
+                // Whether NGX runs Ray Reconstruction here, for TG Path Tracing's Denoising row (the render thread has a
+                // moment to start NGX after the request).
+                if (rrPrepared && HaveStatus)
+                {
+                    if (Status.Has(NativeFlags.BackendRayReconstruction)) PathTracingLink.Report(true);
+                    else if (now - rrPreparedAt > 3f) PathTracingLink.Report(false);
+                }
+                bool wanted = UpscalerRow.Current == UpscalerSetting.DLSS && !StpHost.Failed && pathTracing &&
+                    HaveStatus && Status.Usable(NativeFlags.BackendRayReconstruction);
+                if (wanted != rrWanted) { rrWanted = wanted; rrReapply = wanted != StpHost.RayReconstruction; }
+                // Applied once the settings screen is closed, however long that takes.
+                if (rrReapply && UpscalerRow.Reapply()) rrReapply = false;
                 string report = StatusText + " | " + StpHost.Hosting;
                 if (report != lastReport && (now - lastReportTime > 10f || !SameCounters(report, lastReport)))
                 {

@@ -8,6 +8,9 @@
 //   4. The queue signals; the game's D3D11 context waits for that on the GPU, never the CPU.
 //   5. D3D11 writes the output into HDRP's destination, which post-processing reads next.
 //
+// DLSS Ray Reconstruction takes the same path, with TG Path Tracing's three guide textures copied to the
+// D3D12 side beside the color, depth and motion vectors.
+//
 // Every D3D11 wait corresponds to a D3D12 signal that was actually submitted, including when the SDK
 // refused the frame: the timeline can never leave the game's context waiting for a value that nothing
 // signals. A refused frame gets a bilinear enlargement instead of the upscale, never a black image.
@@ -33,7 +36,6 @@ constexpr uint32_t kFailuresBeforeDisable=5;
 // whether at least the render-resolution color reached the shared color texture for the fallback.
 struct Outcome { bool upscaled=false, colorShared=false; };
 struct Pending { uint32_t sequence=0; bool occupied=false, processed=false; TGUP_Frame frame{}; Outcome outcome; };
-
 struct State {
     std::mutex mutex;
     std::array<Pending, kRing> ring;
@@ -60,9 +62,11 @@ struct State {
     std::array<uint64_t, 3> retired{};
     uint32_t listIndex=0;
     tgb::SharedTexture color, depth, motion, output;
-    std::unique_ptr<Backend> fsr, xess;
+    tgb::SharedTexture guideDiffuse, guideSpecular, guideNormals; // Ray Reconstruction's, from TG Path Tracing
+    std::unique_ptr<Backend> fsr, xess, rr;
     uint32_t lastBackend=0;
-    std::array<uint32_t, 3> failures{};
+    std::array<uint32_t, 4> failures{};
+    bool rrPending=false; // Ray Reconstruction can start once TG Path Tracing asks (TGUP_EVENT_PREPARE_RAY_RECONSTRUCTION)
     bool broken=false;              // the interop itself failed; only the fallback runs
     uint64_t lastSummary=0, summaryFrames=0, summaryFallback=0;
 } st;
@@ -83,6 +87,7 @@ void release_d3d11() {
     st.copyCS.Reset(); st.fallbackCS.Reset(); st.rasterVS.Reset(); st.rasterPS.Reset(); st.constants.Reset();
     st.linearClamp.Reset(); st.raster.Reset(); st.noDepth.Reset(); st.scratch.Reset();
     st.color=tgb::SharedTexture{}; st.depth=tgb::SharedTexture{}; st.motion=tgb::SharedTexture{}; st.output=tgb::SharedTexture{};
+    st.guideDiffuse=tgb::SharedTexture{}; st.guideSpecular=tgb::SharedTexture{}; st.guideNormals=tgb::SharedTexture{};
     st.fence.reset();
     if(st.c11) {
         UINT size=0; void* none=nullptr;
@@ -107,16 +112,16 @@ bool ensure_d3d11() {
         }
         if(!idle) {
             // Work the GPU may still run references these: kept for the rest of the session, never freed.
-            for(auto* t:{&st.color, &st.depth, &st.motion, &st.output}) {
+            for(auto* t:{&st.color, &st.depth, &st.motion, &st.output, &st.guideDiffuse, &st.guideSpecular, &st.guideNormals}) {
                 tgb::quarantine(t->d11.Get()); tgb::quarantine(t->d12.Get()); tgb::quarantine(t->srv.Get());
                 tgb::quarantine(t->uav.Get()); tgb::quarantine(t->rtv.Get());
             }
             for(auto& a:st.allocators) tgb::quarantine(a.Get());
             for(auto& l:st.lists) tgb::quarantine(l.Get());
-            (void)st.fsr.release(); (void)st.xess.release(); // their SDK contexts, leaked while work may be in flight
+            (void)st.fsr.release(); (void)st.xess.release(); (void)st.rr.release(); // their SDK contexts, leaked while work may be in flight
             log("The GPU never confirmed it finished the upscaler's work; its resources are kept instead of freed");
         }
-        st.fsr.reset(); st.xess.reset();
+        st.fsr.reset(); st.xess.reset(); st.rr.reset();
         release_d3d11();
     }
     st.d11=device; st.c11=context; st.generation=generation;
@@ -172,6 +177,9 @@ void ensure_shared(tgb::SharedTexture& t, UINT w, UINT h, DXGI_FORMAT f) {
     if(st.fence.ready()) st.fence.wait_cpu(st.fence.value);
     t=tgb::SharedTexture::make(st.d11.Get(), st.d12.Get(), w, h, f, D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS);
 }
+const char* backend_name(uint32_t backend) {
+    return backend==TGUP_BACKEND_FSR ? "AMD FSR" : backend==TGUP_BACKEND_XESS ? "Intel XeSS" : "DLSS Ray Reconstruction";
+}
 void set_constants(const Constants& c) {
     st.c11->UpdateSubresource(st.constants.Get(), 0, nullptr, &c, 0, 0);
 }
@@ -224,9 +232,11 @@ void write_destination(ID3D11Resource* destination, const D3D11_TEXTURE2D_DESC& 
     st.c11->PSSetShader(st.rasterPS.Get(), nullptr, 0); st.c11->PSSetShaderResources(0, 1, &source);
     st.c11->Draw(3, 0);
 }
+std::unique_ptr<Backend>& backend_slot(uint32_t id) { return id==TGUP_BACKEND_FSR ? st.fsr : id==TGUP_BACKEND_XESS ? st.xess : st.rr; }
 Backend* backend_for(uint32_t id) {
-    auto& slot=id==TGUP_BACKEND_FSR ? st.fsr : st.xess;
-    if(!slot && st.d12) slot=id==TGUP_BACKEND_FSR ? create_fsr_backend(st.d12.Get()) : create_xess_backend(st.d12.Get());
+    auto& slot=backend_slot(id);
+    if(!slot && st.d12) slot=id==TGUP_BACKEND_FSR ? create_fsr_backend(st.d12.Get()) : id==TGUP_BACKEND_XESS ? create_xess_backend(st.d12.Get())
+        : create_rr_backend(st.d12.Get());
     return slot.get();
 }
 void note_failure(uint32_t backend, const std::string& error, int32_t code) {
@@ -236,8 +246,9 @@ void note_failure(uint32_t backend, const std::string& error, int32_t code) {
     if(backend<st.failures.size() && ++st.failures[backend]>=kFailuresBeforeDisable && !(st.status.disabled&(1u<<backend))) {
         st.status.disabled|=1u<<backend;
         lock.unlock();
-        log(std::string(backend==TGUP_BACKEND_FSR ? "AMD FSR" : "Intel XeSS")+" failed "+std::to_string(kFailuresBeforeDisable)+
-            " frames in a row ("+error+"); it is off for the rest of this session and the game's STP takes over");
+        log(std::string(backend_name(backend))+" failed "+std::to_string(kFailuresBeforeDisable)+
+            (backend==TGUP_BACKEND_RAY_RECONSTRUCTION ? " more frames than it upscaled" : " frames in a row")+
+            " ("+error+"); it is off for the rest of this session and the game's STP takes over");
     } else log_throttled("Upscaling refused a frame: "+error);
 }
 void summarise(const TGUP_Frame& f) {
@@ -246,7 +257,7 @@ void summarise(const TGUP_Frame& f) {
     if(!st.lastSummary) { st.lastSummary=now; return; }
     if(now-st.lastSummary<10000) return;
     log("Upscaling "+std::to_string((now-st.lastSummary)/1000)+"s: frames="+std::to_string(st.summaryFrames)+
-        " fallback="+std::to_string(st.summaryFallback)+" technology="+(f.backend==TGUP_BACKEND_FSR ? "FSR" : "XeSS")+
+        " fallback="+std::to_string(st.summaryFallback)+" technology="+backend_name(f.backend)+
         " render="+std::to_string(f.renderWidth)+"x"+std::to_string(f.renderHeight)+" output="+std::to_string(f.outputWidth)+"x"+
         std::to_string(f.outputHeight)+" sharpness="+std::to_string(f.sharpness)+(f.backend==TGUP_BACKEND_FSR ? " preExposure="+std::to_string(f.preExposure) : std::string())+" failed(total)="+std::to_string(st.status.framesFailed));
     st.lastSummary=now; st.summaryFrames=st.summaryFallback=0;
@@ -288,7 +299,7 @@ Outcome process_inputs(const TGUP_Frame& f) {
             st.fence.wait_cpu(st.fence.value);
             if(switched && st.lastBackend) {
                 // Only one technology keeps its resources.
-                if(st.lastBackend==TGUP_BACKEND_FSR) st.fsr.reset(); else st.xess.reset();
+                backend_slot(st.lastBackend).reset();
                 backend=backend_for(f.backend);
             }
             if(!backend || !backend->prepare(f, error)) throw DxError(E_FAIL, error.empty() ? "context creation failed" : error);
@@ -298,6 +309,22 @@ Outcome process_inputs(const TGUP_Frame& f) {
         ensure_shared(st.output, f.outputWidth, f.outputHeight, DXGI_FORMAT_R16G16B16A16_FLOAT);
         copy(depthSrv.Get(), st.depth, f.renderWidth, f.renderHeight);
         copy(motionSrv.Get(), st.motion, f.renderWidth, f.renderHeight);
+        // Ray Reconstruction's guides: TG Path Tracing's textures, exactly the render size, on the game's device.
+        const bool rr=f.backend==TGUP_BACKEND_RAY_RECONSTRUCTION;
+        if(rr) {
+            const struct { uint64_t source; tgb::SharedTexture* target; DXGI_FORMAT format; } guides[]={
+                {f.diffuseAlbedo, &st.guideDiffuse, DXGI_FORMAT_R8G8B8A8_UNORM}, {f.specularAlbedo, &st.guideSpecular, DXGI_FORMAT_R8G8B8A8_UNORM},
+                {f.normalRoughness, &st.guideNormals, DXGI_FORMAT_R16G16B16A16_FLOAT}};
+            for(const auto& g:guides) {
+                auto* resource=reinterpret_cast<ID3D11Resource*>(uintptr_t(g.source));
+                if(!on_game_device(resource)) throw DxError(E_INVALIDARG, "a Ray Reconstruction guide is not on the game's device");
+                D3D11_TEXTURE2D_DESC d{};
+                auto srv=tgb::typed_srv(st.d11.Get(), resource, tgb::ReadAs::Color, &d);
+                if(d.Width<f.renderWidth || d.Height<f.renderHeight) throw DxError(E_INVALIDARG, "a Ray Reconstruction guide is smaller than the render size");
+                ensure_shared(*g.target, f.renderWidth, f.renderHeight, g.format);
+                copy(srv.Get(), *g.target, f.renderWidth, f.renderHeight);
+            }
+        }
         // D3D11 -> D3D12. From here on the queue signals whatever happens, so the game's context is
         // never left waiting for a value nothing produces.
         const uint64_t produced=st.fence.next();
@@ -310,6 +337,7 @@ Outcome process_inputs(const TGUP_Frame& f) {
             check(st.allocators[index]->Reset(), "Reset upscaler allocator");
             check(st.lists[index]->Reset(st.allocators[index].Get(), nullptr), "Reset upscaler list");
             Inputs in; in.color=st.color.d12.Get(); in.depth=st.depth.d12.Get(); in.motion=st.motion.d12.Get(); in.output=st.output.d12.Get();
+            if(rr) { in.diffuseAlbedo=st.guideDiffuse.d12.Get(); in.specularAlbedo=st.guideSpecular.d12.Get(); in.normalRoughness=st.guideNormals.d12.Get(); }
             in.frame=&f; in.reset=(f.flags&TGUP_FLAG_RESET) || switched;
             const bool ok=backend->record(st.lists[index].Get(), in, error);
             check(st.lists[index]->Close(), "Close upscaler list");
@@ -319,13 +347,14 @@ Outcome process_inputs(const TGUP_Frame& f) {
                 recorded=true;
             }
         } catch(const DxError& e) { st.lists[index]->Close(); error=e.what(); code=e.hr; }
+        if(!recorded) backend->discarded();
         const uint64_t retired=st.fence.next();
         const HRESULT signalled=st.queue->Signal(st.fence.d12.Get(), retired);
         if(FAILED(signalled)) {
             // The interop itself failed: neither technology can run again this session, so STP takes over.
             st.broken=true;
-            { std::lock_guard<std::mutex> lock(st.mutex); st.status.disabled|=(1u<<TGUP_BACKEND_FSR)|(1u<<TGUP_BACKEND_XESS); }
-            log("The D3D12 queue failed to signal ("+hexhr(signalled)+"); FSR and XeSS are off for this session and STP takes over");
+            { std::lock_guard<std::mutex> lock(st.mutex); st.status.disabled|=(1u<<TGUP_BACKEND_FSR)|(1u<<TGUP_BACKEND_XESS)|(1u<<TGUP_BACKEND_RAY_RECONSTRUCTION); }
+            log("The D3D12 queue failed to signal ("+hexhr(signalled)+"); FSR, XeSS and Ray Reconstruction are off for this session and STP takes over");
             throw DxError(signalled, "D3D12 signal after upscaling");
         }
         st.retired[index]=retired;
@@ -335,7 +364,10 @@ Outcome process_inputs(const TGUP_Frame& f) {
             outcome.upscaled=true;
             st.lastBackend=f.backend;
             std::lock_guard<std::mutex> lock(st.mutex);
-            st.failures[f.backend]=0;
+            // Ray Reconstruction's evaluations can be refused now and then (a DLSS mod may veto them): each success
+            // takes one failure back, so refusals that keep outnumbering successes still turn it off.
+            if(f.backend==TGUP_BACKEND_RAY_RECONSTRUCTION) st.failures[f.backend]=st.failures[f.backend] ? st.failures[f.backend]-1 : 0u;
+            else st.failures[f.backend]=0;
             ++st.status.framesUpscaled; st.status.activeBackend=f.backend;
             st.status.renderWidth=f.renderWidth; st.status.renderHeight=f.renderHeight;
             st.status.outputWidth=f.outputWidth; st.status.outputHeight=f.outputHeight;
@@ -392,7 +424,22 @@ template<class Fn> void guarded(Fn&& fn) {
 }
 // Event 1 upscales, event 2 writes the result where HDRP expects it. The plugin issues them from
 // two render-graph passes, the second of which is the one that declares HDRP's destination.
+// NGX for Ray Reconstruction, once TG Path Tracing asks for it: never for a player who has TG Path Tracing
+// installed but not tracing, chose its built-in denoiser, or runs RenoDX's DLSS 5 (which needs the game's
+// own DLSS, so TG Path Tracing never asks then).
+void prepare_ray_reconstruction() {
+    ComPtr<ID3D12Device> device;
+    {
+        std::lock_guard<std::mutex> lock(st.mutex);
+        if(!st.rrPending || !st.sharedDevice) return;
+        st.rrPending=false; device=st.sharedDevice;
+    }
+    const bool rr=rr_probe(device.Get());
+    std::lock_guard<std::mutex> lock(st.mutex);
+    if(rr) st.status.available|=1u<<TGUP_BACKEND_RAY_RECONSTRUCTION;
+}
 void render_event_body(int eventId, void* data) {
+    if(eventId==TGUP_EVENT_PREPARE_RAY_RECONSTRUCTION) { prepare_ray_reconstruction(); return; }
     if(eventId!=TGUP_EVENT_UPSCALE && eventId!=TGUP_EVENT_OUTPUT) return;
     const uint32_t sequence=static_cast<uint32_t>(reinterpret_cast<uintptr_t>(data));
     TGUP_Frame frame{}; Outcome outcome;
@@ -432,6 +479,16 @@ void upscaler_device_ready(ID3D12Device* device, uint32_t vendor) {
     std::lock_guard<std::mutex> lock(st.mutex);
     st.sharedDevice=device; st.status.gpuVendor=vendor; st.status.deviceReady=1;
     probe_fsr(device); probe_xess(device);
+    // Ray Reconstruction: NVIDIA GPUs only, through NGX on the shared device, and only for TG Path Tracing,
+    // the one thing that asks for it. The bridge loads every extension's DLL before the device exists, so
+    // its DLL is loaded here if it runs at all. Without it NGX is never started here, and sees only what it
+    // saw before: the game's own DLSS, frame generation's Streamline, and a DLSS mod's (RenoDX's DLSS 5
+    // intercepts NGX's start and evaluations).
+    const bool pathTracing=GetModuleHandleW(L"TGPathTracing.Native.dll")!=nullptr;
+    if(vendor==0x10DE && !pathTracing) log("DLSS Ray Reconstruction is only for TG Path Tracing, which is not installed; NGX is not started for it");
+    // Even then only once TG Path Tracing asks for it (see prepare_ray_reconstruction).
+    st.rrPending=vendor==0x10DE && pathTracing;
+    if(st.rrPending) log("DLSS Ray Reconstruction: NGX starts for it when TG Path Tracing first asks, not before");
     st.status.available=(fsr_available() ? 1u<<TGUP_BACKEND_FSR : 0u)|(xess_available() ? 1u<<TGUP_BACKEND_XESS : 0u);
     st.status.fsrVersionCount=uint32_t(fsr_version_count());
     st.status.xessVersion=xess_version();

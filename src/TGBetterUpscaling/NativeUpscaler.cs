@@ -7,7 +7,7 @@ namespace TGBetterUpscaling
 {
     // One upscaling request (TGUP_Frame in tgup_api.h).
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    internal struct UpscaleFrame
+    internal unsafe struct UpscaleFrame
     {
         internal uint Size, Abi, Sequence, Backend;
         internal ulong Color, Depth, Motion, Output; // ID3D11Resource* of HDRP's render textures
@@ -17,7 +17,11 @@ namespace TGBetterUpscaling
         internal float CameraNear, CameraFar, FovY, FrameTimeMs;
         internal float Sharpness, PreExposure;       // FSR's own sharpening 0..1
         internal uint Flags;
-        internal uint Mode;                          // XeSS: the chosen xess_quality_settings_t; otherwise 0
+        internal uint Mode;                          // XeSS: the chosen xess_quality_settings_t; Ray Reconstruction: NGX's quality level; otherwise 0
+        internal ulong DiffuseAlbedo, SpecularAlbedo, NormalRoughness; // Ray Reconstruction's guides (TG Path Tracing's textures)
+        // Ray Reconstruction's camera: row-major, row vectors multiplied on the left (NVIDIA's convention).
+        internal fixed float WorldToView[16];
+        internal fixed float ViewToClip[16];
     }
     // One quality mode (TGUP_Mode): the vendor's id and its per-axis upscale ratio.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -50,12 +54,13 @@ namespace TGBetterUpscaling
     internal static class NativeFlags
     {
         internal const uint Reset = 1, DepthInverted = 2, FsrAutoExposure = 4, FsrDebugCheck = 8, FsrDebugView = 16;
-        internal const uint BackendFsr = 1, BackendXess = 2;
+        internal const uint BackendFsr = 1, BackendXess = 2, BackendRayReconstruction = 3;
+        internal const int EventPrepareRayReconstruction = 3; // TGUP_EVENT_PREPARE_RAY_RECONSTRUCTION
     }
     internal sealed class NativeUpscaler
     {
-        internal const uint Abi = 0x00010200;
-        internal const int FrameSize = 112, StatusSize = 88, ModeSize = 8, DlssOverrideSize = 24;
+        internal const uint Abi = 0x00010300;
+        internal const int FrameSize = 264, StatusSize = 88, ModeSize = 8, DlssOverrideSize = 24;
         internal const string NativeName = "TGBetterUpscaling.Native.dll";
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint GetAbi();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int Read(ref UpscaleStatus status);

@@ -98,7 +98,8 @@ struct State {
     HMODULE self=nullptr;
     std::wstring root, runtimeDir;
     std::string engineVersionUtf8;
-    std::array<const wchar_t*,1> pluginPaths{};
+    std::array<const wchar_t*,2> pluginPaths{};
+    std::wstring rayReconstructionDir; // TG Better Upscaling's DLSS folder, when NGX here must find Ray Reconstruction
     std::array<sl::Feature,3> features{{sl::kFeatureDLSS_G,sl::kFeatureReflex,sl::kFeaturePCL}};
     TGFG_Request request{};
     TGFG_Status status{sizeof(TGFG_Status),TGFG_ABI};
