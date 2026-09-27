@@ -87,19 +87,22 @@ public:
         if(!in.diffuseAlbedo || !in.specularAlbedo || !in.normalRoughness) { error="Ray Reconstruction has no guides for this frame"; return false; }
         // NGX reads its inputs as shader resources and writes its output as unordered access; the shared
         // textures rest in COMMON between the two APIs and go back there.
-        ID3D12Resource* reads[]={in.color, in.depth, in.motion, in.diffuseAlbedo, in.specularAlbedo, in.normalRoughness};
-        D3D12_RESOURCE_BARRIER barriers[7]{};
+        ID3D12Resource* reads[8]={in.color, in.depth, in.motion, in.diffuseAlbedo, in.specularAlbedo, in.normalRoughness, nullptr, nullptr};
+        int readCount=6;
+        const bool extras=in.specularHitDistance && in.colorBeforeTransparency;
+        if(extras) { reads[readCount++]=in.specularHitDistance; reads[readCount++]=in.colorBeforeTransparency; }
+        D3D12_RESOURCE_BARRIER barriers[9]{};
         auto transition=[](D3D12_RESOURCE_BARRIER& b, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
             b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource=r; b.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             b.Transition.StateBefore=from; b.Transition.StateAfter=to;
         };
         const auto readable=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        for(int i=0;i<6;++i) transition(barriers[i], reads[i], D3D12_RESOURCE_STATE_COMMON, readable);
-        transition(barriers[6], in.output, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        list->ResourceBarrier(7, barriers);
+        for(int i=0;i<readCount;++i) transition(barriers[i], reads[i], D3D12_RESOURCE_STATE_COMMON, readable);
+        transition(barriers[readCount], in.output, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        list->ResourceBarrier(UINT(readCount+1), barriers);
         bool ok=evaluate(list, in, error);
-        for(auto& b:barriers) std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
-        list->ResourceBarrier(7, barriers);
+        for(int i=0;i<=readCount;++i) std::swap(barriers[i].Transition.StateBefore, barriers[i].Transition.StateAfter);
+        list->ResourceBarrier(UINT(readCount+1), barriers);
         return ok;
     }
 private:
@@ -134,21 +137,35 @@ private:
         NVSDK_NGX_D3D12_DLSSD_Eval_Params eval{};
         eval.pInDiffuseAlbedo=in.diffuseAlbedo; eval.pInSpecularAlbedo=in.specularAlbedo;
         eval.pInNormals=in.normalRoughness; eval.pInRoughness=in.normalRoughness; // roughness packed in the normals' alpha
+        // TG Path Tracing's optional inputs: the traced reflections' hit distance (for reflections under motion), and the
+        // color before transparency with the color as it is after (for particles and glass, which carry no traced light).
+        const bool extras=in.specularHitDistance && in.colorBeforeTransparency && !extrasRefused_;
+        if(extras) {
+            eval.pInSpecularHitDistance=in.specularHitDistance;
+            eval.pInColorBeforeTransparency=in.colorBeforeTransparency; eval.pInColorAfterTransparency=in.color;
+        }
         eval.pInColor=in.color; eval.pInOutput=in.output; eval.pInDepth=in.depth; eval.pInMotionVectors=in.motion;
         // HDRP's jitter as its own DLSS pass hands it over: negated, in render pixels.
         sdk_jitter(f, eval.InJitterOffsetX, eval.InJitterOffsetY);
         eval.InRenderSubrectDimensions={f.renderWidth, f.renderHeight};
         eval.InReset=reset ? 1 : 0;
         eval.InMVScaleX=f.motionScaleX; eval.InMVScaleY=f.motionScaleY;
-        // The exposure HDRP baked into the color, as HDRP's own DLSS pass hands it over (its GPU exposure, 0.2..2): Ray
-        // Reconstruction divides it out, so its history holds while HDRP's auto exposure adapts. Without it (NGX then
-        // assumes 1) every change of exposure, as the view turns between bright and dark, looked like new lighting its
-        // history had to catch up with.
+        // The exposure HDRP baked into the color, as HDRP's own DLSS pass hands it over (its GPU exposure, clamped to
+        // 0.2..2 as HDRP clamps it). At this game's exposures (about 0.0001 to 0.006) that is 0.2, and NVIDIA's Ray
+        // Reconstruction guide says it doesn't use exposure inputs: changes of exposure reach its history as changes of
+        // brightness either way (TG Path Tracing keeps its own gain's changes slow for that).
         eval.InPreExposure=f.preExposure>0.f ? f.preExposure : 1.f;
         eval.InFrameTimeDeltaInMsec=frame_time_ms(f.frameTimeMs);
         std::memcpy(worldToView_, f.worldToView, sizeof(worldToView_)); std::memcpy(viewToClip_, f.viewToClip, sizeof(viewToClip_));
         eval.pInWorldToViewMatrix=worldToView_; eval.pInViewToClipMatrix=viewToClip_;
-        const NVSDK_NGX_Result r=NGX_D3D12_EVALUATE_DLSSD_EXT(list, feature_, params_, &eval);
+        NVSDK_NGX_Result r=NGX_D3D12_EVALUATE_DLSSD_EXT(list, feature_, params_, &eval);
+        if(NVSDK_NGX_FAILED(r) && extras) {
+            // The optional inputs are the one thing that can be dropped: without them for the rest of the session.
+            extrasRefused_=true;
+            log("DLSS Ray Reconstruction refused TG Path Tracing's optional inputs ("+result_text(r)+"); it runs without them");
+            eval.pInSpecularHitDistance=nullptr; eval.pInColorBeforeTransparency=nullptr; eval.pInColorAfterTransparency=nullptr;
+            r=NGX_D3D12_EVALUATE_DLSSD_EXT(list, feature_, params_, &eval);
+        }
         if(NVSDK_NGX_FAILED(r)) { error="Ray Reconstruction evaluation failed: "+result_text(r); return false; }
         resetNext_=false;
         return true;
@@ -166,6 +183,7 @@ private:
         return list.empty() ? "(none yet)" : list;
     }
     bool createdInList_=false, resetNext_=false;
+    bool extrasRefused_=false; // NGX failed an evaluation with the optional inputs: they stay out
     ComPtr<ID3D12Device> device_;
     NVSDK_NGX_Parameter* params_=nullptr;
     NVSDK_NGX_Handle* feature_=nullptr;

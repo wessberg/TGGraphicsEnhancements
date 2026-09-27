@@ -42,6 +42,20 @@ namespace TGPathTracing
             return diffuseAlbedo != 0 && specularAlbedo != 0 && normalRoughness != 0;
         }
 
+        // Ray Reconstruction's optional inputs for the frame being rendered, written by the composite as it applied the
+        // traced light: the traced reflections' hit distance (world units) and the frame's color right after the traced
+        // light, before HDRP's transparent surfaces and particles (ID3D11Resource*, exactly width x height). false when
+        // the composite didn't write them this frame (TG Better Upscaling then leaves them out).
+        public static bool TryGetExtraGuides(int width, int height, out ulong specularHitDistance, out ulong colorBeforeTransparency)
+        {
+            specularHitDistance = colorBeforeTransparency = 0;
+            var tracer = Session.Tracer;
+            if (GuidesFrame != Time.frameCount || tracer == null || !tracer.ReadGuides(out var guides)) return false;
+            if (guides.Width != (uint)width || guides.Height != (uint)height || guides.ExtrasFrameIndex != guides.FrameIndex) return false;
+            specularHitDistance = guides.SpecularHitDistance; colorBeforeTransparency = guides.ColorBeforeTransparency;
+            return specularHitDistance != 0 && colorBeforeTransparency != 0;
+        }
+
         public static void Ran(int frame) => lastRan = frame;
 
         // TG Better Upscaling runs in this process (its native DLL, which only TG Graphics Bridge loads).

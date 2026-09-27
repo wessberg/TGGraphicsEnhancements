@@ -30,6 +30,9 @@ struct Inputs {
     ID3D12Resource* diffuseAlbedo=nullptr;
     ID3D12Resource* specularAlbedo=nullptr;
     ID3D12Resource* normalRoughness=nullptr;
+    // Its optional inputs: the traced reflections' hit distance, and the color before transparency (null without).
+    ID3D12Resource* specularHitDistance=nullptr;
+    ID3D12Resource* colorBeforeTransparency=nullptr;
     const TGUP_Frame* frame=nullptr;
     bool reset=false;
 };

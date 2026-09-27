@@ -152,7 +152,8 @@ namespace TGGraphicsBridge
                     if (upscale <= 3 || upscale > upscaling - 3) yield return line;
                     continue;
                 }
-                afterStep = line.Contains("Note: Troubleshooting: done");
+                // Held until that Pipeline line: the next step's notes and swapchain switch come first.
+                if (line.Contains("Note: Troubleshooting: done")) afterStep = true;
                 yield return line;
             }
         }

@@ -1,3 +1,5 @@
 // Generated at configure time from the auditable HLSL source, not a hand-maintained copy.
 #pragma once
-namespace tgpt { inline constexpr const char* d3d11Shader=R"TGPTHLSL(@TGPT_D3D11_SHADER@)TGPTHLSL"; }
+// Adjacent raw literals (CMakeLists.txt splits the text: one literal may hold at most 16380 characters in MSVC).
+namespace tgpt { inline constexpr const char* d3d11Shader=
+@TGPT_D3D11_SHADER@; }

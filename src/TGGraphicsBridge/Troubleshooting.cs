@@ -16,7 +16,9 @@
 //
 // Menus pause the run, and while it is paused every mod puts the player's settings back: the settings
 // screen is only reached through a menu, so its rows never show a test step's values, and whatever the
-// player applies there is theirs. Back in the game, the current step is applied and measured again.
+// player applies there is theirs. Back in the game, the current step is applied and measured again. A
+// moment out of play without a menu (no camera, or the game's time stopped, as during an autosave) only
+// starts the step's measurement over; it pauses the run once it has lasted a second.
 // Selecting the button again stops the run and saves the report with the steps measured so far; before
 // the run has started (it starts only in gameplay), it saves the logs without one.
 //
@@ -204,7 +206,7 @@ namespace TGGraphicsBridge
         private static void Begin()
         {
             phase = Phase.Waiting; startedUtc = DateTime.UtcNow;
-            results.Clear(); plan = null; index = 0; measuring = paused = stopRequested = restored = false; stopReason = null;
+            results.Clear(); plan = null; index = 0; measuring = paused = stopRequested = restored = false; stopReason = null; awaySince = -1f;
             BridgeLog.Log.LogInfo("Troubleshooting report requested; the test run starts in gameplay.");
             Estimate();
             Notices.Show(ToastKey, "Troubleshooting report", "Go back to the game to start the test run of about " + duration + ". " +
@@ -219,13 +221,23 @@ namespace TGGraphicsBridge
             if (phase != Phase.Running) return;
             stopRequested = true; stopReason = why;
         }
-        // In gameplay: the game has focus, runs, locks the cursor and has a camera, and no settings are open.
-        private static bool Gameplay()
+        // Where the player is: in play (the game has focus, runs, locks the cursor and has a camera); in a
+        // menu (the cursor is free, the settings are open, or the game is in the background); or away from
+        // play without a menu: the game's time stopped or no camera, as while an autosave takes its picture
+        // with a camera of its own.
+        private enum Where { Playing, Menu, Away }
+        private static Where Locate()
         {
-            if (!Application.isFocused || Time.timeScale <= 0f || Cursor.lockState != CursorLockMode.Locked || VideoTab.IsSettingsOpen) return false;
+            if (!Application.isFocused || Cursor.lockState != CursorLockMode.Locked || VideoTab.IsSettingsOpen) return Where.Menu;
+            if (Time.timeScale <= 0f) return Where.Away;
             var camera = Camera.main;
-            return camera != null && camera.isActiveAndEnabled;
+            return camera != null && camera.isActiveAndEnabled ? Where.Playing : Where.Away;
         }
+        private static bool Gameplay() => Locate() == Where.Playing;
+        // How long the game may be away from play without a menu before the run pauses. An autosave took a
+        // third of a second, and pausing for it rebuilt frame generation's swapchain twice for nothing.
+        private const float AwayGrace = 1f;
+        private static float awaySince = -1f;
         // Every frame, from the bridge's per-frame component.
         internal static void Tick(float now)
         {
@@ -240,21 +252,27 @@ namespace TGGraphicsBridge
             }
             if (phase != Phase.Running) return;
             if (stopRequested) { Complete(stopReason ?? "stopped"); return; }
-            if (!Gameplay())
+            var where = Locate();
+            if (where != Where.Playing)
             {
                 if (!paused)
                 {
-                    // The player's own settings while paused, before any menu can show them: the settings
-                    // screen is only reached through a menu, so its rows never hold a test step's values, and
-                    // what the player applies there is theirs.
-                    paused = true;
                     measuring = false; frames.Clear(); phaseTime = 0f; // this step is measured again from the start
-                    RestoreAll();
-                    Notices.Show(ToastKey, "Troubleshooting report: paused", "Your settings are back while the game is paused. Return to the game to " +
-                        "continue the test run (step " + (index + 1) + " of " + plan.Count + "), or select Create Troubleshooting Report again to stop it and save the report.", 600f);
+                    if (awaySince < 0f) awaySince = now;
+                    // The player's own settings in a menu, before it can show them: the settings screen is only
+                    // reached through a menu, so its rows never hold a test step's values, and what the player
+                    // applies there is theirs. Away from play without a menu, only after AwayGrace.
+                    if (where == Where.Menu || now - awaySince >= AwayGrace)
+                    {
+                        paused = true;
+                        RestoreAll();
+                        Notices.Show(ToastKey, "Troubleshooting report: paused", "Your settings are back while the game is paused. Return to the game to " +
+                            "continue the test run (step " + (index + 1) + " of " + plan.Count + "), or select Create Troubleshooting Report again to stop it and save the report.", 600f);
+                    }
                 }
                 return;
             }
+            awaySince = -1f;
             if (paused) { paused = false; ApplyStep(); return; }
             phaseTime += delta;
             var step = plan[index].Step;

@@ -193,7 +193,84 @@ torches and a light over the checkered leaf, on flat and on normal-mapped walls;
 blur like the denoiser and hide it. `17-full-still.png` against `18-full-still-reference.png` shows the sun's
 sharp shadows (the floor's error must stay under 6%), `19`/`20` the night, and `21` to `26` the night's direct
 and bounced light apart, with and without ReSTIR's spatial reuse (`night floor` lines: the mean ratio says
-whether light is lost). Compare them before and after a change to the tracer or the denoiser.
+whether light is lost). Compare them before and after a change to the tracer or the denoiser. The `NRD:` lines
+run four of those cases with NVIDIA NRD (RELAX) on the bounced light and compare its error and flicker with the
+built-in denoiser's (each within half again of it, the bounced light alone within a quarter). The `shadow detail`
+line runs Shadow Detail's shader on a ramp of greys and a color, in place and drawn from a copy. The `panel metallic
+on its left half` lines trace a panel whose mask map is metallic on one half against the same panel plain and with
+that half black (one ray a pixel, the same frames, none of the estimator's own changes): the metallic half bounces and
+shows in a mirror floor's reflection as the plain panel's does (a path vertex sends a metal's reflected light on as
+diffuse light of its base color; with its diffuse color alone it was black), the other half is as before (`35` to `38`
+show them); the
+`mask map's finish` line reads the roughness, albedo and reflections of the box drawn forward in a mask map's finish,
+and one never baked. The `glass cube's
+shadow` lines give, of the direct light an opaque cube stops on the floor, the part a glass one lets through, channel
+by channel, from the sun and from a lamp (green glass its color 0.15 0.6 0.15, grey 0.36, clear 1;
+`35-green-glass-shadow.png`), the `bounced light under the ceiling` line the same tint at path vertices under a sheet
+of green glass, and `guides on see-through glass` Ray Reconstruction's guides there (no diffuse albedo, a specular
+albedo that covers what the glass lets through, roughness 0.03, the distance to what is seen behind it). `a lamp
+reflected in see-through glass` compares a lamp's mirror image on a glass cube with its radiance by the Fresnel term,
+worked out on the CPU (`36-glass-reflects-a-lamp.png`), and `the sun reflected in see-through glass` adds up the sun's
+mirror image on a turned pane (reflected light times each pixel's solid angle) against the sun's illuminance by the
+Fresnel term (`37-glass-reflects-the-sun.png`). The `water` lines hand
+over a flat water plane 30 cm over the floor as HDRP's water system leaves it (depth, stencil bits 8 and 32, normal
+buffer) with an empty transparent SSR texture, and check the filled reflection (`35-water-reflections.png`; one frame
+alone in `36`): a traced-only yellow light panel, the red and the green wall and the sky through the ceiling's hole
+where the mirror sends each pixel, HDRP's own reflection replaced by the traced one (where its SSR had the full weight and half of it), the division by HDRP's reflection
+multiplier and the pre-exposure, the grain accumulated and filtered, sharp edges, a moving camera, and a sunlit cut-out
+card lit through from behind. With `TGPT_ENERGY=1` set, the test also measures the light
+through ReSTIR's reuse against no reuse at all, undenoised and averaged over hundreds of frames (`ENERGY` lines:
+1 means no light lost or gained), for 24 torches and for one light 10 cm from a wall, and saves the averages as
+`energy-*.png`. The `glowing quad` lines test emissive surfaces as lights (the Emissive Lights row) in the dark room
+with a glowing quad in it and nothing else lit: the same light with the row on and off (the floor's within noise; off a
+white wall, less the 1 % its rays' offset from the wall explains), a frame's error around its foot with ReSTIR's reuse,
+with its temporal reuse alone and denoised, its reflection in a glossy floor counted once, its direct light pixel by
+pixel against a Lambertian square's (mirrored too), its back lighting nothing, a light 2 cm under it that keeps it from
+adding light of its own, and what the Emissive debug view makes of five glowing quads (`39-view-emissive.png`).
+
+The radiance cache has a furnace of its own: a closed box whose walls all glow (0.5) and reflect half the light that
+reaches them, so their radiance is exactly 1. The `furnace` lines give the paths alone (0.75 with one bounce, 0.97 with
+four), one and two bounces ending on the cache (1, within 4%), and the reflections of the walls, twice as bright with the
+cache as without (the reflected wall's glow and the light it reflects). The `radiance cache` lines compare one and four
+bounces under the room's ceiling with and without it, and check that a camera cut keeps its light while a new start
+empties it (every case in the harness starts with an empty cache: its first frame runs without it). Checks that sum
+every pixel an object darkens (the characters' shadows through cut-outs and glass) run without the cache, since a green
+cube with holes traps light in a way that grows with every bounce followed.
+
+The `under a canvas close over sunlit sand` line measures ReSTIR's bounced light, undenoised, on sand under a canvas 40 cm
+over it against a boat's hull, with a 12 cm slit at its front (the canvas is traced only, so the camera sees the sand
+under it), against the plain path tracer: bands at the front edge, the middle and by the hull, with the Crevice Light
+row and without. With the row the front edge must be within 5 %, the middle from 8 % short to 5 % over and the sand
+by the hull from 15 % short to 5 % over; `crevices-light-indirect.png` shows the bounced light there. With `TGPT_CREVICES=1` set it runs the study behind it
+(`CREVICES` lines, a few minutes): the honest reference at 1 to 4 bounces in stops below the sunlit sand, each of
+ReSTIR's changes undone in turn, the sky seen straight from the sand, and NRD and the built-in denoiser against the
+undenoised image, for the canvas open at the front (`roof`) and with its skirt (`tunnel`).
+
+Characters' light has checks of its own. `a hair card in the sun` casts a traced-only card of 4x4 quads whose texture
+covers every other column of texels (every alpha-tile texel half covered) and compares its shadow as hair (strands stop a
+ray by chance, as much as they cover) with the same card cut out by the cutoff: 0.5 of it expected. `thin skin lit from
+behind` draws a quad as skin (transmission through a thick diffusion profile, a thickness in GBuffer2's green) with the
+sun behind it, over a traced 4 mm slab and over a 30 cm block, and compares its direct light with HDRP's transmittance
+formula, its tint with the profile's, and a floor drawn as the same skin, lit from the front, with the light it has without
+transmission. `a table HDRP shades itself` draws a table forward, in the traced scene for camera rays only and shaded by
+HDRP as the eyes are, and reads its color against "HDRP's" (the raster's) under a lamp a traced block shadows, without the
+block, with TGPT_OPTION_NO_HDRP_SHADOWS, with the lamp marked TGPT_LIGHT_HDRP_SHADOWS, missing from the traced scene (left
+as HDRP made it), and in the sun with and without the sun's w of 2. `characters' acceleration structures` times 64 posed characters of 8,192 triangles against none, for the record (the
+GPU is shared: its low quantiles say most).
+
+Other GPUs and validation (run `build/native/tgpt_gpu_test.exe artifacts/Native <images folder>` directly; two runs
+at once need `TGPT_TEST_STAGE=<another folder name>` on one, since the DLLs are staged beside the exe, and a copy of
+the exe keeps a rebuild from failing while a long run goes):
+
+- `TGPT_TEST_ADAPTER=1002` runs on the first AMD GPU (`10DE` NVIDIA, `8086` Intel), an integrated one too. Its
+  numbers should match another GPU's to within a few tenths of a percent; the DirectX Raytracing 1.2 check expects
+  what that GPU's driver reports.
+- `TGPT_TEST_DEBUG_LAYER=<folder>` runs the bridge's Direct3D 12 device under the debug layer, with
+  `TGPT_TEST_GPU_VALIDATION=1` under GPU-based validation too (much slower). The folder holds the `d3d12SDKLayers.dll`
+  of the Agility SDK version TG Path Tracing ships (`build/native/bin/x64` in the Microsoft.Direct3D.D3D12 NuGet
+  package). Windows' Graphics Tools optional feature must be installed as well: without it the runtime refuses the
+  Agility SDK's debug layer too (`DXGI_ERROR_SDK_COMPONENT_MISSING`, 0x887A002D; the Agility SDK specification requires
+  both). Every error and warning is printed; an error fails the run.
 
 1. Start: BepInEx logs `TG Path Tracing 1.2.0 loaded`, `Hooked HDRP's RenderSSR ...` and `Path tracing
    is available on this GPU`; `BepInEx/TGPathTracing/Native/TGPathTracing.Native.log` has `Shared D3D12
@@ -208,17 +285,24 @@ whether light is lost). Compare them before and after a change to the tracer or 
    `Mode = Global Illumination` comes up as Full, and its `Indirect intensity` line is gone.
 3. Debug views (Shift+Insert): Normals and Albedo line up with the scene (not upside down or shifted);
    Coverage colours most buildings, rocks, trees and terrain, dark where only HDRP draws (characters,
-   grass); Materials shows textures where the objects are; Indirect is smooth after a second of
-   standing still and follows the camera without trails.
+   grass); Materials shows textures where the objects are, and metal (armour, pots, weapons, a
+   candlestick) dark: it shows the diffuse color, which a metal has none of (paths send its base color on); Indirect is smooth after a second of
+   standing still and follows the camera without trails. BepInEx's `Path tracing:` scene line counts `mask maps`, the
+   `Traced material shader` lines name each shader's (`mask map _MaskMap (tile N): metallic R 0-1, smoothness A ...`),
+   and the F8 report's material under the crosshair says `its mask map traced` where it has one.
 4. Sun shadows are traced (trees included), torches and lamps light their surroundings with traced
    shadows, reflections on wet or metallic surfaces come from the traced scene. Insert turns path tracing
    off and on: compare with Off at the same spot for brightness, the same order of magnitude, no black or
-   white surfaces.
+   white surfaces. Water (Water Reflections on): looking down at a lake or river from its bank, it reflects the
+   trees and the bank above and behind you (off screen) instead of the sky, with the game's own colour, foam and
+   fog; F8's `water-reflections-off` shot shows HDRP's own reflections to compare, the 10 s hook line counts
+   `water reflections: recorded`, `handed over` and the native side's `traced` and `applied`, and the native log
+   says `Water reflections: traced ...` once.
 5. Walk and turn quickly: no smearing of bounce light behind the camera's motion beyond a frame, no
    flicker along silhouettes worse than a few pixels. Fast travel or load a save: the scene rebuilds
    (meshes to register rises, then falls) without errors.
-6. Performance: note the frame rate with Off and Full, and the native log's GPU
-   time; Bounces 1 and Spatial Samples 2 should cost clearly less.
+6. Performance: note the frame rate with Off and On, and the F8 report's GPU time by stage; Bounces 2 and
+   Spatial Samples 8 should cost clearly more bounced light than the defaults (1 and 4).
 7. With TG Frame Generation and TG Better Upscaling on: all three still work; frame generation's
    pipeline line unchanged.
 8. DirectX Raytracing 1.2 (GeForce RTX 40/50 with a current driver): the bridge log's `Direct3D 12:`
@@ -246,21 +330,31 @@ or those two runs cover frame generation's FSR and XeSS paths only (the test pri
 
 9. Denoisers, with Denoising never picked (it starts on the best). NVIDIA with TG Better Upscaling and DLSS selected: the
    overlay says `DLSS Ray Reconstruction`, TG Better Upscaling's line says it upscales with Ray
-   Reconstruction, and the lighting is clean without the built-in denoiser's blur; Built-in switches
-   back. A Radeon RX 9000: the native log has `AMD Ray Regeneration available on this GPU` and
+   Reconstruction, and the lighting is clean without NRD's blur; NRD switches back. A Radeon RX 9000: the native log has `AMD Ray Regeneration available on this GPU` and
    `AMD Ray Regeneration context for WxH`, the overlay says `AMD Ray Regeneration`; any `AMD Ray
-   Regeneration failed` or `could not start` line means the built-in denoiser took over. Other GPUs log
-   that Ray Regeneration needs an RX 9000.
+   Regeneration failed` or `could not start` line means NRD took over. Other GPUs log
+   that Ray Regeneration needs an RX 9000. NRD, on any GPU with DirectX Raytracing (where neither of those runs,
+   an RX 7000 for one, Denoising starts on it): the native log has `NVIDIA NRD 4.17.3 available` at start and,
+   once it denoises, `NVIDIA NRD textures for WxH`; the overlay and the F8 status say `NRD`; `NVIDIA NRD could not
+   start` or `NVIDIA NRD failed` means the tracer's own filters took over (the overlay says built-in denoiser; the row
+   never offers them). Somewhere dim, NRD's bounced light is calm without blurring the sun's and the lamps' shadows.
 11. The Video settings: a Path Tracing row after the upscaling and frame generation rows, with its options nested
    under it only while it is on (the row offers Off and Full); FoA Mod Manager
    shows exactly the same rows in the same order, and a change on either side shows on the other after the
-   settings close. Denoising lists None, Built-in, Ray Regeneration (RX 9000 only) and Ray Reconstruction (NVIDIA
-   with TG Better Upscaling), and starts on the best of them; Restore Defaults picks it again. Ray Reconstruction
-   with FSR or XeSS upscaling: its tooltip says to select DLSS, the overlay says built-in denoiser. With DLSS 5
+   settings close. Denoising lists None, NRD, Ray Regeneration (RX 9000 only) and Ray Reconstruction
+   (NVIDIA with TG Better Upscaling), and starts on the best of them; Restore Defaults picks it again. Exposure
+   (0 automatic) brightens or darkens the traced light by that many stops; Dark Adaptation at 0 % leaves interiors
+   at the game's own exposure (dark), at 100 % brightens them to a mid tone, and sunny exteriors stay at the game's
+   exposure either way. An earlier config's hidden `Auto exposure compensation` carries over to Exposure. Shadow
+   Detail at 0 % against 50 % in a room lit by one candle: the unlit side shows texture at 50 % while the candle's
+   bright wall stays as it was; in the main hall and outdoors in the sun the two look the same (the BepInEx
+   `Path tracing:` line's `shadow detail N%` is the effective strength: near 0 there, up to the row's value in the
+   dark room). Ray Reconstruction
+   with FSR or XeSS upscaling: its tooltip says to select DLSS, the overlay says NRD. With DLSS 5
    loaded, Denoising still starts on Ray Reconstruction and it runs. Indirect Color at 3 visibly tints surfaces
    next to strongly colored ones (the Indirect debug view shows it), at 0 the bounced light is grey, and neither
    changes its brightness. An earlier version's config
-   (`Denoiser = Auto`) becomes Denoising on the best; `Denoiser = Built-in` stays Built-in. With FoA Mod Manager
+   (`Denoiser = Auto`) becomes Denoising on the best; `Denoiser = Built-in` and `Denoising = Built-in` become NRD. With FoA Mod Manager
    open in game, frame generation's pipeline line shows it suspended (0x2) without fgOn bursts.
 12. Characters: people sitting on a bench cast shadows onto it and the floor, their arms shade their
    bodies, and the floor under them is darker than around them; hair casts no card-shaped shadows. BepInEx logs
@@ -272,6 +366,22 @@ or those two runs cover frame generation's FSR and XeSS paths only (the test pri
    Drake entities, and `Traced though the camera does not draw it` lines name such objects.
    Straw on a floor shows no black blocks under it; a rope net casts its pattern on the wall behind it. Reflection
    Boost at 1 turns floors and walls into near-mirrors of the room; 0 looks as before.
+   Hair's shadow on a face or a neck is soft and lets light through between the strands (no hard, card-shaped edges).
+   A character with the sun or a candle behind them: the ears' rims and the nostrils' wings glow red, the cheek in front
+   of the head does not; BepInEx's `HDRP diffusion profiles` line gives `lets through a tint of ...` for the skin profile.
+   An NPC in a candle-lit corner, a wall or their own head between them and the candle: their hair and eyes are as dark as
+   the traced face beside them, Hair Shadows Off lights them again as before; in the open they look the same either way,
+   and in dialogue the hair shows no crawling noise. A far NPC (50 to 100 m) in the sun casts a shadow on the ground (the
+   native log's `characters=` count may rise outdoors). BepInEx logs `Characters: hair shader "TG/Character/RealHair"
+   colors and values:` once.
+13. Emissive Lights (on by default): the Emissive debug view shows glowing surfaces green where they are sampled as
+   lights, blue where they are a kept light's own surface (a lantern's glass round its candle), red where only the rays
+   that meet them see them (moving, past the budget, too dim, or the row off). Embers, lit windows and glowing crystals
+   light what is around them with little noise, and brighter than with the row off (unsampled, the clamps cut their light
+   as rare bright hits); a lantern's surroundings look the same either way. BepInEx logs `Emissive material "..."` for the
+   first 40 (nits, emissive map, albedo, exposure weight) and `has emission the tracer doesn't read` once per shader
+   whose glow it misses; the native log's 10 s line has `emissive: N submeshes, T triangles, S sampled as lights in C
+   clusters` (and `over the budget` when some are left out).
 
 ## Performance overlay
 
@@ -335,7 +445,9 @@ In game (none of this has been run yet):
 6. Put an empty OptiScaler.ini beside Fall of Avalon.exe: both the Frame Generation and the Dynamic
    Resolution row get the icon, with "OptiScaler: Leftover files." as the tooltip. With RivaTuner's frame
    rate limit set for the game, the Frame Generation row's tooltip names the limit ("RivaTuner: 60 fps
-   limit."). With the NVIDIA App's Max Frame Rate set for the game, the same after about ten seconds.
+   limit."). The NVIDIA App's Max Frame Rate and Vertical sync On give no alert (Vertical sync at 1/2
+   refresh does, after about ten seconds); a Max Frame Rate at or below the frames frame generation
+   shows is named as the cause in the framerate check (7).
    No tooltip is longer than about three lines; with more than one problem it says how many more the
    performance overlay lists. Remove TG Frame Generation's plugin DLL (keep its preloader): a stand-in
    Frame Generation row reads Off with the icon and the reason.
@@ -347,15 +459,30 @@ In game (none of this has been run yet):
    "No FPS gain" alert appears on the Frame Generation row. Turning frame generation off clears it; with an
    uncapped framerate and VSync off, the log says it raised the framerate from X to Y.
 
+## Framerate Limit 45
+
+1. With TG Frame Generation, VSync off and Borderless Fullscreen, the Video settings' Framerate Limit
+   row goes 30, 40, 45, 50 (the entries the display gives). BepInEx's log says "The game's Framerate
+   Limit offers 45 fps between 40 and 50". Choose 45 and apply: the performance overlay's rendered rate
+   holds at 45, and 90 on screen with 2x frame generation.
+2. Restart the game: the row still reads 45 and the rendered rate is 45 once in play; the log says
+   "Framerate Limit 45 chosen again". Choose 60 (or 100, 120, 144) and restart: that choice comes back,
+   not the one above it.
+3. With 45 chosen, turn VSync on: the row moves to the nearest VSync rate and 45 is skipped by the
+   arrows; turn VSync off again and 45 can be chosen. Switch to Exclusive Fullscreen with frame
+   generation off: 45 moves to 40 and is skipped.
+4. Choose 45, close the game, remove TG Frame Generation and start: the row reads the game's default
+   (60) and every entry works as before.
+
 ## Frame generation pipeline changes in 1.2.0
 
 In game (none of this has been run yet). Compare against 1.1.0 where a number is asked for.
 
 1. D3D11 no longer waits for frame generation. With DLSS, FSR and XeSS at 2x, uncapped and VSync
    off, note the performance overlay's rendered and displayed framerate in the same spot as with
-   1.1.0. Both should be the same or higher; the GPU-bound case gains most. The Pipeline line's
-   `d3d11Waits buffer/inputs=` appears only when D3D11 had to wait and should stay small next to
-   `presents=`. Watch for corruption: flickering depth or motion (FSR debug flag 4 shows them), a
+   1.1.0. Both should be the same or higher; the GPU-bound case gains most. In the Pipeline line's
+   `d3d11Waits buffer/inputs=`, `buffer` equals `presents=` (the game renders every frame into one
+   back buffer, whose copy was queued just before); `inputs` should stay near 0. Watch for corruption: flickering depth or motion (FSR debug flag 4 shows them), a
    HUD-less image from the wrong frame, or a torn or stale frame. Any of those means a resource was
    overwritten while D3D12 still read it.
 2. The frame start: BepInEx's log says once that "Frames begin in Unity's PlayerLoop after

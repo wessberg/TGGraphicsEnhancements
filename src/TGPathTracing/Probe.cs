@@ -15,17 +15,16 @@ namespace TGPathTracing
         private const float Margin = 0.15f; // metres around the point that count as "at" it
         private const int MaxLines = 14;
 
-        internal static void Report()
+        internal static void Report() { Session.Log.LogInfo(Text(8)); }
+
+        // The report, with up to maxLights lights reaching the point.
+        internal static string Text(int maxLights)
         {
             var cam = Camera.main;
-            if (cam == null) { Session.Log.LogInfo("Probe: no camera."); return; }
+            if (cam == null) return "Probe: no camera.";
             var eye = cam.transform.position;
             var ray = new Ray(eye, cam.transform.forward);
-            if (!Physics.Raycast(ray, out var hit, 300f, ~0, QueryTriggerInteraction.Ignore))
-            {
-                Session.Log.LogInfo("Probe: no collider under the crosshair within 300 m.");
-                return;
-            }
+            if (!Physics.Raycast(ray, out var hit, 300f, ~0, QueryTriggerInteraction.Ignore)) return "Probe: no collider under the crosshair within 300 m.";
             var point = hit.point;
             var sb = new StringBuilder();
             sb.Append("Probe at (" + point.x.ToString("0.00") + ", " + point.y.ToString("0.00") + ", " + point.z.ToString("0.00") + "), " + hit.distance.ToString("0.0") +
@@ -45,28 +44,28 @@ namespace TGPathTracing
             sb.Append("\n  objects there: " + objects);
             SceneCapture.ProbeDrake(point, eye, sb, Margin, MaxLines);
             SceneCapture.ProbeMedusa(point, eye, sb, Margin, MaxLines);
-            Lights(point, hit.normal, sb);
-            Session.Log.LogInfo(sb.ToString());
+            Lights(point, hit.normal, sb, maxLights);
+            return sb.ToString();
         }
 
-        private static void Lights(Vector3 point, Vector3 normal, StringBuilder sb)
+        private static void Lights(Vector3 point, Vector3 normal, StringBuilder sb, int maxLights)
         {
             var origin = point + normal * 0.05f;
             var reaching = new List<(Light light, float strength)>();
-            foreach (var light in Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
+            foreach (var light in SceneLights.AllLights())
             {
                 if (light == null || !light.isActiveAndEnabled || light.intensity <= 0f) continue;
                 if (light.type == LightType.Directional) continue;
                 var to = light.transform.position - point;
                 float d = to.magnitude;
-                if (d > light.range) continue;
+                if (d > (SceneLights.IsPlacedLight(light) ? light.range : SceneLights.Reach(light, light.GetComponent<UnityEngine.Rendering.HighDefinition.HDAdditionalLightData>()))) continue;
                 float facing = Vector3.Dot(normal, to / Mathf.Max(d, 1e-4f));
                 if (facing <= 0f) continue;
                 reaching.Add((light, light.intensity * facing / Mathf.Max(d * d, 0.01f)));
             }
             reaching.Sort((a, b) => b.strength.CompareTo(a.strength));
             sb.Append("\n  lights reaching it (strength = intensity x cosine / distance squared, strongest first): " + reaching.Count);
-            for (int i = 0; i < reaching.Count && i < 8; ++i)
+            for (int i = 0; i < reaching.Count && i < maxLights; ++i)
             {
                 var (light, strength) = reaching[i];
                 var p = light.transform.position;

@@ -87,7 +87,9 @@ struct Diag {
     uint64_t lastSummary=0;
     PresentTiming timing;
     // Times D3D11 had to wait on the GPU for D3D12 before overwriting a shared texture: a back buffer
-    // not yet copied, or an input slot whose present had not retired. Rare when D3D12 keeps up.
+    // not yet copied, or an input slot whose present had not retired. The back buffer's count is one per
+    // present: a D3D11 game renders every frame into the same one, whose copy was queued just before the
+    // check. The input slots' count is the one that says D3D12 fell behind.
     uint64_t d11ColorWaits=0, d11SlotWaits=0;
     bool markerFailLogged=false, tagFailLogged=false;
 };

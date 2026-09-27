@@ -5,6 +5,7 @@
 #pragma once
 namespace tgpt::shaders {
 #include "pt_prepare.h"
+#include "pt_probe.h"
 #include "pt_gi.h"
 #include "pt_gi_spatial.h"
 #include "pt_di.h"
@@ -16,7 +17,15 @@ namespace tgpt::shaders {
 #include "pt_omm_bake.h"
 #include "pt_rrg_guides.h"
 #include "pt_skin.h"
+#include "pt_gi_boil.h"
+#include "pt_meter.h"
+#include "pt_sss.h"
+#include "pt_cache.h"
+#include "pt_water.h"
+#include "pt_emissive.h"
+#include "pt_hdrp_shadow.h"
 #include "pt_prepare_dxr12.h"
+#include "pt_probe_dxr12.h"
 #include "pt_gi_dxr12.h"
 #include "pt_gi_spatial_dxr12.h"
 #include "pt_di_dxr12.h"
@@ -25,6 +34,8 @@ namespace tgpt::shaders {
 #include "pt_temporal_dxr12.h"
 #include "pt_atrous_dxr12.h"
 #include "pt_compose_dxr12.h"
+#include "pt_water_dxr12.h"
+#include "pt_hdrp_shadow_dxr12.h"
 #include "pt_gi_ser.h"
 #include "pt_specular_ser.h"
 }

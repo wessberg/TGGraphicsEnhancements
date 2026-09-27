@@ -22,6 +22,7 @@ namespace TGBetterUpscaling
         // Ray Reconstruction's camera: row-major, row vectors multiplied on the left (NVIDIA's convention).
         internal fixed float WorldToView[16];
         internal fixed float ViewToClip[16];
+        internal ulong SpecularHitDistance, ColorBeforeTransparency; // Ray Reconstruction's optional inputs (TG Path Tracing's)
     }
     // One quality mode (TGUP_Mode): the vendor's id and its per-axis upscale ratio.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -59,8 +60,8 @@ namespace TGBetterUpscaling
     }
     internal sealed class NativeUpscaler
     {
-        internal const uint Abi = 0x00010300;
-        internal const int FrameSize = 264, StatusSize = 88, ModeSize = 8, DlssOverrideSize = 24;
+        internal const uint Abi = 0x00010400;
+        internal const int FrameSize = 280, StatusSize = 88, ModeSize = 8, DlssOverrideSize = 24;
         internal const string NativeName = "TGBetterUpscaling.Native.dll";
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint GetAbi();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int Read(ref UpscaleStatus status);

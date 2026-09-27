@@ -1,70 +1,76 @@
 // SPDX-License-Identifier: MIT
-// ReSTIR DI, candidates and temporal reuse (Bitterli et al. 2020). The lights whose range
-// reaches the pixel (its light grid cell) compete by their unshadowed contribution at the pixel: all of them
-// when there are no more than eight, otherwise eight spread over the cell without repeats (cell_candidate);
-// every light that can light the pixel is in the cell. The previous frame's choice at the
-// reprojected pixel competes with the winner. The plugin keeps every light in a stable slot, so a
-// light index means the same light from one frame to the next.
-#include "pt_common.hlsli"
-#include "pt_restir.hlsli"
+// ReSTIR DI (Bitterli et al. 2020): candidates, then NVIDIA RTXDI's temporal reuse (pt_rtxdi.hlsli) and a boiling filter.
+// The lights whose range reaches the pixel (its light grid cell) compete by their unshadowed contribution: all of them
+// when there are no more than eight, otherwise eight drawn by how much each can matter there (cell_candidate), each
+// with a point of its disc. RTXDI then resamples the previous frame's reservoir at the reprojected pixel, permuted within a 4x4
+// block every frame so that neighbouring pixels don't reuse the same samples (NVIDIA's advice for DLSS Ray
+// Reconstruction and AMD's for Ray Regeneration, which both assume uncorrelated samples), within its temporal history
+// (in frames) and with its bias correction; a boiling filter drops a reservoir far brighter than the rest of its
+// thread group (a rare light spreading as a flash). The result is this frame's reservoir, which the spatial pass and
+// the next frame's temporal reuse read: spatial results never feed back into time.
+// No visibility reuse by default (dropping a light the pixel doesn't see, keeping its sample count, as RTXDI's
+// RTXDI_StoreVisibilityInDIReservoir does): with spatial reuse's Basic normalization, which counts a neighbour's samples
+// whether or not its light was dropped, it darkened lit ground within the spatial radius of every shadow (measured in
+// tgpt_gpu_test: a lamp's shadow edge 14 pixels wide instead of 0.8, for 13% less error at night with 25 torches).
+// With RTXDI's ray-traced bias correction, which counts a neighbour only if it sees the chosen light, the edge is still
+// 4.4 pixels wide (for 7% less error at night): the option TGPT_OPTION_DI_VISIBILITY turns both on, for testing (fewer
+// bright dots inside strong lights' shadows, where reuse otherwise keeps a weak visible light's large weight for frames).
+// The shading pass traces the final visibility.
+#define RTXDI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
+#include "pt_rtxdi.hlsli"
+#include "pt_boil.hlsli"
+#include "Rtxdi/Utils/RandomSamplerState.hlsli"
+#include "Rtxdi/DI/TemporalResampling.hlsli"
 
 [RootSignature(PT_ROOT_SIGNATURE)]
 [numthreads(8, 8, 1)]
-void main(uint2 p : SV_DispatchThreadID) {
-    if (any(p >= g.size.xy)) return;
-    RWStructuredBuffer<DIReservoir> cur = ResourceDescriptorHeap[g.material.w];
-    RWStructuredBuffer<DIReservoir> prev = ResourceDescriptorHeap[g.signals.x];
-    uint index = p.y * g.size.x + p.x;
-    DIReservoir r; r.light = INVALID; r.W = 0.0; r.M = 0.0; r.pad = 0.0;
-    uint count = g.settings2.z;
-    Surface s = load_surface(p, g.surface.x, g.surface.z, g.material.x);
-    if (!s.valid || !s.deferred || count == 0) { cur[index] = r; return; }
-
-    Rng rng = make_rng(p, g.size.z, 3);
-    float3 v = normalize(g.cameraPos.xyz - s.position);
-    float alpha = roughness_alpha(s.roughness);
-    float wsum = 0.0, selectedTarget = 0.0;
-    uint first, cellCount;
-    bool lit = light_cell(s.position, first, cellCount);
-    const uint candidates = lit ? min(cellCount, 8u) : 0u;
-    const uint start = lit ? min(uint(rng.next() * cellCount), cellCount - 1) : 0u;
-    for (uint c = 0; c < candidates; ++c) {
-        uint i = cell_candidate(first, cellCount, candidates, c, start);
-        float3 d, sp, l; float dist;
-        float t = di_target(i, s, v, alpha, d, sp, l, dist);
-        float w = t * float(cellCount); // target / (1 / cellCount)
-        wsum += w;
-        if (w > 0.0 && rng.next() * wsum < w) { r.light = i; selectedTarget = t; }
-    }
-    float m = float(candidates);
-    if ((g.size.w & FLAG_RESET) == 0 && (g.settings2.y & OPTION_NO_TEMPORAL) == 0) {
-        int2 q; Surface spv;
-        if (reproject(p, s, q, spv)) {
-            DIReservoir rp = prev[q.y * g.size.x + q.x];
-            if (rp.light < count && rp.W > 0.0 && rp.M > 0.0) {
-                rp.M = min(rp.M, float(g.settings2.x) * float(max(candidates, 1u)));
-                float3 d, sp, l; float dist;
-                float t = di_target(rp.light, s, v, alpha, d, sp, l, dist);
-                float w = t * rp.W * rp.M;
-                wsum += w; m += rp.M;
-                if (w > 0.0 && rng.next() * wsum < w) { r.light = rp.light; selectedTarget = t; }
+void main(uint2 p : SV_DispatchThreadID, uint2 local : SV_GroupThreadID) {
+    // Every thread of the group reaches the boiling filter, which synchronizes the group.
+    const bool inside = all(p < g.size.xy);
+    RTXDI_DIReservoir r = RTXDI_EmptyDIReservoir();
+    RAB_Surface surface = RAB_GetGBufferSurface(int2(p), false); // empty outside the image
+    if (inside && RAB_IsSurfaceValid(surface) && frame_has_lights()) {
+        Rng rng = make_rng(p, g.size.z, 3);
+        uint first, cellCount;
+        if (light_cell(surface.s.position, first, cellCount)) {
+            const uint candidates = min(cellCount, 8u);
+            const float u = rng.next();
+            for (uint c = 0; c < candidates; ++c) {
+                float invPdf;
+                uint i = cell_candidate(first, cellCount, candidates, c, u, invPdf);
+                RAB_LightInfo light = RAB_LoadLightInfo(i, false);
+                // An emissive cluster: one of its triangles is the candidate (uv then picks a point of it).
+                if (light.l.type == LIGHT_CLUSTER) { i = cluster_triangle(light.l, rng.next(), invPdf); light = RAB_LoadLightInfo(i, false); }
+                float2 uv = rng.next2();
+                RAB_LightSample ls = RAB_SamplePolymorphicLight(light, surface, uv);
+                RTXDI_StreamSample(r, i, uv, rng.next(), RAB_GetLightSampleTargetPdfForSurface(ls, surface), invPdf);
+            }
+            RTXDI_FinalizeResampling(r, 1.0, r.M);
+            r.M = 1; // a frame's candidates count as one sample, as RTXDI's own initial sampling does: history is in frames
+            // Initial visibility (RTXDI's default, an option here): a chosen light the pixel doesn't see is dropped, its
+            // sample count kept, so reuse never spreads a light into the shadow it casts.
+            if ((g.settings2.y & OPTION_DI_VISIBILITY) != 0 && RTXDI_IsValidDIReservoir(r)) {
+                RAB_LightSample chosen = RAB_SamplePolymorphicLight(RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(r), false), surface,
+                                                                    RTXDI_GetDIReservoirSampleUV(r));
+                if (!rtxdi_visible(surface, chosen)) RTXDI_StoreVisibilityInDIReservoir(r, 0.0, true);
             }
         }
+        if ((g.size.w & FLAG_RESET) == 0 && (g.settings2.y & (OPTION_NO_TEMPORAL | OPTION_DI_NO_REUSE)) == 0) {
+            RTXDI_RandomSamplerState rtxdiRng = RTXDI_InitRandomSampler(p, g.size.z, 1);
+            int2 temporalPixel;
+            RAB_LightSample selected = RAB_EmptyLightSample();
+            // Not permuted on a complex surface (a strand, a slat, a blade: pt_prepare), as NVIDIA's RTXDI sample does.
+            RTXDI_DITemporalResamplingParameters tparams = g.diTemporal;
+            if (surface.s.complex) tparams.enablePermutationSampling = false;
+            r = RTXDI_DITemporalResampling(p, surface, r, rtxdiRng, g.rtxdiRuntime, g.rtxdiReservoirs,
+                                           rtxdi_motion(p, surface.s), g.rtxdi.y, tparams, temporalPixel, selected);
+        }
     }
-    r.M = m;
-    r.W = selectedTarget > 0.0 ? wsum / (m * selectedTarget) : 0.0;
-    if (!(r.W < 1e20)) r.W = 0.0;
-    // Visibility reuse (Bitterli et al. 2020, section 4): the choice is made by unshadowed contribution, so in a
-    // chair's shadow the pixel keeps choosing the lamp the chair hides. One shadow ray now; a light this pixel
-    // cannot see leaves the reuse, and neighbours and the next frame share only lights that reach them. Without
-    // it the lit and the shadowed frames alternated in every shadow, noise the denoiser could only blur away.
-    if (r.W > 0.0 && r.light < count) {
-        float offset = ray_offset(s.distance);
-        LightRecord light = load_light(r.light);
-        float3 origin = shadow_origin(s.position, s.geoNormal, light.position - s.position, offset, s.translucent);
-        float tmax;
-        float3 dir = shadow_ray(light, origin, rng.next2(), tmax);
-        if (occluded_from_surface(origin, dir, 0.0, max(tmax - offset, 0.0), near_back(s.distance))) r.W = 0.0;
+    if (g.diBoiling.enableBoilingFilter) {
+        // Compared by the light it gives (its weight W times its target function: the unshadowed light the pixel gets),
+        // not by W alone as RTXDI's own filter does: W is large where a weak light was chosen, so the stricter filter
+        // (pt_boil) dropped weak lights' light instead of fireflies.
+        if (boiling_outlier(local, g.diBoiling.boilingFilterStrength, r.weightSum * r.targetPdf)) r = RTXDI_EmptyDIReservoir();
     }
-    cur[index] = r;
+    if (inside) RTXDI_StoreDIReservoir(r, g.rtxdiReservoirs, p, g.rtxdi.x);
 }

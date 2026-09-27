@@ -33,7 +33,13 @@ struct Buffer {
 inline Buffer make_buffer(ID3D12Device* device, uint64_t size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state, const char* what) {
     Buffer b; b.size=std::max<uint64_t>(size, 256); b.state=state;
     const auto props=heap_props(heap); const auto desc=buffer_desc(b.size, flags);
-    check(device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&b.resource)), what);
+    // A buffer in a default heap starts in COMMON whatever it asks for (the debug layer says so, message 1328), and its
+    // first use promotes it; upload and readback heaps take their one state. Acceleration structures are the exception:
+    // they must be created in their own state and never leave it (created in COMMON, the debug layer reported thousands
+    // of errors a run, the TLAS's root SRV among them).
+    const D3D12_RESOURCE_STATES initial=heap==D3D12_HEAP_TYPE_DEFAULT && state!=D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE
+        ? D3D12_RESOURCE_STATE_COMMON : state;
+    check(device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, initial, nullptr, IID_PPV_ARGS(&b.resource)), what);
     if(heap==D3D12_HEAP_TYPE_UPLOAD || heap==D3D12_HEAP_TYPE_READBACK) {
         D3D12_RANGE none{0, 0};
         check(b.resource->Map(0, heap==D3D12_HEAP_TYPE_READBACK ? nullptr : &none, &b.mapped), what);

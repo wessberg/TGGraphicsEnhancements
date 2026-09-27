@@ -65,7 +65,7 @@ inline bool valid(const TGUP_Frame& f) {
     const bool rr=f.backend==TGUP_BACKEND_RAY_RECONSTRUCTION;
     if(rr && (!f.output || !f.diffuseAlbedo || !f.specularAlbedo || !f.normalRoughness)) return false;
     for(int i=0;i<16 && rr;++i) if(!std::isfinite(f.worldToView[i]) || !std::isfinite(f.viewToClip[i])) return false;
-    if(!rr && (f.diffuseAlbedo || f.specularAlbedo || f.normalRoughness)) return false;
+    if(!rr && (f.diffuseAlbedo || f.specularAlbedo || f.normalRoughness || f.specularHitDistance || f.colorBeforeTransparency)) return false;
     if(!f.renderWidth || !f.renderHeight || !f.outputWidth || !f.outputHeight) return false;
     if(f.outputWidth>16384 || f.outputHeight>16384) return false;
     if(f.renderWidth>f.outputWidth || f.renderHeight>f.outputHeight) return false; // upscaling, never down

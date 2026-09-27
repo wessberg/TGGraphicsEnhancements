@@ -27,6 +27,9 @@
     <Reference Include="Awaken.PackageUtilities"><HintPath>$(UnityReferenceDir)\Awaken.PackageUtilities.dll</HintPath><Private>false</Private></Reference>
     <!-- The probe's ray (Probe.cs). -->
     <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(UnityReferenceDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+    <!-- The capture's screenshots (DebugCapture.cs). -->
+    <Reference Include="UnityEngine.ScreenCaptureModule"><HintPath>$(UnityReferenceDir)\UnityEngine.ScreenCaptureModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(UnityReferenceDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
     <!-- Leshy's cell bounds (AABB). -->
     <Reference Include="Unity.Mathematics.Extensions"><HintPath>$(UnityReferenceDir)\Unity.Mathematics.Extensions.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TerrainModule"><HintPath>$(UnityReferenceDir)\UnityEngine.TerrainModule.dll</HintPath><Private>false</Private></Reference>

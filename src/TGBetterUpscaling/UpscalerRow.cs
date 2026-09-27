@@ -85,6 +85,7 @@ namespace TGBetterUpscaling
                 if (owner != null && VideoTab.Same(up, owner))
                 {
                     if (configPending && !open) { configPending = false; ApplyConfig(); }
+                    LogFsrVersion();
                     return;
                 }
                 if (open) return; // never change the row while the screen is open
@@ -167,7 +168,7 @@ namespace TGBetterUpscaling
             // FSR's own sharpening, nested under the row like the quality slider. DLSS and XeSS have none:
             // NVIDIA dropped DLSS's sharpening, and XeSS never had one.
             sharpness = new SliderOption(IdPrefix + "FsrSharpness", "FSR Sharpness", 0f, 1f, false, "{0:P0}", Settings.DefaultSharpness, false, NoStep);
-            VideoTab.Tooltip(sharpness, () => "Sharpening FSR applies after upscaling. 0% is off, 50% the default.");
+            VideoTab.Tooltip(sharpness, () => "Sharpening FSR applies after upscaling. 0% is off, 50% the default." + FsrVersionSentence());
             var quality = Quality(up);
             // Each upscaler's own quality modes in place of the slider, which STP keeps.
             modeRows.Clear();
@@ -214,6 +215,7 @@ namespace TGBetterUpscaling
                 " in the game's Upscaling row" + (nested ? "" : " (FSR Sharpness and the quality modes only in the config: this game build's row cannot nest them)") +
                 "; quality modes " + string.Join("; ", Settings.WithModes.Select(u => u + ": " + (caps.Modes(u).Length > 0 ? string.Join(", ", caps.Modes(u).Select(m => m.ToString()).ToArray()) : "none, the slider")).ToArray()) +
                 (caps.FsrVersions.Length > 0 ? "; FSR versions offered " + string.Join(", ", caps.FsrVersions) : "") +
+                (caps.FsrVersion != null ? "; the row shows FSR as \"" + caps.LabelOf(UpscalerSetting.FSR) + "\" (" + caps.FsrVersion + ", AMD's default here)" : "") +
                 (stored == FsrIndex || stored == XessIndex ? "; restored " + (UpscalerSetting)stored + " from the game's preferences" : "") + ".";
             Session.Log.LogInfo(Status);
         }
@@ -241,8 +243,29 @@ namespace TGBetterUpscaling
             int width = Screen.width, height = Screen.height;
             string size = Mathf.RoundToInt(width * mode.Scale / 100f) + "x" + Mathf.RoundToInt(height * mode.Scale / 100f);
             string why = upscaler == UpscalerSetting.DLSS ? "NVIDIA's driver picks the DLSS model that works best for this mode."
-                : upscaler == UpscalerSetting.FSR ? "AMD recommends this render resolution for this mode." : "Intel recommends this render resolution for this preset.";
+                : upscaler == UpscalerSetting.FSR ? "AMD recommends this render resolution for this mode." + FsrVersionSentence() : "Intel recommends this render resolution for this preset.";
             return "Renders at " + mode.Scale.ToString("0.#") + "% (" + size + ") of " + width + "x" + height + ". " + why;
+        }
+        // The FSR version running on this GPU, in full, for the FSR rows' tooltips: the one AMD's runtime named when FSR
+        // last started, else its default (the newest it offers here); "" while unknown.
+        private static string FsrRunning() =>
+            Session.HaveStatus && Session.Status.ActiveBackend == NativeFlags.BackendFsr ? Session.ActiveFsrVersion() : caps?.FsrVersion;
+        private static string FsrVersionSentence()
+        {
+            string version = FsrRunning();
+            return string.IsNullOrEmpty(version) ? "" : " This GPU runs FSR " + version + ", AMD's choice for it.";
+        }
+        // Once FSR has started: the version AMD's runtime chose, in the log, and a warning if the row names another.
+        private static bool fsrVersionLogged;
+        private static void LogFsrVersion()
+        {
+            if (fsrVersionLogged || caps == null || !Session.HaveStatus || Session.Status.ActiveBackend != NativeFlags.BackendFsr) return;
+            fsrVersionLogged = true;
+            string running = Session.ActiveFsrVersion(), shown = caps.LabelOf(UpscalerSetting.FSR);
+            if (Capabilities.ShortVersion(running) == Capabilities.ShortVersion(caps.FsrVersion))
+                Session.Log.LogInfo("FSR runs " + running + " on this GPU; the Upscaling row names it " + shown + ".");
+            else
+                Session.Log.LogWarning("FSR runs " + running + " on this GPU, though the Upscaling row names it " + shown + " (the newest AMD's runtime offers here); it keeps that name this session.");
         }
         private static void SyncModeRows()
         {

@@ -6,15 +6,514 @@ own numbers: v0.5.0 is the release published on Nexus as Frame Generation 1.0.2.
 
 TG Path Tracing (new, prototype, Mono version)
 
-- Full path tracing or none: the Global Illumination mode (HDRP's direct light and shadows with the traced
-  bounced light added) is gone, and with it Indirect Intensity. The Path Tracing row offers Off and Full, Full
-  by default; a config set to Global Illumination becomes Full. Insert turns path tracing on and off.
-- Lighting that changed with the camera's direction and caught up as it settled: the tracer's clamp on bright bounced
-  light and reflections was measured against HDRP's current auto exposure, so looking at a dark wall raised the
-  exposure and cut the bounce a sunlit courtyard sent into a hall, and looking back let it through again. It is
-  measured against the exposure averaged over about ten seconds now. The one-frame-old traced light is also put into
-  the current frame's exposure before it is applied, and DLSS Ray Reconstruction gets HDRP's pre-exposure, as HDRP's
-  own DLSS pass and NVIDIA's Streamline hand it over (it assumed 1).
+- Fill Light Fog (a new Video row, On by default): the game's fill lights, which path tracing replaces, light no surface but
+  still light the game's fog as in the game, so interiors keep their haze (the tavern's came from its 24 fill lights, and
+  was gone). Off: only the traced lights light the fog, to compare.
+- Reflection Boost defaults to 0.1 again (it was 0.2). A value saved in the config stays as it is.
+- Bounces defaults to 1 (it was 2): no difference showed in game between 1 and 4, since the radiance cache carries the
+  light of every bounce after a path's last, and the bounced light was most of a frame's GPU time (28 of 35 ms in the
+  tavern at 1924x1084 on an RTX 5080). A value saved in the config stays as it is.
+- The F8 capture measures what boils: how much the middle of the image changes from frame to frame, in 8x8-pixel blocks, as
+  traced and again with the bounced light from each pixel's own 16 rays alone (ReSTIR GI's reuse left out), with the direct
+  light without ReSTIR DI's reuse, and with neither, each with its difference image. The report's Boiling line gives the
+  four, and the change around the crosshair. It takes about 16 seconds now.
+- The F8 report gives the GPU time of each stage of a frame (the scene, preparing, bounced light and its spatial reuse,
+  direct light, hair and eyes, reflections, the radiance cache, denoising, the composite, and the water's reflections),
+  averaged over the last second; BepInEx's log has the same in its summary every ten seconds.
+- Spatial Samples goes to 16 (it stopped at 8): more of them smooth the bounced light's boiling further, at a cost.
+- Eyes take the traced bounced light where HDRP's own ambient light is taken from them: HDRP scales it by the sky's light at
+  the camera, a hundredth of it indoors, and the whites of the eyes went dark between the lids (eyes too small in every
+  candle-lit face). The share HDRP no longer gives is the radiance cache's light where the eye is, times the eye's color.
+  Not hair: its traced color lacks the tint HDRP's hair shader gives it (blonde hair under a roof glowed).
+- Reflection Boost leaves skin as the game made it: the game's skin is glossy already (a roughness of 0.18), and boosted
+  its reflectance doubled, so a neck mirrored the dark chin and collar above it in sharp, reddish patches.
+- The dialogue light of Conversation Lighting Overhaul lights a face as brightly as the mod sets it at the game's
+  exposure: the traced light's automatic brightening of dark places is taken back out of it (three times as bright in a
+  candle-lit room). The Exposure row still applies to it.
+- A light whose HDRP data has Affect Specular off makes no highlight where the tracer lights with it either, as in the game
+  (the F8 report's lights say "no specular" for those).
+- A reflection direction drawn into the surface's own triangle (a smooth, normal-mapped curve over flat triangles: a metal
+  strap across a door) is mirrored back out, as the bounced light's and the water's are.
+- HDRP Unlit surfaces reflect nothing, as in the game (a portal's black core reflected the two bright lights inside it: a
+  glowing white orb), and a reflectance below 2 % no longer brightens toward grazing angles (Unreal's and Frostbite's
+  Schlick).
+- Hair and eyes (what HDRP shades itself) no longer go dark in daylight: where the traced shadow of a lamp HDRP doesn't
+  shadow fell on them, the whole pixel was multiplied by the share of that lamp's light left, the sun's light and the
+  ambient's with it. The light of what HDRP shadows itself (the sun, as far as the traced sun reaches the pixel, and a
+  lamp with a shadow map) now stays in the share. Emissive surfaces no longer count as lamps there, and every such pixel
+  is passed on, a share of 1 too (left out, its shadowed neighbours' shares spread over it). Harness: a sunlit table
+  keeps 0.65 of its light with a lamp beside it blocked, against 0.47 without the sun.
+- Straw on a floor, a fringe, grass tips: what is finer than a material's alpha tile lets the light between its parts
+  through. Every alpha tile's coverage stops rays other than the camera's by chance, as hair's did; cut out at half a
+  texel's coverage, the tavern's straw was a solid mat to rays, and its shadow blacked out the floor seen between the
+  strands. Micromaps settle only fully covered and bare texels now. Harness: a card of half-covered texels casts 0.49
+  of a solid card's shadow.
+- Grass, leaves, banners and laundry move in the wind as HDRP draws them, and are traced where they stand still: rays
+  from the drawn surface pass what the wind moves within 20 cm of it (its own instance mask), where they met its still
+  copy (the inner side of laundry black, black spots on the ground swaying with the grass). Harness: 45 floor pixels
+  darkened under such a quad 12 cm up, 3104 under an ordinary one; 60 cm up it shadows as an ordinary one does.
+- Grass and leaves are lit through from behind where paths meet them, as the camera's translucent pixels are: the
+  underside of a sunlit blade was black to the rays that met it, and the ground under grass took no light through it.
+  Harness: the floor in a sunlit canopy's shade 1.33 times as bright under a translucent one.
+- HDRP's fog keeps what it hides hidden: the traced light's automatic brightening of dark places fades as the game's
+  height fog hides a surface (the player's Exposure stays). Through the castle's night mist the brightening lifted what
+  the mist hides.
+- HDRP Unlit materials take their color from _UnlitColor and _UnlitColorMap (their _Color and _MainTex are there for
+  Unity's lightmapper, and white).
+- Rays Per Pixel goes to 16, and every ray counts: at 1 the bounced light is ReSTIR's, at more a share of it (30 % at 8,
+  48 % at 16) is the pixel's own rays' mean. Before, the rays only competed for the one sample ReSTIR shades with, which
+  left the boiling as it was. Harness: the share of a frame's blotchy error the next frame keeps, 0.34 at 1 ray, 0.17 at
+  8, 0.08 at 16; a frame's error 0.108, 0.094, 0.091.
+- From a review of the day's changes: the radiance cache's per-frame sums could wrap past 32 bits for a saturated color
+  (each channel is bounded now, and a cell takes 512 samples a frame); lamp light comes through thin skin (ears, fingers)
+  as the sun's does; shadow rays to glowing surfaces end at them, not 5 cm and more short (a leak 17 cm deep 50 m away);
+  hair's layers decide independently whether they stop a ray; the composite blends one kind of traced texel at a time
+  (glass with glass, HDRP's shares with shares); glass with the Reflections row off is lit as HDRP drew it (it was black);
+  the pixels' first bounced-light rays feed the radiance cache counting those below the surface as no light.
+- Metal is metal where rays meet it: a traced surface's metallic and smoothness come from its mask map, texel by texel
+  (HDRP Lit's, remapped as HDRP remaps them, and those of the game's own shaders as their GBuffer passes read them:
+  characters' and their armour's, the castle's architecture, cloth). A surface HDRP draws forward takes its roughness
+  from the mask map, and a metal there has no diffuse color and its base color as its specular color (it had a
+  dielectric's), as in HDRP's metallic workflow. Where a path meets a metal (bounced light, a reflection, what glass
+  shows), it is shaded diffusely and can't follow the metal's own reflection, so the metal sends the light it reflects
+  on as diffuse light of the same energy, its base color, as it did (one with a constant metallic kept only a fifth of
+  it): with its diffuse color alone, metal armour, pots and weapons bounced no light and were black in reflections. Mask
+  maps share the color textures' atlas, a 64x64 tile each, up to three quarters of it (the rest stays for color);
+  BepInEx's scene line counts them. The game's Shader Graphs that tile their textures through properties of their own
+  (the castle's architecture, cloth) are traced with that tiling: a wall's stone was traced as many times too coarse as
+  the wall tiles it.
+- Highlights on smooth surfaces: a 1e-7 in the GGX distribution's denominator capped the peak of any surface smoother
+  than a roughness of about 0.12, so a glossy floor's, a puddle's, polished metal's and Reflection Boost's highlights of
+  the sun and the lamps kept as little as 0.1 % of their light (and glass 2.5 %). The peak isn't capped now; the direct
+  light's clamp still bounds a highlight. Harness: a lamp's highlight on a smooth floor carries as much light as on a
+  rough one.
+- Water Reflections (a new Video row, On by default): water reflects the traced scene. The game's lakes, rivers and sea
+  are HDRP's water system, drawn after the traced light is applied, and take their reflections from HDRP's screen-space
+  reflections, which only find what is on screen; the rest of a reflection came from reflection probes and the sky (and
+  while tracing, dimmed by the light at the camera). Right after HDRP's screen-space reflections for water, the tracer
+  fills that rest from the traced scene: the canopy overhead, the bank behind you, grass within 20 m, a lamp, whatever is
+  off screen or hidden behind something. The traced reflection replaces HDRP's screen-space one entirely, its hits
+  too (they miss what is off screen or hidden, fade at the screen's edges and on waves, and show the last frame's image):
+  HDRP's texture is only where its water shader reads its reflection from. The water's own shading stays the game's
+  (its Fresnel, colour, foam, refraction and fog). The reflections are traced from HDRP's water depth and wave normals and
+  applied a frame late, as the traced light is; since no denoiser sees HDRP's water, they are averaged over up to 12
+  frames and filtered over 5x5 pixels that stop at edges between near and far or bright and dark things (on reflected
+  walls lit by bounced light, a grain of 0.05, against 0.17 averaged over frames alone and 0.59 in a single frame). Leaves
+  and grass in them are lit through from behind, as on screen (a sunlit card seen from under it, 3.4 times brighter).
+  Liquids and other see-through surfaces that take HDRP's screen-space reflections get the same. HDRP applies its
+  reflection lighting multiplier to a whole reflection, so the traced part is divided by it, and it is pre-exposed with
+  the previous frame's exposure, as HDRP reads it. Harness: a flat water plane reflects a light panel only the traced scene
+  has, the red and the green wall and the sky through the ceiling's hole, each where the mirror sends each pixel's ray;
+  every check fails with its piece undone. F8 adds a shot with HDRP's own reflections to compare, and its report lists
+  HDRP's water surfaces. Water itself is never traced as a solid surface: a mesh renderer carrying a water material
+  (which HDRP draws with passes of its own) is invisible to rays, so it can't shadow the lake bed.
+- Emissive Lights (a new row, on by default): glowing surfaces (embers, lit windows, magic crystals) are sampled as
+  lights by ReSTIR DI, triangle by triangle, instead of being found only by the bounced light's rays that happen to
+  meet them. Each point of their light is counted once: the light sampling takes it as far as its reach (where it
+  still gives 2 lux), a ray that meets it counts the rest, and a reflection counts it whole (ReSTIR DI gives it no
+  specular light). Harness: the floor under a glowing panel converges to the same light on and off (within 0.1 %), a
+  frame's error around its foot is 1.7 times lower with ReSTIR's reuse and 5 times with its temporal reuse alone, its
+  direct light matches a Lambertian square's to 0.1 %, and its reflection is as bright as with the row off. The
+  radiance clamps keep its light too: off, they cut it to 22 % as rare bright hits, on 98 % stays, so rooms lit by
+  glowing surfaces come out brighter than before.
+- A glowing surface right around a kept light (a lantern's glass round its candle, within the light's radius and
+  25 cm more) is that light's surface and lights nothing itself, row on or off: the light has its light, and the
+  lantern's surroundings got it twice. Reflections and glass still show it glowing.
+- Emissive surfaces the scene capture saw move since its last scan (a carried lantern, a swinging door), characters,
+  stand-ins and the ones past a budget of 16,384 triangles (the brightest and largest are kept) are left to the rays
+  that meet them. The Emissive debug view shows which glowing surface is which; the native log's 10 s line counts
+  them, and BepInEx logs the first 40 emissive materials with their nits and names shaders whose glow the tracer
+  doesn't read.
+- Traced emission is what the camera sees: HDRP's exposure weight is applied (at 0 a glow looks equally bright at any
+  exposure, so the light it stands for is its color over the exposure, about 10,000 times it at EV 13), and so is
+  Albedo Affects Emissive; a single-sided surface glows from its front only (rays from behind it saw it glow too).
+
+- Path tracing on or off: the Global Illumination mode (HDRP's direct light and shadows with the traced bounced light
+  added) is gone, and with it Indirect Intensity. The Path Tracing row offers Off and On, On by default; a config set
+  to Global Illumination or Full becomes On. Insert turns path tracing on and off.
+- Direct light's ReSTIR reuse is NVIDIA's RTXDI library (3.1, compiled in): the tracer's own candidates (the lights
+  whose range reaches a pixel, from its light grid) go into RTXDI's reservoirs, and RTXDI's temporal reuse, boiling
+  filter and pairwise-MIS spatial reuse take them on, with the decorrelation NVIDIA and AMD ask for with their
+  denoisers (permutation sampling with a new random number every frame). A light choice is kept for up to 20 frames
+  (RTXDI's default), the final shadow ray is always traced, and spatial results never feed the next frame. The
+  config's hidden "Direct light history" sets another length for testing.
+- Bounced light's ReSTIR reuse is RTXDI's too: the tracer's rays find this frame's path, and RTXDI's temporal reuse
+  (permutation sampling every frame, a search around the reprojected pixel, the reconnection Jacobian), boiling
+  filter and spatial reuse take it on. A light path is kept for up to 8 frames (RTXDI's default; before, the
+  tracer's own reuse was least grainy keeping one for a single frame, because it decorrelated its samples too
+  little), and a path no older than 30 frames. The config's hidden "Bounced light history" sets another length
+  (1 comes closest to the old behaviour).
+- Lighting that changed with the camera's direction and caught up over a few seconds: the tracer's clamp on bright
+  bounced light, direct light and reflections was measured on screen, against HDRP's auto exposure. A hall lit by a
+  sunlit courtyard's bounce was mostly the clamp itself, about 80 times over it, so its light rose and fell with the
+  exposure as the camera turned between bright and dark (and with a ten-second average of it, tried first, it rose
+  and then sank over several seconds). The clamp is measured against the scene now: four times a white surface in
+  full sun, or lit by the brightest light 1 m away, so sunlit bounce is never cut and nothing depends on where the
+  camera looks. Traced light is stored relative to that reference, which keeps HDRP's physical units within half
+  precision's range. A new harness check renders the same frames at two exposures; the old clamp failed it by 14%.
+  The one-frame-old traced light is also put into the current frame's exposure before it is applied, and DLSS Ray
+  Reconstruction gets HDRP's pre-exposure as HDRP's own DLSS pass hands it over, clamped to 0.2..2 as HDRP clamps it:
+  at this game's exposures (about 0.0001 to 0.006) that is always 0.2, and NVIDIA's guide says Ray Reconstruction
+  doesn't use exposure inputs anyway, so changes of exposure reach its history as changes of brightness.
+- Lights are chosen by what they belong to, not what they are called: every light inside a flame, candle, lamp or
+  torch prop is traced, including the ones this game names PointLight_Ambience (the room light of its candlesticks,
+  wall candelabras and torches). A candlestick whose only light has that name lit nothing, while its neighbour's
+  PointLight_Cookies_01 lit the whole room. Fill lights outside any source prop stay out, as do the player's own light
+  and lights for fog.
+- Lights fall off as physical lights do: traced as far as they still give 50 lux (inverse square, up to 40 m), not to
+  HDRP's range, an artist's cut-off that made a chandelier's light stop 2.7 m below it (above everyone's heads) and a
+  candle's 0.5 m from its flame. HDRP's fade with the camera's distance isn't applied to traced lights either: a lamp
+  past it went dark and cast no shadow, then came in as you walked up.
+- Conversation Lighting Overhaul's dialogue light is traced: it hides its light from the lookup the tracer used
+  (HideFlags.DontSave), so faces in dialogue got none of it while HDRP's own shading of hair did (white hair).
+- Rays see no sky indoors: interiors float in the sky above the world (the tavern at 500 m), and a ray slipping through
+  a seam between walls and floor found the open sky, about 100 times brighter than the room: thin blue-white lines along
+  wall and floor edges, and sparkles.
+- The lights the tracer traces light what HDRP still shades itself (hair up close, glass) with the traced light's gain
+  too, so those come out as bright as the traced surfaces around them.
+- Indirect Color no longer clips: it scaled the bounced light's color around its brightness and clamped channels below
+  0, which turned a candle's warm bounce off brown wood pure red at 3 (green and blue at 1 to 5 of 255 across the
+  tavern). It stops where a channel would reach 0, keeping the brightness.
+- The traced light's gain keeps its brightest fiftieth at white (was the brightest tenth: in a tavern lit by candles
+  most of the frame is dark, and a candle-lit table past that point went white).
+- Direct light: the boiling filter weighs a sample by the light it gives (RTXDI's weighs its inverse probability, and
+  the stricter filter dropped weak lights' light instead of fireflies); the shadow ray goes to a new point of the
+  light's disc every frame (a penumbra's noise held for up to 20 frames, then jumped: fringe shadows flickered); and
+  RTXDI's spatial reuse no longer discounts neighbours it skips (a brief darkening after disocclusions).
+- The F8 capture holds the camera light and the gain still while it compares images, and its light table lists each
+  light's position, traced reach, cookie and fade distance. It also saves the image twice a quarter of a second apart
+  with the difference between them (what flickers or boils stands out), a new Specular debug view (the traced
+  reflections alone), and names what the traced scene has under the crosshair (its mesh and material).
+- NRD, a new Denoising choice: NVIDIA's Real-Time Denoisers (RELAX), the fallback DOOM: The Dark Ages uses when Ray
+  Reconstruction is off, for GPUs that run neither Ray Reconstruction nor AMD's Ray Regeneration (a Radeon RX 7900
+  XTX, for one). It denoises the bounced light, which the built-in denoiser smoothed and let boil; the direct light and
+  the reflections keep the built-in denoiser's own filters, which hold the shadows sharp and stay still on
+  normal-mapped surfaces (given to RELAX as well, the sun's shadows blurred to three times the error and a bump-mapped
+  floor flickered three to five times as much). In the harness the error where the light is all bounced (under the
+  ceiling) is 10 to 18 % below the built-in denoiser's, with about the same flicker. Denoising starts on Ray
+  Reconstruction, then Ray Regeneration, then NRD, then Built-in, whichever this PC runs, and a pick of Ray
+  Regeneration or NRD now stays while the game starts (whether they run was known only once a frame was traced, and
+  Denoising followed the best one until then).
+- A radiance cache (the Radiance Cache row, on by default): the bounced light reaching each part of the world is kept
+  from frame to frame, and every path ends on it where it used to stop, so light keeps bouncing past the Bounces
+  setting's last bounce, and a reflection or glass shows a surface lit by bounced light as bright as it is instead of
+  by its direct light alone (a reflected wall in shadow was black). The paths fill it themselves: a quarter of the
+  screen's tiles trace one more ray each frame from their paths' last surfaces, and the bounced light's first rays count
+  for the surfaces they leave. Its cells are the world's, finer near the camera, one for each side of a surface; a
+  camera cut keeps them, a new scene starts them over. In the harness's furnace (a closed box whose walls glow and
+  reflect half the light that reaches them) one bounce ending on the cache comes to 0.994 of the walls' exact
+  brightness, where paths alone come to 0.75 with one bounce and 0.97 with four, and a wall seen in another is twice
+  as bright with it, as it should be; under the harness room's ceiling one bounce with it is as bright as four without.
+  It takes 36 MB of video memory.
+- See-through glass: the glossy texels of glass (HDRP's roughness below 0.5 there; a label or a cork in the same texture
+  is rough and stays solid) have a glass's mirror finish and show what lies behind them, within 15 m; the game's
+  materials are left as they are (raising a mask-mapped one's smoothness did nothing: its upper end is already 1, so
+  stage 1's finish never reached the wine bottles). The ray is refracted into the glass
+  (an index of refraction of 1.5) and out where it meets the glass again from inside, so a full bottle bends what is
+  behind it as a lens; what it finds is shaded as a reflection's surface is, tinted by the glass's color and weighted
+  by the light the Fresnel term lets in, beside the reflection, and the glass has no diffuse light of its own.
+- Light scatters under skin: the traced light replaces HDRP's lighting, which HDRP spreads under skin after it lights
+  it, so skin came out as hard as plaster, its shadows' edges sharp across a face. Surfaces with a solid diffusion
+  profile (skin, teeth, the whites of the eyes) now have their traced diffuse light spread over them as their HDRP
+  profile sets, per color channel (red farthest, as in skin), with the Burley diffusion and the filter radius HDRP's
+  own subsurface pass uses, before the albedo is multiplied back in (so the skin's texture stays sharp). It keeps the
+  light's total, and fades with distance as a profile's millimetres shrink below a pixel. BepInEx's "HDRP diffusion
+  profiles" line gives each thick profile's radius.
+- Glass (bottles, flasks, vials, potions, jars, glasses: known by their materials' names, since the game draws them
+  opaque with the label and the cork in the same texture): rays pass through it by chance, as bright as its color is,
+  whether they carry a shadow, the sky's or bounced light, so a bottle's shadow is as dark as the light it stops
+  (clear glass casts none, a bottle of dark wine a dim one) instead of a hard black sliver. BepInEx logs each glass
+  material once.
+- Coloured glass colours the light through it: a candle's or the sun's light through a green bottle reaches the table
+  green, not just dimmer. The direct light's final shadow rays (the light RTXDI chose, and the sun) and those at the
+  paths' bounces take each crossing's color, channel by channel (a closed bottle's two crossings let through its
+  color); RTXDI's reuse and the rays of the sky's and bounced light still pass glass by chance, as bright as its color.
+  Only rays that meet glass pay for it. In the harness a cube of green glass lets through exactly its color of the
+  light an opaque one stops, from the sun and from a lamp, grey glass 0.36 of it and clear glass all of it, and the
+  bounced light under a sheet of green glass turns 1.6 times greener.
+- The denoisers take see-through glass as the near-mirror it is, its light all in the reflections: DLSS Ray
+  Reconstruction gets no diffuse albedo there, a specular albedo that covers the light the glass lets through as well
+  as what it reflects, the tracer's roughness 0.03, and the distance to what is seen behind it as the hit distance, so
+  the image seen through a bottle moves with what it shows; AMD's Ray Regeneration gets the same, with a material type
+  of its own; NRD leaves glass alone, as it does the sky.
+- Bottles reflect the candles and lamps around them, and the sun. Glass is nearly a mirror, and its highlights came
+  from the direct light's samples, a point of each lamp's disc or of the sun's with the specular lobe evaluated there,
+  whose peak is capped for a surface that smooth: in the harness 2 % of a lamp's mirror image reached a glass cube, and
+  2.5 % of the sun's a glass pane. The glass's reflection ray now meets the lamps' spheres (the size the game gives each
+  light, as its shadows soften by it) and the sun's disc itself, and shows their light where it does: 98 % of the lamp's
+  and 94 % of the sun's.
+- Dark Adaptation measures the view as it is seen, HDRP's fog included (a small copy of the image before
+  post-processing, read back every fourth frame): a view the mist fills is not a dark one. Measured on the traced
+  light alone, Sagremor Castle's night mist counted as darkness, the traced rocks and walls got four times the light
+  against the fog, which HDRP draws as the game has it, and they showed through what the game's fog hides. Where
+  nothing HDRP draws is brighter than the traced light (the tavern), nothing changes. The F8 report's exposure line
+  gives the seen median.
+- An effect's lights (a portal, a spell: kept for "VFX", "Magic", "Portal" and the like, with no flame or lamp in their
+  names) light only as far as their HDRP range, as the game draws them: a portal's two 131,072 cd lights, a glow within
+  0.6 m of it in the game, were traced 40 m far and lit the whole alcove around it white. Flames and lamps keep their
+  physical reach: in the tavern and the exteriors captured so far, nothing else changes.
+- Fill lights left out while tracing stop lighting the fog by HDRP's switch for that (affectsVolumetric) instead of a
+  fog dimmer of 0: the game's light overrides (time of day, triggers) remember a light's fog dimmer when they start and
+  write it back when they end, so an override that started while path tracing had it at 0 left that light's fog dark
+  after path tracing was turned off. The game's own dimmers are no longer touched for them.
+- Hair far away keeps its color: there a character has only its first hair pass, which the tracer shaded with the hair
+  texture (the game colors hair in its shader), so it came out grey; camera rays leave hair to HDRP's hair shader now,
+  as HDRP's transparent hair layer is up close. The hair still shadows the face. Camera rays stop at hair whatever the
+  tracer's alpha test says (HDRP's own decided which pixels are hair): by the tracer's, a ray slipped between strands
+  to the scalp behind them, and the far hair flickered between HDRP's color and the traced grey. Nor does a camera ray
+  that misses a far character's few hair cards trace the head behind them: every pixel HDRP draws forward on a
+  character (hair, brows, eyes) stays HDRP's, since its skin and clothes are drawn deferred.
+- Hair's shadow lets light through between its strands: a ray stops at hair by chance, as much of a texel as the strands
+  cover (its 256x256 alpha tile holds that coverage), so a layer of hair lets part of the light through. Cut out where a
+  fifth of a texel was covered, every hair card cast a full, hard-edged shadow on the face and neck, as dark as a solid
+  sheet. In the harness a card whose strands cover half of every texel casts 0.50 of the shadow the old rule gave. Hair
+  gets no opacity micromaps, which would decide it by the cutoff again.
+- Light through thin skin: ears, nostrils and fingers lit from behind glow red as HDRP lights them (the thin-object
+  transmission the game's skin profile uses), where lit as a solid surface a backlit ear was as dark as the back of a
+  head. The light is HDRP's own: its transmittance of the skin's thickness (the GBuffer's, remapped as the diffusion
+  profile sets) through the profile's Burley scattering, tinted by its transmission tint, with HDRP's cosine wrapped 15
+  degrees past the terminator; the subsurface scattering spreads it with the rest. The traced geometry decides whether any
+  of it gets there: from just under the skin a ray towards the light must leave it within 3 cm (an ear's far side, a
+  finger's) and reach the light unblocked, so a head behind a face lets none through, nor does a character the traced
+  scene lacks. In the harness a backlit skin quad over a 4 mm slab gets 0.0622 where HDRP's formula gives 0.0623, three
+  times as much red as green as its profile tints it, and over a 30 cm block nothing; lit from the front it is lit as
+  before. BepInEx's "HDRP diffusion profiles" line gives each thick profile's tint and thickness range.
+- Traced shadows on hair and eyes (the Hair Shadows row, on by default): HDRP shades them itself, with the lights the
+  tracer traces but shadows only from the few it has shadow maps for (the sun's cascades, a fire or two), so a candle
+  behind a wall or a head lit an NPC's hair while the traced face beside it was dark. Their color is now darkened to the
+  share of their light the traced shadows leave: the direct light of the lights HDRP doesn't shadow, as much of it as
+  reaches them, against the bounced light arriving there from the radiance cache. Never brightened, and nothing is
+  shadowed twice: the lights HDRP shadows and the sun while it casts HDRP's shadows are left out. One shadow ray a pixel a
+  frame, averaged over its neighbours and over time. Without the radiance cache, or with the row off, they keep HDRP's
+  light, and so does anything drawn forward that the traced scene lacks (it may be unlit: a glow card, an impostor).
+  Eyebrows are drawn after the traced light and keep HDRP's. In the harness a table HDRP shades is darkened to 0.46 of
+  HDRP's light under a lamp a block shadows, and stays at 1.00 without the block, when HDRP shadows the lamp, and under a
+  sun HDRP shadows.
+- Characters are traced to 100 m (45 before: past it they floated in the sun, where HDRP's cascades used to shadow them),
+  the nearest first as before, at most 64 renderers. Their acceleration structures are refitted to each frame's pose and
+  rebuilt from it every fourth frame, each character on its own frame: 64 characters of 8,192 triangles cost about
+  0.8 ms of GPU time a frame rebuilt every frame in the harness, and about 0.3 ms this way (the fastest frames of a busy,
+  shared GPU).
+- BepInEx logs a hair shader's colors and values once, for matching the color rays see on hair (grey now: the game colors
+  hair in its shader) to the game's.
+- The Denoising tooltip is one short line per denoiser.
+- Denoising offers None, NRD, Ray Regeneration and Ray Reconstruction, whichever this PC runs: Built-in (the tracer's
+  own filters) is no longer a choice, and NRD takes its place wherever the tracer denoises the image itself, also
+  while Ray Reconstruction waits for DLSS upscaling or Ray Regeneration couldn't start. A config set to Built-in
+  becomes NRD. Denoising starts on Ray Reconstruction, then Ray Regeneration, then NRD.
+- The game's fog stays while tracing. The volume that turns HDRP's own indirect light, ambient occlusion, contact
+  shadows and screen-space reflections off while tracing overrode every parameter of each of those, with HDRP's
+  defaults, and its fog component (there to dim the fog's ambient light) turned the fog off: HDRP's default. The
+  night mist over Sagremor Castle was gone and the void below it black. Each override now sets only the parameter it
+  names, so transparent surfaces keep the game's screen-space reflections and reflection probes their intensity too;
+  the fog isn't touched at all (the dimming answered a haze that HDRP's auto exposure made, which the mod no longer
+  uses), and the reflections of what HDRP still shades itself are the game's own, times the light at the camera.
+- For GPUs without NVIDIA's extras (a Radeon RX 7900 XTX), from a review of what the tracer assumed of the driver:
+  - At start the tracer checks that the driver loads its textures through typed UAVs (the half and single precision
+    formats, and R32G32_UINT for the surfaces), and says so when it can't instead of drawing garbage.
+  - The D3D11 composite and Shadow Detail write HDRP's image in place only where its format is a floating point one
+    that loads through a UAV; anywhere else they draw over it from a copy.
+  - The built-in denoiser keeps its moments in 32-bit floats and carries the standard deviation instead of the
+    variance: in half precision the variance of a bright spot (a lamp's surround) passed the largest value half
+    precision holds, and a dim wall's fell below its normal range.
+  - A ray retried past a surface it passes through never starts past its end (undefined in DirectX Raytracing).
+  - The boiling filter sums its thread group once, not once per thread; the micromap bake counts texels in integers.
+  - The Ray Reconstruction hit-distance texture is released when the resolution changes, like the others.
+  - A runtime that failed to create a device is tried again on another GPU or driver, not only after a Windows update
+    (read from the registry: loading dxgi.dll that early would bypass a ReShade proxy).
+  - The GPU test expects DirectX Raytracing 1.2 exactly where the driver reports it, and runs on any GPU by vendor
+    (TGPT_TEST_ADAPTER=1002 for AMD).
+- Path tracing turned off gives every light it changed exactly the dimmers the game gave it: one record per light, taken
+  the first time either change touched it (darkened as a placed light, or carrying the traced light's gain). With a
+  list for each, a light that went from one to the other could be put back at the wrong value, 0 among them, and an
+  A/B against the game's own lighting wasn't clean. The log says how many lights got theirs back.
+- A Boiling Filter row (on by default, as before), for comparing: off, the bounced light keeps samples far brighter than
+  their neighbours' that NVIDIA RTXDI's boiling filter drops. Against an honest reference (the plain path tracer without
+  reuse, clamps or filters, 2,048 samples a pixel), ReSTIR's bounced light was 21 % short next to a light 10 cm from a
+  wall, as a candle's by a wall is, and within 1.3 % of it without that filter; among 24 lights it matters about 1 %.
+  (The first measurement, 1.6 times too bright, compared with a "no reuse" run that still had the clamps and the filter,
+  which left it at half the true light.) Test switches for that measurement undo each of the tracer's changes to what
+  it estimates: the boiling filters, the radiance clamps, the Jacobian's limits, RTXDI's surface position.
+- A Crevice Light row (off by default), for comparing: the gap under a beached boat's canvas lining looked black in
+  daylight. Measured in the harness on sand under a canvas 40 cm over it, against a hull and with a 12 cm slit at its
+  front, against an honest reference: ReSTIR's bounced light is 14 % short at the gap's mouth, where NVIDIA RTXDI's
+  normalization counts the pixels further in for light they can't see through the slit, and 9 % too bright deeper in,
+  where a light path's history dropped at 30 frames restarts dark and then counts the next lit path up to three times.
+  On, a pixel counts only for light it sees, histories are kept whatever their age, and the boiling filter brings a
+  sample far brighter than its neighbours down to their level instead of dropping it (dropped, a quarter of the light
+  deep in the gap went once histories last): the mouth comes within 1 % and deeper in 3 to 9 % short. It is noisier
+  (15 to 30 % more error after denoising in the harness's room), so it stays off until it's seen in game. No light is
+  added.
+  Most of the gap's darkness is real: deep under the canvas the sand gets about 1/150 of the sunlit sand's light (7 to
+  7.5 stops below it) followed to every bounce, and the 2 bounces traced by default hold 53 to 72 % of that (4: 90 to
+  96 %; the mouth, 86 to 89 %). The rest is what closing paths with a radiance cache would add. Shadow Detail and Dark
+  Adaptation leave a sunlit view alone by design; the game's own look lights the gap with its ambient probes, which
+  don't see the canvas.
+- A Shadow Detail row (0 to 100 %, 50 % by default): the dark parts of a dark, uneven view (a room lit by one candle,
+  where 42 % of a frame was all but black and the median pixel sat 7 stops under the brightest) are lifted by a bounded
+  curve below a mid tone, and everything brighter stays as it is. On its own it acts only where the traced light's
+  exposure brightens a view and its brightest fiftieth stands 4.5 to 6.5 stops and more above its median, so a lit hall
+  and a sunny street are left alone; it eases in over a second, while the row's value applies at once (0 against 50 %
+  compares the two). It works on HDRP's finished image after every denoiser and the upscaler, before its
+  post-processing and tonemapper: a curve before Ray Reconstruction would have biased it (the average of a lifted noisy
+  pixel is darker than the lifted average). No light is added. The F8 report now also names the game's tonemapper and
+  color adjustments.
+- NRD, after a review: its motion is NRD's 2D motion (the view depth's change it computed took the camera's move twice:
+  HDRP's previous view-projection already takes positions relative to this frame's camera, which AMD Ray Regeneration's
+  guides now use too); its bounced light is in units of its own that hold until its history starts over (the tracer's
+  units follow the scene's brightest light, and NRD's history mixed them as lights came and went); a frame NRD can't
+  denoise records nothing of it and shows the bounced light as traced; and a saved pick of NRD or Ray Regeneration
+  stays while the game starts (the GPU's denoisers are known before the device counts as ready). A camera cut starts
+  every history over, for every denoiser: another camera, HDRP's own reset, a jump of 20 m or a turn of more than 60
+  degrees in one frame (a dialogue cutting between speakers). The package carries the notices of what the DLL compiles
+  in (NVIDIA's RTX SDKs license for RTXDI and NRD, MIT for NRD's MathLib and ShaderMake reader), and Ray
+  Reconstruction's on-screen warning stays quiet while FSR or XeSS upscales (the built-in denoiser serving is the
+  Denoising row's own fallback then).
+- The F8 capture's images look as the screen does: scaled down from a screen wider than 1920 pixels (through an sRGB
+  render texture), they went through the sRGB curve a second time, which lifted every shadow and washed them out.
+- DLSS Ray Reconstruction works again: the reflections' hit distance handed to it last night is one channel, which
+  TG Better Upscaling read through a color view that has none, so it refused every frame until Ray Reconstruction
+  turned itself off for the session, and the built-in denoiser took over (smeared, blurred, with a trail behind moving
+  heads). It is read as a single float channel now, trouble with those optional inputs drops them for the frame
+  (never the frame), and should NGX refuse them, Ray Reconstruction runs on without them. The upscaling smoke test
+  now hands them to Ray Reconstruction with every frame, and TG Path Tracing says on screen when Ray Reconstruction
+  is its Denoising setting but hasn't denoised for 5 seconds of traced frames (not while the game loads: it first
+  said so at the main menu, before anything was traced).
+- Less boiling with many lights: the lights a pixel's candidates come from are drawn by how much each can matter there
+  (its luminance over its squared distance from the light grid's cell), where they were drawn evenly. With lights
+  reaching as far as physical lights do, a cell lists dozens (up to 43 in the tavern, 11 on average), and a room's
+  chandelier came up as rarely as the faintest candle glow: its light was noise that boiled and that Ray Reconstruction
+  smoothed away. In the harness's night scene the direct light's error is 8 % lower (27 % without spatial reuse) and
+  the bounced light's 6 %.
+- Exposure and Dark Adaptation rows in the Video tab (and FoA Mod Manager). The traced light's exposure starts from the
+  game's own and never goes darker: metering sunny exteriors down to a mid tone left them underexposed (at half to four
+  fifths of the game's exposure). Dark views are brightened part of the way to a mid tone, 50 % by default (Dark
+  Adaptation: fully adapted, a candle-lit tavern looked nearly as bright as day, and at 70 % still a little too
+  bright), with the brightest fiftieth of the view at most 1.4 times white (at white, a sunlit floor in view left a
+  shaded stall black). Exposure adds up to 3 stops either way; the config's hidden "Auto exposure compensation"
+  carries over to it.
+- The eyes are HDRP's again, irises included: traced, they took the sclera's texture over the whole eye (the iris is
+  its own texture, refracted under the cornea) and came out white; left out of the traced scene, the camera ray
+  looking for them went on to the eye socket just behind, and the tracer lit its skin in their place, white again.
+  Camera rays stop at the eyes now and leave them to HDRP (a new material flag), which lights them with the lights
+  the tracer traces, with its gain, and no longer with the placed lights and the sky's ambient light that made them
+  glow.
+- Lights' cookies are traced: HDRP's mask on a light's intensity by direction, which the game's candle and torch lights
+  carry (PointLight_Cookies), is baked into a cookie atlas (a point light's cubemap as an octahedral map, a spot's
+  texture as it is) and shapes the traced light as HDRP's. And a flame's light is traced at most 30 cm across (a fire's
+  1 m): HDRP uses a light's radius only for highlights and soft shadows, where the tracer lit surfaces from a sphere of
+  that size, and the game gives candles up to a metre and more.
+- Hair up close is lit by the tracer: HDRP draws it as an alpha-tested first pass, which the tracer finds and lights,
+  and a transparent layer over it, which the tracer can't find, so HDRP lit that with its own lights alone (black
+  outside dialogue, white in a dialogue light). While tracing, hair that has both loses the transparent layer (its
+  first pass shows); eyebrows, only a transparent layer, keep theirs.
+- DLSS Ray Reconstruction gets the traced reflections' hit distance (for reflections as the camera moves) and the color
+  before transparent surfaces and particles were drawn (for candle flames, sparks and glass, which carry no traced
+  light), both written by the composite as it applies the traced light; TG Better Upscaling passes them on (looked up
+  by name, so either mod works with an older copy of the other). Its diffuse guide leans towards the light's color
+  where a pixel emits light or is sky, as NVIDIA's RTXPT guides it.
+- What HDRP still lights with the sky (transparent surfaces, fog) is scaled by how much sky the camera sees, measured
+  alone: the lamps' light the probe's paths found counted too, as if the sky were there.
+- Fewer sparkles: a path vertex takes a light's light as if at least 25 cm away (a candle's own holder got I / d^2 from
+  centimetres, rare very bright samples among dark neighbours), and what Ray Reconstruction takes is kept below 256
+  times white, as NVIDIA's RTXPT clamps its input. ReSTIR's reuse isn't permuted on thin or finely detailed surfaces
+  (a neighbour's normal turning more than 35 degrees: strands, slats, blades), as NVIDIA's RTXDI sample does.
+- Opt-in, for testing (hidden settings): "Direct light visibility reuse" keeps whether a pixel sees its light in
+  ReSTIR DI's reservoirs (RTXDI's initial visibility with its ray-traced bias correction): 7% less error at night in the
+  harness, but a 2 cm lamp's shadow edge 4 pixels wide instead of 0.8. "Spatial reuse feeds the next frame", as
+  RTXDI's sample does: 6 to 10% more error in the harness, flicker about the same.
+- Characters are traced to 45 m (30 before: their shadows popped in as you came closer).
+- Alpha-tested textures keep their coverage: each texel of the 256x256 alpha tile holds how much of it passes the
+  material's cutoff (16 samples of the finer mip), where averaged alpha thinned strands and a rug's fringe threads
+  below the cutoff, so they came and went as the shading points moved. Hair is still cut out where a fifth of a texel
+  is covered, now measured as coverage.
+- The traced light has its own exposure: the game's exposure (a fixed EV 13 to 14 in a tavern, a physical camera
+  outdoors) is set for its own fill lights and baked light, which the tracer leaves out, and with only the real sources
+  lit its interiors were nearly black. HDRP's auto exposure on the traced image brightened them (to EV 7 at the least),
+  but everything HDRP draws itself is made for the game's exposure and blew out with it: flames, fire, glows, fog lit by
+  lamps, hair in a dialogue light, the sky through a door. HDRP keeps the game's exposure now, and only the traced light
+  is brightened, adapting as an eye does: its median pixel towards a mid tone, but never so far that its brightest tenth
+  passes white, and at most down to the darkest scene EV the config sets (7) from the game's exposure. The config's
+  hidden "Auto exposure compensation" and "Auto exposure darkest scene EV" tune it; the 10-second log line and the F8
+  report show the gain and what it was metered on.
+- Lights left out as placed to fake light no longer light anything HDRP shades itself (hair, eyes, transparent
+  surfaces) or its fog: in a tavern lit by them, hair and eyes shone in the dark, and its fill lights (reaching 46 m)
+  filled the room with a red haze.
+- The indoor clamp on bright light is measured against the brightest light 25 cm away instead of 1 m, so the table
+  under a candle and a fireplace's walls feed the bounced light again.
+- Streaks along the screen edge on a quick turn: pixels a turn revealed took their light from one traced texel per
+  column. They take it from a few picked at random nearby now, which Ray Reconstruction removes as noise.
+- Blotchy shadows across faces: characters' scalp and beard masks (stubble and hairlines drawn as a shell on the
+  skin), cut out coarsely for rays, shadowed the skin under them. They are left out of the traced scene, as lashes
+  and eyebrows are.
+- Skin lit like a leaf: HDRP's transmission with subsurface scattering, which the tracer lit through from behind as
+  it does grass and leaves, is also what characters' skin uses (for light through the ears). Lit that way, faces had
+  hard, dark patches across the cheeks and came out pale. A diffusion profile HDRP transmits through as a thick object,
+  or one named as skin, is now lit as a solid surface (the game sets its human skin profile to Thin Object, as it does
+  its foliage, so HDRP's mode alone left skin lit like a leaf). The log lists the game's profiles and which are solid,
+  and the Surfaces debug view shows such pixels in orange. The harness's check that leaves are lit through had put its
+  quad in the back wall's shadow and passed on noise; it's in the sun now, with a check for solid profiles.
+- Sparkling light ("Christmas lights") in dark rooms: the boiling filter, which drops a light sample far brighter than
+  its neighbours' before ReSTIR spreads it, counted the sample itself in the average it was compared with (as NVIDIA
+  RTXDI's own filter does). In a group of 64 pixels with 41 or fewer lit ones (a candle-lit room, bounce rays that
+  mostly find darkness) it could never drop anything. It compares a sample with the others now, once at least 4 of them
+  are lit.
+- Bounced light reused from a neighbouring pixel is weighted as NVIDIA's RTXDI sample weights it: a sample from very
+  different geometry is dropped (beyond 10 times either way) and the rest limited to 3 times either way, where up to 8
+  times before made sparkles near corners.
+- Shadows of alpha-tested fringes and leaves flickered: the alpha test read its 256x256 alpha point by point, so an
+  edge stepped from texel to texel as the camera's jitter moved the shading points. It is filtered between texels now,
+  and the opacity micromaps are baked from the same filtered alpha (the harness still finds them identical to the
+  alpha test).
+- DLSS Ray Reconstruction's albedo guides are never both near black (NVIDIA's RTXPT keeps their average above 0.05):
+  it divides the light by them.
+- The probe key (F8) now captures what the tracer sees: hold still for about 8 seconds while it saves the image, each
+  debug view, the image with the sky's light off and with rays not passing through near back faces (the two ways light
+  can leak along a seam), and the game's own rendering with path tracing off, with a report of the exposure, every
+  light within 40 m (traced or left out, and why) and what the game has under the crosshair. One folder per press in
+  BepInEx/TGPathTracing/Captures.
+- The dialogue light holds its traced slot while it fades in, so its traced light follows HDRP's from the start.
+- Debug view "Surfaces": how HDRP draws each pixel (its material type; for a surface HDRP draws forward, cyan where
+  the tracer found it along the camera ray and lights it, magenta where HDRP's own shading stays).
+- Hair, beards and other surfaces HDRP draws forward are path traced too: the tracer finds them along the camera ray in
+  its own scene and lights them like the rest, and the composite replaces HDRP's own shading there (which gave them
+  the sky's ambient light: grey-teal hair and white beards in a candle-lit tavern).
+- HDRP's fog is lit only by lights while path tracing: its ambient term (the sky's light, with no walls in between)
+  filled the tavern with a bright teal haze once auto exposure adapted.
+- Shadows no longer change as you walk up to a statue or a well: within 30 m the tracer traces an object's finest LOD
+  whatever the game draws, registers it from 40 m on, and keeps a LOD it has while the one it wants is not ready (the
+  object dropped out of the traced scene for a moment at each switch, its shadow vanishing and coming back).
+- Indirect Color defaults to 3 and Reflection Boost to 0.2.
+- Eyes are path traced: they are in the traced scene for camera rays only (every other ray passes through them, as
+  solid surfaces they stopped the rays leaving the face around them), and lit like the face instead of glowing with
+  HDRP's own light. So are HDRP's opaque Unlit decals within 60 m (debris on floors shown at their texture's
+  brightness whatever the light: they glowed in a dark room).
+- What HDRP still lights itself with the sky (transparent surfaces such as glass, smoke and water, and fog) gets as much
+  of the sky's light as reaches the camera: the tracer measures the light arriving there against the open sky's along
+  the same 256 rays each frame (1 in the open, low indoors) and scales HDRP's ambient light, reflections and fog
+  ambient by it, eased over half a second. Glass on a tavern floor glowed with the sky.
+- The air above candles and fires no longer boils: HDRP's distortion (their heat shimmer) is off while path tracing is
+  on screen. It resampled the traced light, which Ray Reconstruction takes undenoised, and shifting its noise around is
+  what NVIDIA's guide warns breaks the denoiser. The camera's own settings come back when path tracing stops.
+- Found in two independent reviews of the RTXDI move (Claude Opus and GPT-6-astra), each checked against RTXDI's source
+  and the harness:
+  - Direct light could go dark near the edge of a lamp's range and blotchy wherever a pixel kept its own light choice:
+    RTXDI's pairwise spatial reuse counted empty neighbours (out of every lamp's range) against the pixel's own
+    light, and its Basic reuse (RTXDI's default, used now) returns a light only when a neighbour's wins, which the
+    shading pass didn't allow for.
+  - Temporal reuse weighs a light as it was in the previous frame (a torch that flickered, a light that just came
+    into range), and a light slot another light took over is no longer taken for the same light.
+  - The boiling filters are the tracer's own now: RTXDI's assume waves of at least 32 lanes and read and write past
+    their shared memory on GPUs that run 8 or 16 (Intel's).
+  - A bounced-light sample that became infinite or NaN is dropped instead of staying forever and spreading.
+  - History starts over after frames that went untraced (path tracing turned off a while, a failed frame).
+  - Bounced light no longer borrows samples from whatever surface was at a pixel before when a turn of the camera
+    reveals a new one (RTXDI's fallback, which it describes as biased, usually darker).
+  - Bounce rays a normal map points into the surface count as finding no light instead of being mirrored out, which
+    counted their mirrored directions twice (up to 50% too bright on steep normal maps).
+  - "Direct light history" 1 no longer turns off direct light's spatial reuse.
+  - Direct light's visibility reuse (dropping a light a pixel doesn't see) stays off: measured with RTXDI's spatial
+    reuse, it widened a lamp's shadow edge from under a pixel to 14 pixels, for 13% less noise at night.
 - Hard, jagged shadow edges across faces where they turn from the sun: an opaque surface's shadow ray started some
   4 cm inside it wherever its own flat triangle faced away from the light (a rule meant for leaves lit from behind),
   and the jump drew the edge. Opaque surfaces start outside now, and the light fades out towards that edge (Chiang,
@@ -144,6 +643,39 @@ TG Path Tracing (new, prototype, Mono version)
   resampled light choice replaces a uniform pick among all lights (the fireflies), geometric normals and
   a spatial variance estimate remove the grain a longer temporal history added, area-light shadow rays
   replace hard point-light shadows, and Rays Per Pixel (1-8) trades GPU time for less noise.
+
+Fixes from the first troubleshooting reports
+
+- TG Better Upscaling's Upscaling row names FSR by the version that runs on this GPU, "FSR 4" on a Radeon RX 9000
+  and "FSR 3.1" elsewhere (the major and minor number of AMD's version name), in the Video tab and in FoA Mod
+  Manager alike, with the full version (3.1.5, say) in the tooltips of FSR's Quality Mode and Sharpness rows and in
+  the log. The config still stores "FSR", so a saved choice stays valid on a GPU that runs another version.
+- The game's own Framerate Limit row offers 45, between 40 and 50: 90 frames on screen with 2x frame
+  generation, which the player on the RTX 4060 laptop asked for. It is an entry of the game's row, applied
+  as the game applies its own limits, and like them it is unavailable while VSync is on; it is also
+  unavailable in Exclusive Fullscreen, where the game would ask the display for 45 Hz. The game saves
+  the row's choice as a position in its own list, which it builds without 45 at every start, so the
+  mod keeps that position as the game counts it and chooses 45 again when the player left it there.
+  Without TG Frame Generation, the row is the game's again and falls back to its default.
+- The NVIDIA driver's Vertical sync set to On no longer gets an alert telling the player to use the
+  3D application setting, and Max Frame Rate no longer gets one telling them to turn it off. A player
+  on an RTX 4060 laptop found the game ran worse with the 3D application setting. NVIDIA's DLSS-G
+  guide supports VSync from the driver (it overrides the game's), and with G-SYNC that is NVIDIA's own
+  advice for frame generation. VSync with frame generation raises latency only where Windows composes
+  the frames instead of flipping them straight to the screen, which on a laptop means a screen on the
+  integrated GPU, and the "High latency" alert already covers that. A driver frame cap counts generated
+  frames too, so one above what frame generation reaches does nothing to it. Vertical sync at 1/2, 1/3
+  or 1/4 of the refresh rate still gets an alert, and the framerate check names the driver's VSync or
+  Max Frame Rate as the cause only when the frames on screen are at them.
+- The troubleshooting report has each test step's Pipeline line from the native log again, with
+  Reflex's latency numbers. The filter meant to keep it dropped it every time.
+- A moment out of play without a menu, such as an autosave taking its picture with a camera of its
+  own, no longer pauses the test run: the step's measurement starts over, and the run pauses only if
+  it lasts a second. Pausing for an autosave put the player's settings back and the step on again a
+  third of a second later, rebuilding frame generation's swapchain twice.
+- The Pipeline line's `d3d11Waits buffer=` count equals the presents in a D3D11 game, which renders
+  every frame into one back buffer, not rarely as the 1.2.0 notes below say. The `inputs=` count is
+  the one that shows D3D12 falling behind.
 
 Troubleshooting (1.2.0)
 

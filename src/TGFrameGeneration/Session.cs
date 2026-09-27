@@ -129,6 +129,7 @@ namespace TGFrameGeneration
                 if(Bridge.Connected && debugFlags!=lastDebugFlags && Bridge.SetDebugFlags(debugFlags)==0) lastDebugFlags=debugFlags;
                 DisplayMode.Tick();
                 HybridVsync.Tick(now);
+                ExtraFramerateLimit.Tick();
                 Suspension=GetSuspension(now);
                 var request=MakeRequest(Suspension);
                 if(!Same(request,last)) { ++sequence; request.Sequence=sequence; last=request; }

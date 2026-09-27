@@ -124,7 +124,7 @@ namespace TGFrameGeneration
             string display;
             try { display = GraphicsBridge.Fact("display.crossAdapter") == "1" ? GraphicsBridge.Fact("display.adapter") : ""; } catch { return ""; }
             if (display.Length == 0) return "";
-            bool forced = Notices.Has("compat.nvidia.vsync");
+            bool forced = DriverForcesVsync();
             if (QualitySettings.vSyncCount == 0 && !forced) return "";
             // The game's own VSync is turned off here (HybridVsync); what is left on is the driver's, which overrides it.
             string fix = forced
@@ -135,9 +135,25 @@ namespace TGFrameGeneration
                 "setting that makes the dedicated GPU drive the display (often called MUX, dGPU or Ultimate mode).";
         }
         // The row's tooltip: the fix that applies.
-        private static string HybridSummary() => Notices.Has("compat.nvidia.vsync")
+        private static string HybridSummary() => DriverForcesVsync()
             ? "Your display is on another GPU and the NVIDIA driver forces VSync on: DLSS FG then has high latency. Set VSync to the 3D app setting in the NVIDIA App."
             : "Your display is on another GPU and VSync is on: NVIDIA says DLSS FG then has high latency. Turn VSync off.";
+        // The NVIDIA driver forces VSync on for this game (its profile, else the global one), at any interval.
+        private static bool DriverForcesVsync()
+        {
+            uint vsync = DriverSetting("nvidia.vsync");
+            return vsync == 0x47814940 || vsync == 0x32610244 || vsync == 0x71271021 || vsync == 0x13245256;
+        }
+        // An NVIDIA driver setting as the bridge reports it ("0x3C@game"); 0 when unset or unread.
+        private static uint DriverSetting(string key)
+        {
+            string text;
+            try { text = GraphicsBridge.Fact(key); } catch { return 0; }
+            int at = text.IndexOf('@');
+            string value = at > 0 ? text.Substring(0, at) : text;
+            if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) value = value.Substring(2);
+            return uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var number) ? number : 0;
+        }
         // Video memory over Windows' budget, or system memory nearly full, while frame generation runs:
         // both make the game stutter as memory is moved out and back, whatever the framerate does. Held for
         // three checks two seconds apart, so a loading spike isn't reported.
@@ -233,8 +249,19 @@ namespace TGFrameGeneration
                 Add("The game's Framerate Limit (" + cap + " fps) may cause it. Try Unlimited.",
                     "The game's Framerate Limit is " + cap + " fps. Set it to Unlimited, or to the rendered framerate you want: frame generation then shows " +
                     Math.Max(2, selection.Multiplier) + " times that.");
+            // The driver's VSync and Max Frame Rate only when the frames on screen are at them: both count
+            // generated frames, and below them they do nothing to frame generation.
+            if (vsync == 0 && DriverSetting("nvidia.vsync") == 0x47814940 && refresh > 0f && fgShown >= refresh * 0.95f)
+                Add("The NVIDIA driver's VSync holds it at your " + Fps(refresh) + " Hz.",
+                    "The NVIDIA driver forces VSync on for this game, so the frames on screen can't pass your display's " + Fps(refresh) + " Hz, and they are there " +
+                    "already. Frame generation still helps where the framerate drops below it.");
+            uint driverCap = DriverSetting("nvidia.frameRateLimit");
+            if (driverCap > 0 && fgShown >= driverCap * 0.95f)
+                Add("NVIDIA Max Frame Rate (" + driverCap + " fps) may cause it.",
+                    "The NVIDIA driver limits this game to " + driverCap + " fps (Max Frame Rate), generated frames included, and the frames on screen are at that " +
+                    "limit. Raise it or set it to Off in the NVIDIA App for frame generation to add more; a limit a few fps under your display's refresh rate is fine.");
             foreach (var n in Notices.Current(NoticeLevel.Warning))
-                if (n.Id == "compat.rtss" || n.Id == "compat.nvidia.fps" || n.Id == "compat.nvidia.vsync" || n.Id == "compat.nvidia.smoothmotion" || n.Id == "compat.lossless" || n.Id == "compat.optiscaler")
+                if (n.Id == "compat.rtss" || n.Id == "compat.nvidia.vsync" || n.Id == "compat.nvidia.smoothmotion" || n.Id == "compat.lossless" || n.Id == "compat.optiscaler")
                     Add(n.Source + " (" + n.Label + ") may cause it.", n.Source + ": " + n.Label + ". " + n.Detail);
             if (GraphicsBridge.TryReadPerformance(out var p) && (p.Valid & 4u) != 0 && p.VramBudget > 0 && p.VramProcess > p.VramBudget / 100 * 92)
                 Add("Video memory is nearly full. Lower Texture Quality.",

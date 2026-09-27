@@ -48,10 +48,13 @@ namespace TGPathTracing
         private static readonly Dictionary<int, uint> materials = new Dictionary<int, uint>();
         private static readonly List<NativeMaterial> materialList = new List<NativeMaterial>();
         private static int materialsUploaded;
-        private static readonly Dictionary<int, int> tiles = new Dictionary<int, int>(), alphaTiles = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> tiles = new Dictionary<int, int>();
+        private static readonly Dictionary<long, int> alphaTiles = new Dictionary<long, int>(); // by texture and cutoff
+        private static readonly Dictionary<long, int> maskTiles = new Dictionary<long, int>(); // by texture and channels
         private static readonly Dictionary<int, uint> characterMaterials = new Dictionary<int, uint>();
         private static readonly HashSet<string> characterShadersSeen = new HashSet<string>();
         private static readonly string[] StrandNames = { "Hair", "Lash", "Brow", "Beard", "Fur", "Mustache", "Moustache" };
+        private static readonly HashSet<string> unlitSeen = new HashSet<string>();
         private static readonly Dictionary<int, int> terrains = new Dictionary<int, int>();
         private static readonly HashSet<string> shadersSeen = new HashSet<string>();
         private static float nextScan;
@@ -94,7 +97,9 @@ namespace TGPathTracing
         internal static void Reset()
         {
             VegetationCapture.Reset(); LeshyCapture.Reset(); materialLists.Clear();
-            meshes.Clear(); materials.Clear(); materialList.Clear(); tiles.Clear(); alphaTiles.Clear(); characterMaterials.Clear(); terrains.Clear(); meshQueue.Clear(); queued.Clear();
+            meshes.Clear(); materials.Clear(); materialList.Clear(); tiles.Clear(); alphaTiles.Clear(); maskTiles.Clear(); characterMaterials.Clear(); terrains.Clear(); meshQueue.Clear(); queued.Clear();
+            GlassFinish.Reset();
+            exposureWeighted.Clear(); exposureFollowed = float.NaN; placed.Clear(); placedNext.Clear();
             terrainMaterial = uint.MaxValue;
             materialsUploaded = 0; nextScan = 0; lastScan = 0; InstanceCount = 0;
             medusaScenes.Clear();
@@ -104,6 +109,7 @@ namespace TGPathTracing
         internal static void Tick(float now, Vector3 camera)
         {
             RegisterQueued();
+            FollowExposure();
             bool moved = now >= lastScan + MovedScanInterval && (camera - lastScanCamera).sqrMagnitude > MovedDistance * MovedDistance;
             if (now < nextScan && !moved) return;
             nextScan = now + ScanInterval;
@@ -139,11 +145,13 @@ namespace TGPathTracing
                 var added = materialList.GetRange(materialsUploaded, materialList.Count - materialsUploaded).ToArray();
                 if (tracer.SetMaterials((uint)materialsUploaded, added, (uint)added.Length) == 0) materialsUploaded = materialList.Count;
             }
-            int result = tracer.SetScene(instances.ToArray(), (uint)instances.Count, indices.ToArray(), (uint)indices.Count);
+            var sent = instances.ToArray();
+            int result = tracer.SetScene(sent, (uint)instances.Count, indices.ToArray(), (uint)indices.Count);
+            if (result == 0) lastInstances = sent;
             InstanceCount = instances.Count;
             watch.Stop();
             Summary = instances.Count + " instances (objects " + renderers + ", Drake " + drake + ", entities " + entities + ", Medusa " + medusa + ", terrain " + terrain + ", vegetation " + vegetation + "), " + meshes.Count + " meshes, " +
-                materialList.Count + " materials, " + tiles.Count + " textures; scan " + watch.Elapsed.TotalMilliseconds.ToString("0.0") + " ms" +
+                materialList.Count + " materials, " + tiles.Count + " textures, " + maskTiles.Count + " mask maps; scan " + watch.Elapsed.TotalMilliseconds.ToString("0.0") + " ms" +
                 (meshQueue.Count > 0 ? "; " + meshQueue.Count + " meshes to register" : "") + (result != 0 ? "; scene refused (" + result + ")" : "") +
                 (drakeShadowOnly + entityShadowOnly + drakeHidden + entityHidden > 0 ? "; entities the camera does not draw: " + (drakeShadowOnly + entityShadowOnly) +
                     (standIns ? " shadow-only (stand-ins), " : " shadow-only (left out), ") + (drakeHidden + entityHidden) + " on other layers (left out)" : "") +
@@ -155,6 +163,27 @@ namespace TGPathTracing
 
         // ------------------------------------------------------------------ meshes, materials, textures
         private static uint FormatOf(VertexAttributeFormat f) => (uint)f <= 5 ? (uint)f : 0xFFFFFFFFu;
+        // LOD groups (an object's LODs share its reference point): within NearDetail metres of the camera the finest LOD is
+        // traced, whatever the game draws (its switch as the camera came closer changed a statue's or a well's traced
+        // shadows at once), farther the one drawn; and while the one wanted has no registered mesh yet, one that has (the
+        // object was skipped until then: its shadow vanished and came back). The finest is registered from PrefetchDetail
+        // metres on, before it is wanted.
+        internal const float NearDetail = 30f, PrefetchDetail = 40f;
+        // The LOD level (its range's start) to trace of a group, from its levels' starts with whether each is drawn, and
+        // whether a level's meshes are registered (asking queues them); -1 for none.
+        private static float TracedLevel(List<float> levels, List<bool> drawn, Func<float, bool> ready, float actual)
+        {
+            float finest = float.MaxValue, drawnLevel = -1f;
+            for (int i = 0; i < levels.Count; i++) { finest = Mathf.Min(finest, levels[i]); if (drawn[i]) drawnLevel = levels[i]; }
+            if (actual < PrefetchDetail) ready(finest); // registers the finest ahead of its use
+            float want = actual < NearDetail ? finest : drawnLevel;
+            if (want < 0f || ready(want)) return want;
+            if (drawnLevel >= 0f && drawnLevel != want && ready(drawnLevel)) return drawnLevel;
+            float alt = -1f;
+            foreach (float level in levels)
+                if (level != want && ready(level) && (alt < 0f || Mathf.Abs(level - want) < Mathf.Abs(alt - want))) alt = level;
+            return alt >= 0f ? alt : want;
+        }
         private static int MeshHandle(Mesh mesh, out int submeshes)
         {
             submeshes = 0;
@@ -177,6 +206,7 @@ namespace TGPathTracing
                 try { handle = RegisterMesh(mesh, out submeshes); }
                 catch (Exception ex) { handle = -9; submeshes = 0; Session.Log.LogWarning("Mesh \"" + mesh.name + "\" could not be registered: " + ex.Message); }
                 meshes[id] = new MeshEntry { Handle = handle, Submeshes = submeshes, Failed = handle <= 0 };
+                if (handle > 0) meshNames[handle] = mesh.name;
             }
         }
         private static int RegisterMesh(Mesh mesh, out int submeshes)
@@ -251,17 +281,110 @@ namespace TGPathTracing
             if (tile >= 0 || native != IntPtr.Zero) tiles[id] = tile;
             return tile;
         }
-        // An alpha-tested texture's alpha at 256x256 for the alpha test: the 64x64 color tile turned straw, rope nets
-        // and leaves into opaque blocks (black patches under straw on a floor). -1 when the alpha atlas is full.
-        private static int AlphaTile(Texture texture)
+        // An alpha-tested texture's coverage at 256x256 for the alpha test (how much of each texel passes cutoff, the
+        // material's over its base alpha): the 64x64 color tile turned straw, rope nets and leaves into opaque blocks
+        // (black patches under straw on a floor), and averaged alpha thinned strands and fringe threads below the cutoff.
+        // The material's AlphaCutoff then compares the coverage. -1 when the alpha atlas is full.
+        private static int AlphaTile(Texture texture, float cutoff)
         {
             if (!(texture is Texture2D)) return -1;
             int id = texture.GetInstanceID();
-            if (alphaTiles.TryGetValue(id, out int tile)) return tile;
+            int level = Mathf.RoundToInt(Mathf.Clamp(cutoff, 0f, 1.004f) * 255f);
+            long key = (long)(uint)id | ((long)level << 32);
+            if (alphaTiles.TryGetValue(key, out int tile)) return tile;
             IntPtr native = texture.GetNativeTexturePtr();
-            tile = native != IntPtr.Zero ? Session.Tracer.RegisterAlphaTexture((ulong)(uint)id, native) : -1;
-            if (tile >= 0 || native != IntPtr.Zero) alphaTiles[id] = tile;
+            tile = native != IntPtr.Zero ? Session.Tracer.RegisterAlphaTexture(unchecked((ulong)key), native, level / 255f) : -1;
+            if (tile >= 0 || native != IntPtr.Zero) alphaTiles[key] = tile;
             return tile;
+        }
+        // A mask map's tile in the atlas (RegisterMaskTexture: its bytes read as they are, metallic and smoothness from the
+        // channels given), -1 when the atlas has no room left for mask maps.
+        private static int MaskTile(Texture texture, uint channels)
+        {
+            if (!(texture is Texture2D)) return -1;
+            long key = (long)(uint)texture.GetInstanceID() | ((long)channels << 32);
+            if (maskTiles.TryGetValue(key, out int tile)) return tile;
+            IntPtr native = texture.GetNativeTexturePtr();
+            tile = native != IntPtr.Zero ? Session.Tracer.RegisterMaskTexture(unchecked((ulong)key), native, channels) : -1;
+            if (tile >= 0 || native != IntPtr.Zero) maskTiles[key] = tile;
+            return tile;
+        }
+        // Mask maps as the game's GBuffer passes read them (from their compiled code): the texture, metallic in its red, the
+        // channel (0 red to 3 alpha) holding smoothness, and each one's range. HDRP Lit remaps both, and reads the mask map
+        // only with its keyword on (else its constants); its layered version's base layer is the one AlbedoProperty takes the
+        // colors of. The game's Shader Graphs read metallic as it is and smoothness from alpha (Cloth_Wind: from blue), some
+        // times a smoothness slider. A shader not named here keeps the material's constants: another shader's red need not be
+        // metallic (Cliff's holds rock formations with its toggle on; vegetation and the triplanar walls are never metallic).
+        private sealed class MaskLayout
+        {
+            internal string Texture, Keyword;                            // the mask map, and the keyword without which it is not read
+            internal uint SmoothnessChannel = 3;
+            internal string MetallicMin, MetallicMax, SmoothnessMin, SmoothnessMax; // the remap's ends (absent: 0 to 1)
+            internal string SmoothnessScale;                             // smoothness times this slider
+            internal string Metallic, Smoothness;                        // the constants without the mask map (absent: _Metallic, _Smoothness)
+        }
+        private static readonly Dictionary<string, MaskLayout> MaskLayouts = new Dictionary<string, MaskLayout>
+        {
+            ["HDRP/Lit"] = new MaskLayout { Texture = "_MaskMap", Keyword = "_MASKMAP", MetallicMin = "_MetallicRemapMin", MetallicMax = "_MetallicRemapMax",
+                SmoothnessMin = "_SmoothnessRemapMin", SmoothnessMax = "_SmoothnessRemapMax" },
+            ["HDRP/LayeredLit"] = new MaskLayout { Texture = "_MaskMap0", Keyword = "_MASKMAP0", MetallicMin = "_MetallicRemapMin0", MetallicMax = "_MetallicRemapMax0",
+                SmoothnessMin = "_SmoothnessRemapMin0", SmoothnessMax = "_SmoothnessRemapMax0", Metallic = "_Metallic0", Smoothness = "_Smoothness0" },
+            ["TG/Character/Kandra_Lit"] = new MaskLayout { Texture = "_MaskMap" },
+            ["TG/Character/Kandra_Lit_Dynamic"] = new MaskLayout { Texture = "_MaskMap" },
+            ["TG/Character/GhostCrew"] = new MaskLayout { Texture = "_MaskMap" },
+            ["TG/Architecture/KF_Architecture"] = new MaskLayout { Texture = "_Base_MaskMap", SmoothnessScale = "_Base_Smoothness" },
+            ["TG/Clothes/Cloth_Wind"] = new MaskLayout { Texture = "_Mask_Map", SmoothnessChannel = 2 },
+            ["TG/Dissolve/Dissolve3D"] = new MaskLayout { Texture = "_MaskMap", SmoothnessScale = "_Smoothness" },
+            ["TG/Dissolve/Dissolve3D_Strawdad"] = new MaskLayout { Texture = "_MaskMap", SmoothnessScale = "_Smoothness" },
+        };
+        // Shader Graphs that tile their base color and mask map through properties of their own (so their compiled code reads
+        // them), their textures' own scale and offset left at 1 and 0: KF_Architecture's times _Base_Tiling (without it a
+        // wall's stone was traced that many times too coarse), Cloth_Wind's times _Tiling plus _Offset, Lit_No_VA's through
+        // _TilingAndOffset. The alpha test and the micromaps read through the same coordinates.
+        private static void ShaderGraphTiling(Material m, string shaderName, ref NativeMaterial mat)
+        {
+            if (shaderName == "TG/Architecture/KF_Architecture" && m.HasProperty("_Base_Tiling"))
+            {
+                mat.ScaleX = mat.ScaleY = m.GetFloat("_Base_Tiling"); mat.OffsetX = mat.OffsetY = 0f;
+            }
+            else if (shaderName == "TG/Clothes/Cloth_Wind" && m.HasProperty("_Tiling") && m.HasProperty("_Offset"))
+            {
+                Vector4 tiling = m.GetVector("_Tiling"), offset = m.GetVector("_Offset");
+                mat.ScaleX = tiling.x; mat.ScaleY = tiling.y; mat.OffsetX = offset.x; mat.OffsetY = offset.y;
+            }
+            else if (shaderName == "Shader Graphs/Lit_No_VA" && m.HasProperty("_TilingAndOffset"))
+            {
+                Vector4 st = m.GetVector("_TilingAndOffset");
+                mat.ScaleX = st.x; mat.ScaleY = st.y; mat.OffsetX = st.z; mat.OffsetY = st.w;
+            }
+        }
+        private static float FloatOr(Material m, string name, float fallback) => name != null && m.HasProperty(name) ? m.GetFloat(name) : fallback;
+        private static uint Unorm8(float v) => (uint)Mathf.RoundToInt(Mathf.Clamp01(v) * 255f);
+        // Metallic and smoothness texel by texel from the material's mask map where its shader has one MaskLayouts knows (and
+        // maskMap allows), its constants otherwise; what BepInEx says of the mask map, or null.
+        private static string ReadFinish(Material m, string shaderName, ref NativeMaterial mat, bool maskMap)
+        {
+            MaskLayouts.TryGetValue(shaderName, out var layout);
+            string metallic = layout != null && layout.Metallic != null ? layout.Metallic : m.HasProperty("_Metallic") ? "_Metallic" : "_Metalness"; // Lit_No_VA's
+            if (m.HasProperty(metallic)) mat.Metallic = Mathf.Clamp01(m.GetFloat(metallic));
+            string smoothness = layout != null && layout.Smoothness != null ? layout.Smoothness : "_Smoothness";
+            if (m.HasProperty(smoothness)) mat.Smoothness = Mathf.Clamp01(m.GetFloat(smoothness));
+            if (!maskMap || layout == null || !m.HasProperty(layout.Texture)) return null;
+            // HDRP Lit's specular color workflow: no metallic at all.
+            bool specularColor = layout.Keyword != null && m.IsKeywordEnabled("_MATERIAL_FEATURE_SPECULAR_COLOR");
+            if (specularColor) mat.Metallic = 0f;
+            var texture = m.GetTexture(layout.Texture);
+            if (texture == null || (layout.Keyword != null && !m.IsKeywordEnabled(layout.Keyword))) return null;
+            uint channels = layout.SmoothnessChannel << 2; // metallic: red
+            int tile = MaskTile(texture, channels);
+            if (tile < 0) return layout.Texture + " left out (the atlas has no room left for mask maps)";
+            float metallicLow = specularColor ? 0f : FloatOr(m, layout.MetallicMin, 0f), metallicHigh = specularColor ? 0f : FloatOr(m, layout.MetallicMax, 1f);
+            float smoothnessLow = FloatOr(m, layout.SmoothnessMin, 0f), smoothnessHigh = FloatOr(m, layout.SmoothnessMax, 1f);
+            if (layout.SmoothnessScale != null) { float scale = Mathf.Clamp01(FloatOr(m, layout.SmoothnessScale, 1f)); smoothnessLow *= scale; smoothnessHigh *= scale; }
+            mat.MaskTile = tile; mat.Flags |= Tgpt.MaterialMaskTile;
+            mat.MaskRemap = Unorm8(metallicLow) | (Unorm8(metallicHigh) << 8) | (Unorm8(smoothnessLow) << 16) | (Unorm8(smoothnessHigh) << 24);
+            return layout.Texture + " (tile " + tile + "): metallic R " + metallicLow.ToString("0.##") + "-" + metallicHigh.ToString("0.##") +
+                ", smoothness " + "RGBA"[(int)layout.SmoothnessChannel] + " " + smoothnessLow.ToString("0.##") + "-" + smoothnessHigh.ToString("0.##");
         }
         // The two materials every scene starts with: invisible to rays (index 0) and neutral grey (1).
         private static void EnsureDefaults()
@@ -271,9 +394,11 @@ namespace TGPathTracing
             materialList.Add(new NativeMaterial { BaseR = 0.4f, BaseG = 0.4f, BaseB = 0.4f, BaseA = 1f, ScaleX = 1, ScaleY = 1, AlbedoTile = -1, EmissiveTile = -1 });
         }
         // Characters' parts left out of the traced scene: transparent and unlit ones (eye wetness, glow cards), the
-        // game's invisible material (TG/NoRender: parts hidden under armour), and the eyes (TG/Character/Eye: the
-        // eye the game draws lies just inside the traced eyeball, so every ray from it started inside and the eyes
-        // were black). CharacterCapture does not register their triangles.
+        // game's invisible material (TG/NoRender: parts hidden under armour), and scalp and beard masks (stubble and
+        // hairlines drawn as a shell on the skin: cut out coarsely for rays, they shadowed the face under them in blotches).
+        // CharacterCapture does not register their triangles. The eyes are in the traced scene for camera rays only
+        // (CharacterMaterial), which stop there and leave them to HDRP: as solid surfaces they stopped every ray leaving
+        // the face around them.
         internal static bool CharacterLeftOut(Material m)
         {
             if (m == null) return false;
@@ -281,7 +406,7 @@ namespace TGPathTracing
             string shaderName = shader != null ? shader.name : "";
             return (m.HasProperty("_SurfaceType") && m.GetFloat("_SurfaceType") > 0.5f) || m.renderQueue >= 2750 ||
                 shaderName.IndexOf("Unlit", StringComparison.OrdinalIgnoreCase) >= 0 || shaderName.IndexOf("NoRender", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                shaderName.StartsWith("TG/Character/Eye", StringComparison.OrdinalIgnoreCase);
+                m.name.IndexOf("ScalpMask", StringComparison.OrdinalIgnoreCase) >= 0 || m.name.IndexOf("Stubble", StringComparison.OrdinalIgnoreCase) >= 0;
         }
         // A character's material (CharacterCapture). With the character's texture coordinates (textured), read as the
         // world's are (its texture, color and alpha test): rays see its colors and its cut-outs (hair, torn cloth) texel
@@ -300,9 +425,28 @@ namespace TGPathTracing
             bool strands = shaderName.IndexOf("Hair", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 (alphaTest && Array.Exists(StrandNames, n => m.name.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0));
             bool skin = shaderName.IndexOf("Skin", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool eye = shaderName.StartsWith("TG/Character/Eye", StringComparison.OrdinalIgnoreCase);
             string how;
-            uint world = textured && !CharacterLeftOut(m) ? MaterialIndex(m) : Invisible;
-            if (CharacterLeftOut(m)) { index = Invisible; how = "is transparent, left out of the traced scene"; }
+            uint world = !eye && textured && !CharacterLeftOut(m) ? MaterialIndex(m) : Invisible;
+            if (eye)
+            {
+                // The eyes: HDRP's, which draws them forward with its eye shader (the iris refracted under the cornea, from
+                // textures of its own). Traced, they took the sclera's texture over the whole eye and came out white; left
+                // out, the camera ray looking for them went on to the eye socket just behind, and the tracer lit its skin
+                // in their place, white again. Camera rays stop at them now and leave them to HDRP (pt_prepare); every
+                // other ray passes. HDRP lights them with the lights the tracer traces (their dimmers carry the traced
+                // light's gain), without the placed lights or the sky's ambient light that made them glow before.
+                materialList.Add(new NativeMaterial { BaseR = 0.4f, BaseG = 0.4f, BaseB = 0.4f, BaseA = 1f, ScaleX = 1, ScaleY = 1, AlbedoTile = -1, EmissiveTile = -1,
+                    AlphaCutoff = 0f, Flags = Tgpt.MaterialAlphaTest | Tgpt.MaterialCameraOnly | Tgpt.MaterialHdrpShaded });
+                index = (uint)(materialList.Count - 1);
+                how = "the eyes: camera rays stop at them and leave them to HDRP's eye shader (lit by the traced lights, with their gain)";
+            }
+            else if (CharacterLeftOut(m))
+            {
+                index = Invisible;
+                bool shell = m.name.IndexOf("ScalpMask", StringComparison.OrdinalIgnoreCase) >= 0 || m.name.IndexOf("Stubble", StringComparison.OrdinalIgnoreCase) >= 0;
+                how = shell ? "is a scalp or beard mask (a shell on the skin), left out of the traced scene" : "is transparent, left out of the traced scene";
+            }
             else if (world != Invisible && materialList[(int)world].AlbedoTile >= 0)
             {
                 var mat = materialList[(int)world];
@@ -314,17 +458,28 @@ namespace TGPathTracing
                 }
                 else if (strands)
                 {
-                    // Strands a few texels wide average out in the 256x256 alpha tile, below the usual cutoff (a hair
-                    // cast no shadow on the neck under it): hair is cut out where a fifth of a texel is covered.
+                    // Strands a few texels wide cover only part of a 256x256 alpha tile's texel (averaged, they fell below
+                    // the usual cutoff and a hair cast no shadow on the neck under it). A ray stops at hair by chance, as
+                    // much of the texel as its strands cover (MaterialStrands), so a layer of hair lets part of the light
+                    // through: cut out where a fifth of a texel was covered, each card cast a full, hard shadow. The cutoff
+                    // serves the alpha test where no alpha tile could be made.
                     if (!cut)
                     {
                         string albedo = AlbedoProperty(m);
-                        int tile = albedo != null ? AlphaTile(m.GetTexture(albedo)) : -1;
+                        int tile = albedo != null ? AlphaTile(m.GetTexture(albedo), 0.5f / Mathf.Max(mat.BaseA, 1e-3f)) : -1;
                         mat.Flags |= Tgpt.MaterialAlphaTest;
                         if (tile >= 0) { mat.AlphaTile = tile; mat.Flags |= Tgpt.MaterialAlphaTile; }
                     }
                     mat.AlphaCutoff = Mathf.Min(cut ? mat.AlphaCutoff : 0.5f, 0.2f);
-                    materialList.Add(mat); index = (uint)(materialList.Count - 1); how = "hair, cut out by its texture's alpha (a fifth of a texel covered)";
+                    if ((mat.Flags & Tgpt.MaterialAlphaTile) != 0) mat.Flags |= Tgpt.MaterialStrands;
+                    // Camera rays stop at hair and leave it to HDRP's hair shader, as up close (where HDRP draws the
+                    // transparent hair layer over it): the game colors hair in its shader, not in the texture the tracer
+                    // reads, and far away, where a character keeps only this first pass, the traced hair came out grey.
+                    // Other rays still meet it: it shadows the face and the neck.
+                    mat.Flags |= Tgpt.MaterialHdrpShaded;
+                    materialList.Add(mat); index = (uint)(materialList.Count - 1);
+                    how = (mat.Flags & Tgpt.MaterialStrands) != 0 ? "hair, stopping rays as much as its strands cover a texel, left to HDRP's hair shader for camera rays"
+                        : "hair, cut out by its texture's alpha (a fifth of a texel covered), left to HDRP's hair shader for camera rays";
                 }
                 else { index = world; how = cut ? "traced with its texture, cut out by its alpha" : "traced with its texture"; }
             }
@@ -342,9 +497,34 @@ namespace TGPathTracing
                 how = alphaTest ? "alpha-tested, traced solid (no texture coordinates)" : "traced with its color (no texture coordinates)";
             }
             if (characterShadersSeen.Add(shaderName + "|" + how))
+            {
                 Session.Log.LogInfo("Characters: shader \"" + shaderName + "\" (material \"" + m.name + "\") " + how);
+                // Hair's color is its shader's, not its texture's (rays see it grey): what the shader has to color it by.
+                if (strands && shader != null) Session.Log.LogInfo("Characters: hair shader \"" + shaderName + "\" colors and values: " + ShaderValues(m, shader));
+            }
             characterMaterials[key] = index;
+            if (!materialNames.ContainsKey(index)) materialNames[index] = m.name + " (" + shaderName + ", a character's)";
             return index;
+        }
+        // A material's colors, vectors and numbers as its shader names them, for the log.
+        private static string ShaderValues(Material m, Shader shader)
+        {
+            var sb = new System.Text.StringBuilder();
+            try
+            {
+                for (int i = 0; i < shader.GetPropertyCount() && sb.Length < 1500; i++)
+                {
+                    string name = shader.GetPropertyName(i);
+                    switch (shader.GetPropertyType(i))
+                    {
+                        case ShaderPropertyType.Color: case ShaderPropertyType.Vector: sb.Append(name).Append(' ').Append(m.GetVector(name).ToString("0.###")).Append("; "); break;
+                        case ShaderPropertyType.Float: case ShaderPropertyType.Range: sb.Append(name).Append(' ').Append(m.GetFloat(name).ToString("0.###")).Append("; "); break;
+                        case ShaderPropertyType.Texture: sb.Append(name).Append(m.GetTexture(name) != null ? " (texture); " : " (none); "); break;
+                    }
+                }
+            }
+            catch (Exception ex) { sb.Append("(" + ex.Message + ")"); }
+            return sb.ToString();
         }
         // Materials added since the last upload go to the native side now (characters' arrive between scans).
         internal static void FlushMaterials()
@@ -354,8 +534,9 @@ namespace TGPathTracing
             var added = materialList.GetRange(materialsUploaded, materialList.Count - materialsUploaded).ToArray();
             if (tracer.SetMaterials((uint)materialsUploaded, added, (uint)added.Length) == 0) materialsUploaded = materialList.Count;
         }
-        private static readonly string[] AlbedoNames = { "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_BaseColorTexture", "_DiffuseMap", "_Diffuse", "_ColorMap" };
-        private static readonly string[] ColorNames = { "_BaseColor", "_Color", "_AlbedoColor", "_Tint", "_TintColor" };
+        private static readonly string[] AlbedoNames = { "_BaseColorMap", "_BaseMap", "_MainTex", "_AlbedoMap", "_Albedo", "_BaseColorTexture", "_DiffuseMap", "_Diffuse", "_ColorMap", "_UnlitColorMap" };
+        private static readonly string[] ColorNames = { "_BaseColor", "_Color", "_AlbedoColor", "_Tint", "_TintColor", "_UnlitColor" };
+        private static readonly string[] UnlitColorNames = { "_UnlitColor", "_BaseColor", "_Color" };
         private static string AlbedoProperty(Material m)
         {
             foreach (var name in AlbedoNames) if (m.HasProperty(name) && m.GetTexture(name) != null) return name;
@@ -371,6 +552,17 @@ namespace TGPathTracing
             return null;
         }
         private static Vector3 LinearColor(Color c) { var l = c.linear; return new Vector3(l.r, l.g, l.b); }
+        // For the F8 capture's report: names of the meshes, instances and materials the traced scene holds.
+        private static readonly Dictionary<int, string> meshNames = new Dictionary<int, string>();
+        private static readonly Dictionary<uint, string> materialNames = new Dictionary<uint, string>();
+        private static NativeInstance[] lastInstances;
+        internal static string DescribeTraced(uint instance, uint material)
+        {
+            string what = lastInstances != null && instance < lastInstances.Length
+                ? "instance " + instance + ", mesh \"" + (meshNames.TryGetValue(lastInstances[instance].Mesh, out var mesh) ? mesh : "#" + lastInstances[instance].Mesh) + "\""
+                : "instance " + instance + " (past the scene's " + (lastInstances != null ? lastInstances.Length : 0) + ": a character)";
+            return what + ", material " + material + (materialNames.TryGetValue(material, out var name) ? " \"" + name + "\"" : "");
+        }
         internal static uint MaterialIndex(Material m)
         {
             if (m == null) return Neutral;
@@ -378,25 +570,42 @@ namespace TGPathTracing
             if (materials.TryGetValue(id, out uint index)) return index;
             index = ReadMaterial(m);
             materials[id] = index;
+            materialNames[index] = m.name + " (" + (m.shader != null ? m.shader.name : "no shader") +
+                ((materialList[(int)index].Flags & Tgpt.MaterialMaskTile) != 0 ? ", its mask map traced" : "") + ")";
             return index;
         }
         private static uint ReadMaterial(Material m)
         {
             var shader = m.shader;
             string shaderName = shader != null ? shader.name : "";
-            // Unlit meshes are sky domes, glow cards and distant impostors: as opaque surfaces they would block the sky.
-            // TG/NoRender is the game's invisible material.
+            // HDRP's water system draws the lakes, rivers and sea with passes of its own (WaterGBuffer), from a mesh renderer's
+            // mesh too (custom water, which its renderer may still carry): to rays that would be a flat, solid plane, shadowing
+            // the lake bed and stopping the water's own reflection rays in the troughs of the waves HDRP displaces the drawn
+            // surface by on the GPU. Rays pass through water; its reflections are traced from HDRP's own surface (render event 4).
+            if (m.FindPass("WaterGBuffer") >= 0)
+            {
+                if (shadersSeen.Add(shaderName)) Session.Log.LogInfo("Traced material shader \"" + shaderName + "\": HDRP's water, invisible to rays (its reflections are traced from its own surface).");
+                return Invisible;
+            }
+            // Unlit meshes are sky domes, glow cards, distant impostors and the game's depth cards: as opaque surfaces they
+            // would block the sky. TG/NoRender is the game's invisible material. HDRP's own opaque Unlit material (debris and
+            // decals on floors: shown at their texture's brightness whatever the light, they glowed in a dark room) is seen
+            // by camera rays only, lit by the tracer like the floor under it.
+            bool unlit = shaderName.IndexOf("Unlit", StringComparison.OrdinalIgnoreCase) >= 0;
             bool transparent = (m.HasProperty("_SurfaceType") && m.GetFloat("_SurfaceType") > 0.5f) || m.renderQueue >= 2750 ||
-                shaderName.IndexOf("Unlit", StringComparison.OrdinalIgnoreCase) >= 0 || shaderName.IndexOf("NoRender", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (transparent)
+                shaderName.IndexOf("NoRender", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool cameraOnly = unlit && !transparent && shaderName == "HDRP/Unlit";
+            if (transparent || (unlit && !cameraOnly))
             {
                 if (shadersSeen.Add(shaderName)) Session.Log.LogInfo("Traced material shader \"" + shaderName + "\": invisible to rays (transparent or unlit).");
                 return Invisible;
             }
             var mat = new NativeMaterial { BaseA = 1f, ScaleX = 1f, ScaleY = 1f, AlbedoTile = -1, EmissiveTile = -1, Smoothness = 0.5f };
             var baseColor = Vector3.one; float alpha = 1f;
-            foreach (var name in ColorNames) if (m.HasProperty(name)) { var c = m.GetColor(name); baseColor = LinearColor(c); alpha = c.a; break; }
-            string albedo = AlbedoProperty(m);
+            // HDRP's Unlit keeps its color in _UnlitColor and _UnlitColorMap; its _Color and _MainTex are there for Unity's
+            // lightmapper and stay white.
+            foreach (var name in cameraOnly ? UnlitColorNames : ColorNames) if (m.HasProperty(name)) { var c = m.GetColor(name); baseColor = LinearColor(c); alpha = c.a; break; }
+            string albedo = cameraOnly && m.HasProperty("_UnlitColorMap") ? (m.GetTexture("_UnlitColorMap") != null ? "_UnlitColorMap" : null) : AlbedoProperty(m);
             if (albedo != null)
             {
                 mat.AlbedoTile = Tile(m.GetTexture(albedo));
@@ -404,18 +613,34 @@ namespace TGPathTracing
                 mat.ScaleX = scale.x; mat.ScaleY = scale.y; mat.OffsetX = offset.x; mat.OffsetY = offset.y;
             }
             mat.BaseR = baseColor.x; mat.BaseG = baseColor.y; mat.BaseB = baseColor.z; mat.BaseA = alpha;
-            if (m.HasProperty("_Metallic")) mat.Metallic = Mathf.Clamp01(m.GetFloat("_Metallic"));
-            if (m.HasProperty("_Smoothness")) mat.Smoothness = Mathf.Clamp01(m.GetFloat("_Smoothness"));
-            // HDRP stores the emissive color already multiplied by its intensity (linear, in nits).
+            ShaderGraphTiling(m, shaderName, ref mat);
+            // Glass keeps its constants: its finish is GlassFinish's.
+            string mask = ReadFinish(m, shaderName, ref mat, !GlassFinish.IsGlass(m));
+            // HDRP stores the emissive color already multiplied by its intensity (linear, in nits): HDRP Lit's shader reads
+            // that alone (its material editor writes _EmissiveColorLDR times _EmissiveIntensity into it), and nits are the
+            // tracer's radiance (its lights in candela and lux, as HDRP's). The shader then divides it by the exposure as far
+            // as the exposure weight is below 1 (at 0 a glow shows equally bright whatever the exposure), and multiplies it by
+            // the albedo with Albedo Affects Emissive: the light it casts must be the light the camera sees.
+            float exposureWeight = 1f; Color emission = Color.black;
             if (m.HasProperty("_EmissiveColor") && (m.globalIlluminationFlags & MaterialGlobalIlluminationFlags.EmissiveIsBlack) == 0)
             {
                 var e = m.GetColor("_EmissiveColor");
                 if (e.maxColorComponent > 0.001f)
                 {
-                    mat.EmissiveR = e.r; mat.EmissiveG = e.g; mat.EmissiveB = e.b;
+                    emission = e;
+                    exposureWeight = m.HasProperty("_EmissiveExposureWeight") ? Mathf.Clamp01(m.GetFloat("_EmissiveExposureWeight")) : 1f;
+                    var shown = e * ExposureScale(exposureWeight);
+                    mat.EmissiveR = shown.r; mat.EmissiveG = shown.g; mat.EmissiveB = shown.b;
                     if (m.HasProperty("_EmissiveColorMap") && m.GetTexture("_EmissiveColorMap") != null) mat.EmissiveTile = Tile(m.GetTexture("_EmissiveColorMap"));
+                    if (m.HasProperty("_AlbedoAffectEmissive") && m.GetFloat("_AlbedoAffectEmissive") > 0.5f) mat.Flags |= Tgpt.MaterialEmissiveAlbedo;
+                    if (emissiveLogged++ < 40)
+                        Session.Log.LogInfo("Emissive material \"" + m.name + "\" (" + shaderName + "): " + e.r.ToString("0.###") + ", " + e.g.ToString("0.###") + ", " +
+                            e.b.ToString("0.###") + " nits" + (mat.EmissiveTile >= 0 ? " times its emissive map" : "") +
+                            ((mat.Flags & Tgpt.MaterialEmissiveAlbedo) != 0 ? " times its albedo" : "") +
+                            (exposureWeight < 0.999f ? ", exposure weight " + exposureWeight.ToString("0.##") + " (x" + ExposureScale(exposureWeight).ToString("0.#") + " at the exposure now)" : ""));
                 }
             }
+            else if (!m.HasProperty("_EmissiveColor")) LogUnreadEmission(m, shaderName);
             bool alphaTest = (m.HasProperty("_AlphaCutoffEnable") && m.GetFloat("_AlphaCutoffEnable") > 0.5f) || m.IsKeywordEnabled("_ALPHATEST_ON") ||
                 shaderName.IndexOf("Leaves", StringComparison.OrdinalIgnoreCase) >= 0 || shaderName.IndexOf("Grass", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Billboard", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -424,18 +649,114 @@ namespace TGPathTracing
                 mat.Flags |= Tgpt.MaterialAlphaTest;
                 mat.AlphaCutoff = m.HasProperty("_AlphaCutoff") ? m.GetFloat("_AlphaCutoff") : m.HasProperty("_Cutoff") ? m.GetFloat("_Cutoff") : 0.5f;
                 mat.AlphaCutoff = Mathf.Clamp(mat.AlphaCutoff, 0.05f, 0.95f);
-                int alphaTile = AlphaTile(m.GetTexture(albedo));
-                if (alphaTile >= 0) { mat.AlphaTile = alphaTile; mat.Flags |= Tgpt.MaterialAlphaTile; }
+                int alphaTile = AlphaTile(m.GetTexture(albedo), mat.AlphaCutoff / Mathf.Max(mat.BaseA, 1e-3f));
+                // Its tile holds coverage for that cutoff: cut out where less than half a texel is covered.
+                if (alphaTile >= 0) { mat.AlphaTile = alphaTile; mat.Flags |= Tgpt.MaterialAlphaTile; mat.AlphaCutoff = 0.5f; }
             }
             if (m.HasProperty("_DoubleSidedEnable") && m.GetFloat("_DoubleSidedEnable") > 0.5f) mat.Flags |= Tgpt.MaterialDoubleSided;
+            // The game's shaders that bend their vertices in the wind (grass, leaves, banners and laundry): traced where they
+            // stand still, which rays from HDRP's surfaces don't trust near them (pt_common.hlsli MASK_SWAYS).
+            if (Sways(shaderName)) mat.Flags |= Tgpt.MaterialSways;
+            // Lit through from behind where a path meets it, as HDRP lights it through: the game's grass and leaves, and HDRP
+            // Lit's Translucent material type.
+            if (Translucent(shaderName, m)) mat.Flags |= Tgpt.MaterialTranslucent;
+            // Thin cloth that hangs (the game's cloth in the wind, banners, curtains, canvas, laundry) lets light through its weave.
+            else if (ThinCloth(shaderName, m.name)) mat.Flags |= Tgpt.MaterialThinCloth;
+            // Glass, by its name (the game draws its bottles opaque, the label and the cork in the same texture): light
+            // passes through it as bright as its color (tested per ray, and cut out only where its texture cuts it out),
+            // and the tracer sees through its smooth texels (GlassFinish).
+            if (!cameraOnly && GlassFinish.IsGlass(m))
+            {
+                if ((mat.Flags & Tgpt.MaterialAlphaTest) == 0) mat.AlphaCutoff = 0f;
+                mat.Flags |= Tgpt.MaterialAlphaTest | Tgpt.MaterialGlass;
+                mat.Smoothness = Mathf.Max(mat.Smoothness, GlassFinish.Smoothness);
+                GlassFinish.Add(m);
+            }
+            if (cameraOnly)
+            {
+                // Tested per ray (camera rays see it, others pass): cut out by its alpha where HDRP cuts it out, solid otherwise.
+                if ((mat.Flags & Tgpt.MaterialAlphaTest) == 0) mat.AlphaCutoff = 0f;
+                mat.Flags |= Tgpt.MaterialAlphaTest | Tgpt.MaterialCameraOnly;
+                mat.EmissiveR = mat.EmissiveG = mat.EmissiveB = 0f; mat.EmissiveTile = -1;
+                if (unlitSeen.Add(m.name))
+                    Session.Log.LogInfo("HDRP/Unlit material \"" + m.name + "\": seen by camera rays only and lit by the tracer (albedo " + (albedo ?? "none") + ")");
+            }
             if (shadersSeen.Add(shaderName))
                 Session.Log.LogInfo("Traced material shader \"" + shaderName + "\": albedo " + (albedo ?? "none") + (mat.AlbedoTile >= 0 ? " (tile " + mat.AlbedoTile + ")" : "") +
                     ", color (" + baseColor.x.ToString("0.00") + ", " + baseColor.y.ToString("0.00") + ", " + baseColor.z.ToString("0.00") + ")" +
                     ((mat.Flags & Tgpt.MaterialAlphaTest) != 0 ? ", alpha test " + mat.AlphaCutoff.ToString("0.00") : "") +
-                    (mat.EmissiveR + mat.EmissiveG + mat.EmissiveB > 0 ? ", emissive" : "") +
+                    (mat.EmissiveR + mat.EmissiveG + mat.EmissiveB > 0 ? ", emissive" : "") + (mask != null ? ", mask map " + mask : "") +
                     (albedo == null ? "; its textures: " + string.Join(", ", m.GetTexturePropertyNames()) : ""));
             materialList.Add(mat);
+            if (exposureWeight < 0.999f && mat.EmissiveR + mat.EmissiveG + mat.EmissiveB > 0f) exposureWeighted.Add((materialList.Count - 1, emission, exposureWeight));
             return (uint)(materialList.Count - 1);
+        }
+        internal static bool Translucent(string shaderName, Material m) =>
+            shaderName.IndexOf("Vegetation_Grass", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            shaderName.IndexOf("Vegetation_Leaves", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            (shaderName == "HDRP/Lit" && m.HasProperty("_MaterialID") && Mathf.RoundToInt(m.GetFloat("_MaterialID")) == 5);
+        private static readonly string[] ThinClothNames = { "Banner", "Curtain", "Canvas", "Tent", "Flag", "Sail", "Awning", "Tarp", "Laundry", "Drape", "Cloth" };
+        private static readonly string[] NotThinCloth = { "Floor", "Rug", "Carpet", "Table", "Pole", "Rope", "Wood", "Metal" };
+        internal static bool ThinCloth(string shaderName, string materialName)
+        {
+            if (shaderName.IndexOf("Cloth_Wind", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return materialName != null && ContainsAny(materialName, ThinClothNames) && !ContainsAny(materialName, NotThinCloth);
+        }
+        private static bool ContainsAny(string text, string[] words)
+        {
+            foreach (var word in words) if (text.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+        internal static bool Sways(string shaderName) =>
+            shaderName.IndexOf("Vegetation_Grass", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            shaderName.IndexOf("Vegetation_Leaves", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            shaderName.IndexOf("Cloth_Wind", StringComparison.OrdinalIgnoreCase) >= 0;
+        // HDRP's exposure multiplier now (HdrpPasses reads it back), or the game's usual one outdoors (EV 13) until it has.
+        private static float CurrentExposure() => float.IsNaN(HdrpPasses.LiveExposureLog) ? 1f / (1.2f * 8192f) : Mathf.Pow(2f, HdrpPasses.LiveExposureLog);
+        // What HDRP Lit multiplies an emissive color by for its exposure weight: lerp(1 / exposure, 1, weight).
+        private static float ExposureScale(float weight) => weight >= 0.999f ? 1f : Mathf.Lerp(1f / Mathf.Max(CurrentExposure(), 1e-12f), 1f, weight);
+        // Materials whose emission follows the exposure (a weight below 1): their color, weight and index, sent again whenever the
+        // exposure moved by a twentieth of a stop, so the light they cast stays what the camera sees them glow with.
+        private static readonly List<(int index, Color emission, float weight)> exposureWeighted = new List<(int, Color, float)>();
+        private static float exposureFollowed = float.NaN;
+        private static int emissiveLogged;
+        private static void FollowExposure()
+        {
+            float now = HdrpPasses.LiveExposureLog;
+            if (exposureWeighted.Count == 0 || float.IsNaN(now) || (!float.IsNaN(exposureFollowed) && Mathf.Abs(now - exposureFollowed) < 0.05f)) return;
+            var tracer = Session.Tracer;
+            if (tracer == null || !tracer.Connected) return;
+            exposureFollowed = now;
+            foreach (var (index, emission, weight) in exposureWeighted)
+            {
+                if (index >= materialList.Count) continue;
+                var mat = materialList[index];
+                var shown = emission * ExposureScale(weight);
+                mat.EmissiveR = shown.r; mat.EmissiveG = shown.g; mat.EmissiveB = shown.b;
+                materialList[index] = mat;
+                if (index < materialsUploaded) tracer.SetMaterials((uint)index, new[] { mat }, 1u);
+            }
+        }
+        // Once per shader: emission by names other than HDRP Lit's, which the tracer doesn't read (a glowing surface drawn with
+        // a shader of the game's own lights nothing), so the log tells which.
+        private static readonly HashSet<string> unreadEmissionSeen = new HashSet<string>();
+        private static void LogUnreadEmission(Material m, string shaderName)
+        {
+            var shader = m.shader;
+            if (shader == null || !unreadEmissionSeen.Add(shaderName)) return;
+            var found = new List<string>();
+            for (int i = 0; i < shader.GetPropertyCount(); i++)
+            {
+                string name = shader.GetPropertyName(i);
+                if (name.IndexOf("emiss", StringComparison.OrdinalIgnoreCase) < 0 && name.IndexOf("glow", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                var type = shader.GetPropertyType(i);
+                string value = type == ShaderPropertyType.Color ? m.GetColor(name).ToString() : type == ShaderPropertyType.Vector ? m.GetVector(name).ToString()
+                    : type == ShaderPropertyType.Texture ? (m.GetTexture(name) != null ? "a texture" : "no texture") : m.GetFloat(name).ToString("0.###");
+                found.Add(name + " " + value);
+            }
+            if (found.Count > 0)
+                Session.Log.LogInfo("Traced material shader \"" + shaderName + "\" has emission the tracer doesn't read (not HDRP Lit's _EmissiveColor): " +
+                    string.Join(", ", found.ToArray()) + " (material \"" + m.name + "\")");
         }
         private static bool IsAlphaTested(uint material) => material == Invisible || (materialList[(int)material].Flags & Tgpt.MaterialAlphaTest) != 0;
 
@@ -482,6 +803,7 @@ namespace TGPathTracing
             int count = 0, batched = 0;
             int cullingMask = cam != null ? cam.cullingMask : ~0;
             objectsLeftOut = 0; objectsStandIn = 0;
+            placedNext.Clear();
             foreach (var renderer in UnityEngine.Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None))
             {
                 if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy || renderer.forceRenderingOff) continue;
@@ -507,12 +829,25 @@ namespace TGPathTracing
                 }
                 if (renderer.isPartOfStaticBatch) { ++batched; continue; } // combined meshes would be traced once per member
                 var filter = renderer.GetComponent<MeshFilter>();
-                if (filter != null && AddMesh(filter.sharedMesh, renderer.sharedMaterials, renderer.localToWorldMatrix)) ++count;
+                var world = renderer.localToWorldMatrix;
+                if (filter != null && AddMesh(filter.sharedMesh, renderer.sharedMaterials, world, Moved(renderer.GetInstanceID(), world) ? Tgpt.InstanceMoving : 0u)) ++count;
             }
+            var seen = placed; placed = placedNext; placedNext = seen;
             if (batched > 0 && !loggedBatched) { loggedBatched = true; Session.Log.LogInfo(batched + " statically batched renderers near the camera are left out of the traced scene."); }
             return count;
         }
         private static bool loggedBatched;
+        // Renderers' transforms at the last scan. One that moved since (a carried lantern, a held weapon, a door swinging) is
+        // traced as moving: its emission is never sampled as a light, which would stay where this scan left it until the next
+        // one while the object goes on. One seen for the first time counts as moving until a scan finds it in place.
+        private static Dictionary<int, Matrix4x4> placed = new Dictionary<int, Matrix4x4>(), placedNext = new Dictionary<int, Matrix4x4>();
+        private static bool Moved(int id, in Matrix4x4 world)
+        {
+            placedNext[id] = world;
+            if (!placed.TryGetValue(id, out var before)) return true;
+            for (int i = 0; i < 16; i++) if (Mathf.Abs(before[i] - world[i]) > 1e-4f) return true;
+            return false;
+        }
 
         // ------------------------------------------------------------------ Drake (Awaken's ECS renderer)
         private static void EnsureQueries(EntityManager em, World world)
@@ -545,6 +880,7 @@ namespace TGPathTracing
             public override int GetHashCode() => (((Mesh * 397 ^ X) * 397 ^ Y) * 397 ^ Z) * 397 ^ R;
         }
         private sealed class DrakeRenderer { internal ushort Mesh; internal bool StandIn; internal Matrix4x4 Matrix; internal readonly Dictionary<int, ushort> Materials = new Dictionary<int, ushort>(); }
+        private struct DrakeLod { internal DrakeMeshMaterialComponent Mm; internal LocalToWorld Ltw; internal float Min, Actual; internal bool Drawn, StandIn; }
         private static T Loaded<T>(AsyncOperationHandle<T> handle, ushort counter) where T : UnityEngine.Object =>
             counter > 0 && handle.IsValid() && handle.IsDone && handle.Status == AsyncOperationStatus.Succeeded ? handle.Result : null;
         private static int CaptureDrake(Vector3 camera, float radius, List<NativeInstance> instances, List<uint> indices)
@@ -594,6 +930,9 @@ namespace TGPathTracing
                 r.Materials[mm.submesh] = mm.materialIndex;
             }
             drakeShadowOnly = 0; drakeHidden = 0;
+            var meshData = loading.MeshLoadingData; var materialData = loading.MaterialLoadingData;
+            // Which LOD of each group is traced (NearDetail, TracedLevel): the LODs near enough to matter, by group.
+            var groups = new Dictionary<int3, List<DrakeLod>>();
             using (var chunks = lodQuery.ToArchetypeChunkArray(Allocator.Temp))
             {
                 foreach (var chunk in chunks)
@@ -604,11 +943,31 @@ namespace TGPathTracing
                     for (int i = 0; i < chunk.Count; i++)
                     {
                         if (math.distancesq(ltw[i].Value.c3.xyz, c) > r2) continue;
-                        float d = math.distance(reference[i].Value, c) * lodScale;
-                        if (d < range[i].MinDist || d >= range[i].MaxDist) continue;
-                        Collect(mm[i], ltw[i]);
+                        float3 at = reference[i].Value;
+                        float actual = math.distance(at, c), d = actual * lodScale;
+                        bool drawn = d >= range[i].MinDist && d < range[i].MaxDist;
+                        if (!drawn && actual >= PrefetchDetail) continue;
+                        var key = new int3((int)math.round(at.x * 100f), (int)math.round(at.y * 100f), (int)math.round(at.z * 100f));
+                        if (!groups.TryGetValue(key, out var list)) groups[key] = list = new List<DrakeLod>();
+                        list.Add(new DrakeLod { Mm = mm[i], Ltw = ltw[i], Min = range[i].MinDist, Actual = actual, Drawn = drawn, StandIn = standIn });
                     }
                 }
+            }
+            bool DrakeReady(ushort meshIndex)
+            {
+                if (meshIndex >= meshData.Count) return false;
+                var md = meshData[meshIndex];
+                var mesh = Loaded(md.loadingHandle, md.counter);
+                return mesh != null && MeshHandle(mesh, out _) > 0;
+            }
+            var levels = new List<float>(); var drawnLevels = new List<bool>();
+            foreach (var list in groups.Values)
+            {
+                levels.Clear(); drawnLevels.Clear();
+                foreach (var e in list) { levels.Add(e.Min); drawnLevels.Add(e.Drawn); }
+                float level = TracedLevel(levels, drawnLevels, l => { bool all = true; foreach (var e in list) if (e.Min == l) all &= DrakeReady(e.Mm.meshIndex); return all; }, list[0].Actual);
+                if (level < 0f) continue;
+                foreach (var e in list) if (e.Min == level) { standIn = e.StandIn; Collect(e.Mm, e.Ltw); }
             }
             using (var chunks = rangeQuery.ToArchetypeChunkArray(Allocator.Temp))
             {
@@ -634,7 +993,6 @@ namespace TGPathTracing
                 }
             }
             int count = 0;
-            var meshData = loading.MeshLoadingData; var materialData = loading.MaterialLoadingData;
             foreach (var r in renderers.Values)
             {
                 if (r.Mesh >= meshData.Count) continue;
@@ -680,6 +1038,7 @@ namespace TGPathTracing
             public override int GetHashCode() => (((Mesh * 397 ^ X) * 397 ^ Y) * 397 ^ Z) * 397 ^ R;
         }
         private sealed class EntityRenderer { internal Mesh Mesh; internal Matrix4x4 Matrix; internal readonly Dictionary<int, Material> Materials = new Dictionary<int, Material>(); }
+        private unsafe struct EntityLod { internal MaterialMeshInfo Mmi; internal float4x4 V; internal bool Baked; internal RenderMeshArray Array; internal MaterialMeshInfo* Pairs; internal float Min, Actual; internal bool Drawn; }
         private static int entityShadowOnly, entityHidden, entityUnresolved;
         private static bool entitiesLogged;
         // Whether the drawn geometry near the camera is in the traced scene comes back in covered: Entities Graphics could
@@ -744,6 +1103,31 @@ namespace TGPathTracing
                 r.Materials[Mathf.Max(0, (int)mmi.SubMesh)] = material;
                 return true;
             }
+            // The mesh one mesh-material pair of an entity draws (as Add resolves it), for whether a LOD's meshes are registered.
+            Mesh PairMesh(MaterialMeshInfo mmi, bool isBaked, RenderMeshArray meshes)
+            {
+                if (mmi.IsRuntimeMesh)
+                {
+                    uint id = mmi.MeshID.value;
+                    if (id == 0) return null;
+                    if (!meshCache.TryGetValue(id, out var mesh)) meshCache[id] = mesh = graphics.GetMesh(mmi.MeshID);
+                    return mesh;
+                }
+                return isBaked ? meshes.GetMesh(mmi) : null;
+            }
+            void AddEntity(MaterialMeshInfo mmi, float4x4 v, MaterialMeshInfo* pairs)
+            {
+                bool added = false;
+                if (!mmi.HasMaterialMeshIndexRange) added = Add(mmi, v);
+                else if (pairs != null)
+                {
+                    var span = mmi.MaterialMeshIndexRange;
+                    for (int j = span.start; j < span.end; j++) added |= Add(pairs[j], v);
+                }
+                if (!added) ++entityUnresolved;
+            }
+            // Which LOD of each group is traced (NearDetail, TracedLevel).
+            var groups = new Dictionary<int3, List<EntityLod>>();
             using (var chunks = entityQuery.ToArchetypeChunkArray(Allocator.Temp))
             {
                 foreach (var chunk in chunks)
@@ -767,20 +1151,35 @@ namespace TGPathTracing
                         if (math.distancesq(v.c3.xyz, c) > r2) continue;
                         if (lod)
                         {
-                            float d = math.distance(reference[i].Value, c) * lodScale;
-                            if (d < range[i].MinDist || d >= range[i].MaxDist) continue;
+                            float3 at = reference[i].Value;
+                            float actual = math.distance(at, c), d = actual * lodScale;
+                            bool drawn = d >= range[i].MinDist && d < range[i].MaxDist;
+                            if (!drawn && actual >= PrefetchDetail) continue;
+                            var key = new int3((int)math.round(at.x * 100f), (int)math.round(at.y * 100f), (int)math.round(at.z * 100f));
+                            if (!groups.TryGetValue(key, out var list)) groups[key] = list = new List<EntityLod>();
+                            list.Add(new EntityLod { Mmi = info[i], V = v, Baked = baked, Array = array, Pairs = pairs, Min = range[i].MinDist, Actual = actual, Drawn = drawn });
+                            continue;
                         }
-                        var mmi = info[i];
-                        bool added = false;
-                        if (!mmi.HasMaterialMeshIndexRange) added = Add(mmi, v);
-                        else if (pairs != null)
-                        {
-                            var span = mmi.MaterialMeshIndexRange;
-                            for (int j = span.start; j < span.end; j++) added |= Add(pairs[j], v);
-                        }
-                        if (!added) ++entityUnresolved;
+                        AddEntity(info[i], v, pairs);
                     }
                 }
+            }
+            bool EntityReady(in EntityLod e)
+            {
+                if (!e.Mmi.HasMaterialMeshIndexRange) { var mesh = PairMesh(e.Mmi, e.Baked, e.Array); return mesh != null && MeshHandle(mesh, out _) > 0; }
+                if (e.Pairs == null) return false;
+                var span = e.Mmi.MaterialMeshIndexRange;
+                for (int j = span.start; j < span.end; j++) { var mesh = PairMesh(e.Pairs[j], e.Baked, e.Array); if (mesh == null || MeshHandle(mesh, out _) <= 0) return false; }
+                return true;
+            }
+            var levels = new List<float>(); var drawnLevels = new List<bool>();
+            foreach (var list in groups.Values)
+            {
+                levels.Clear(); drawnLevels.Clear();
+                foreach (var e in list) { levels.Add(e.Min); drawnLevels.Add(e.Drawn); }
+                float level = TracedLevel(levels, drawnLevels, l => { bool all = true; foreach (var e in list) if (e.Min == l) all &= EntityReady(e); return all; }, list[0].Actual);
+                if (level < 0f) continue;
+                foreach (var e in list) if (e.Min == level) { baked = e.Baked; array = e.Array; AddEntity(e.Mmi, e.V, e.Pairs); }
             }
             int count = 0;
             foreach (var r in renderers.Values)
@@ -954,7 +1353,8 @@ namespace TGPathTracing
                         var range = em.GetComponentData<LODRange>(e);
                         float d = math.distance(em.GetComponentData<LODWorldReferencePoint>(e).Value, c) * lodScale;
                         lod = ", LOD mask " + range.LODMask + " for " + range.MinDist.ToString("0.#") + "-" + range.MaxDist.ToString("0.#") + " at " + d.ToString("0.#") +
-                            (d >= range.MinDist && d < range.MaxDist ? " (traced)" : " (not this LOD)");
+                            (d >= range.MinDist && d < range.MaxDist ? " (drawn)" : " (not drawn)") +
+                            (d / lodScale < NearDetail ? ", within " + NearDetail.ToString("0") + " m: the finest LOD is traced" : "");
                     }
                     else if (em.HasComponent<LODRange>(e)) lod = ", a LOD range without a reference point (not captured)";
                     else if (em.HasComponent<DrakeRendererVisibleRangeComponent>(e))
@@ -1016,11 +1416,12 @@ namespace TGPathTracing
                         {
                             var range = em.GetComponentData<LODRange>(e);
                             float d = math.distance(em.GetComponentData<LODWorldReferencePoint>(e).Value, c) * lodScale;
-                            lod = ", LOD " + range.MinDist.ToString("0.#") + "-" + range.MaxDist.ToString("0.#") + " at " + d.ToString("0.#") + (d >= range.MinDist && d < range.MaxDist ? "" : " (not this LOD)");
+                            lod = ", LOD " + range.MinDist.ToString("0.#") + "-" + range.MaxDist.ToString("0.#") + " at " + d.ToString("0.#") + (d >= range.MinDist && d < range.MaxDist ? " (drawn)" : " (not drawn)") +
+                                (d / lodScale < NearDetail ? ", within " + NearDetail.ToString("0") + " m: the finest LOD is traced" : "");
                         }
                         text = mmi.HasMaterialMeshIndexRange ? "(a material-mesh range without its RendererRange: not traced)\"" :
                             (mesh != null ? mesh.name : "(unresolved: not traced)") + "\" submesh " + mmi.SubMesh + (pairCount > 1 ? " (and " + (pairCount - 1) + " more)" : "") + ", material \"" + (material != null ? material.name + " (" + material.shader.name + ")" : "none") + "\", " + shadows + lod +
-                            (mesh != null && meshes.TryGetValue(mesh.GetInstanceID(), out var entry) ? (entry.Failed ? ", its mesh failed to register" : ", traced") : mesh != null ? ", its mesh not registered yet" : "");
+                            (mesh != null && meshes.TryGetValue(mesh.GetInstanceID(), out var entry) ? (entry.Failed ? ", its mesh failed to register" : ", its mesh registered") : mesh != null ? ", its mesh not registered yet" : "");
                     }
                     catch (Exception ex) { text = "(" + ex.GetType().Name + ": " + ex.Message + ")\""; }
                     sb.Append("\n  entity (Entities Graphics, not Drake) mesh \"" + text);

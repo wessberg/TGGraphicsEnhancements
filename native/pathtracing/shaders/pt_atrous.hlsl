@@ -2,7 +2,8 @@
 // One edge-aware a-trous wavelet iteration (SVGF's spatial stage, Schied et al. 2017): a 5x5 B3-spline
 // kernel spread by the step size, weighted down across surfaces, normals and, by the variance around
 // the pixel (a 3x3 Gaussian of it, so one noisy estimate does not tear the image into blocks), across
-// luminance. The variance is filtered along so each iteration trusts the image a little more.
+// luminance. The variance is filtered along so each iteration trusts the image a little more; alpha carries its square
+// root, the standard deviation (in half precision the variance of a hot spot overflowed).
 // Specular signals also stay within similar roughness, and mirror-like surfaces get the first, finest
 // iteration only.
 // The second iteration feeds the first one's result back into the temporal history (SVGF's feedback),
@@ -32,7 +33,8 @@ void main(uint2 p : SV_DispatchThreadID) {
         for (int vx = -1; vx <= 1; ++vx) {
             int2 q = clamp(int2(p) + int2(vx, vy), int2(0, 0), int2(g.size.xy) - 1);
             float w = (vx == 0 ? 0.5 : 0.25) * (vy == 0 ? 0.5 : 0.25);
-            variance3 += input[q].a * w; gaussian += w;
+            float deviation = input[q].a;
+            variance3 += deviation * deviation * w; gaussian += w;
         }
     }
     variance3 /= gaussian;
@@ -42,7 +44,7 @@ void main(uint2 p : SV_DispatchThreadID) {
     // Normal-map detail: diffuse light barely changes with it, and a reflection only as much as its lobe is
     // narrow; glossy surfaces keep their normals' detail, rough ones are filtered across it.
     float normalPower = specular ? lerp(32.0, 4.0, saturate(s.roughness * 2.5)) : 4.0;
-    float3 sum = center.rgb; float variance = center.a; float weights = 1.0;
+    float3 sum = center.rgb; float variance = center.a * center.a; float weights = 1.0;
     for (int y = -2; y <= 2; ++y) {
         for (int x = -2; x <= 2; ++x) {
             if (x == 0 && y == 0) continue;
@@ -57,8 +59,8 @@ void main(uint2 p : SV_DispatchThreadID) {
             float wl = exp(-abs(luminance(c.rgb) - lc) / sigma);
             float wr = specular ? exp(-abs(sq.roughness - s.roughness) * 12.0) : 1.0;
             float w = kernel[abs(x)] * kernel[abs(y)] / (kernel[0] * kernel[0]) * wn * wp * wl * wr;
-            sum += c.rgb * w; variance += c.a * w * w; weights += w;
+            sum += c.rgb * w; variance += c.a * c.a * w * w; weights += w;
         }
     }
-    output[p] = float4(sum / weights, variance / (weights * weights));
+    output[p] = float4(sum / weights, sqrt(variance) / weights);
 }

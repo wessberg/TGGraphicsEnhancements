@@ -354,10 +354,14 @@ int main(int argc, char** argv) {
     if(us.available&(1u<<TGUP_BACKEND_RAY_RECONSTRUCTION)) {
         D3D11_TEXTURE2D_DESC g{}; g.MipLevels=g.ArraySize=g.SampleDesc.Count=1; g.Usage=D3D11_USAGE_DEFAULT; g.Width=RW; g.Height=RH;
         g.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS;
-        ComPtr<ID3D11Texture2D> diffuse, specular, normals;
+        ComPtr<ID3D11Texture2D> diffuse, specular, normals, hitDistance;
         g.Format=DXGI_FORMAT_R8G8B8A8_UNORM; device->CreateTexture2D(&g, nullptr, &diffuse); device->CreateTexture2D(&g, nullptr, &specular);
         g.Format=DXGI_FORMAT_R16G16B16A16_FLOAT; device->CreateTexture2D(&g, nullptr, &normals);
-        expect(diffuse && specular && normals, "Ray Reconstruction guide textures");
+        // TG Path Tracing's optional inputs, as its composite writes them: the reflections' hit distance (one float
+        // channel) and the color before transparency (here the input color itself).
+        g.Format=DXGI_FORMAT_R16_FLOAT; device->CreateTexture2D(&g, nullptr, &hitDistance);
+        expect(diffuse && specular && normals && hitDistance, "Ray Reconstruction guide textures");
+        { std::vector<uint16_t> five(size_t(RW)*RH, float_to_half(5.f)); context->UpdateSubresource(hitDistance.Get(), 0, nullptr, five.data(), RW*2, 0); }
         std::vector<uint32_t> gray(size_t(RW)*RH, 0xFF808080u), dim(size_t(RW)*RH, 0xFF0A0A0Au);
         context->UpdateSubresource(diffuse.Get(), 0, nullptr, gray.data(), RW*4, 0);
         context->UpdateSubresource(specular.Get(), 0, nullptr, dim.data(), RW*4, 0);
@@ -386,6 +390,7 @@ int main(int argc, char** argv) {
             f.motion=uint64_t(uintptr_t(motion.Get())); f.output=uint64_t(uintptr_t(output.Get()));
             f.diffuseAlbedo=uint64_t(uintptr_t(diffuse.Get())); f.specularAlbedo=uint64_t(uintptr_t(specular.Get()));
             f.normalRoughness=uint64_t(uintptr_t(normals.Get()));
+            f.specularHitDistance=uint64_t(uintptr_t(hitDistance.Get())); f.colorBeforeTransparency=uint64_t(uintptr_t(color.Get()));
             // A camera at the origin looking down +Z with a reversed-Z perspective (row vectors on the left).
             for(int i=0;i<16;++i) { f.worldToView[i]=(i%5==0) ? 1.f : 0.f; f.viewToClip[i]=0.f; }
             const float ys=1.f/std::tan(0.5f), xs=ys*float(RH)/float(RW), zn=0.1f, zf=1000.f;

@@ -48,7 +48,7 @@ namespace TGPathTracing
 
         // Path tracing is chosen (in the Path Tracing row, before Apply too) and can run here.
         internal static bool Replacing =>
-            PathTracingRow.PendingMode == TracingMode.Full && Session.HaveStatus && Session.Status.Supported != 0 && !HdrpPasses.Failed;
+            PathTracingRow.PendingMode == TracingMode.On && Session.HaveStatus && Session.Status.Supported != 0 && !HdrpPasses.Failed;
 
         internal static void Tick(float now)
         {

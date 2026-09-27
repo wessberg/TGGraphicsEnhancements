@@ -44,7 +44,7 @@ foreach ($name in $mods) {
                 if ($group.Optional -contains $file) { continue }
                 throw "Missing $name runtime file: $path. Run Stage-Runtime.ps1 first."
             }
-            if ($group.Notices -notcontains $file) { Assert-TgSignature $path $group.Signer }
+            if ($group.Signer -and $group.Notices -notcontains $file) { Assert-TgSignature $path $group.Signer } # notices only: no signer
             $files += @{Source=$path; Relative="BepInEx/$name/Native/$($group.Folder)/$file"}
         }
     }

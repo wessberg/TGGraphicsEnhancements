@@ -89,7 +89,12 @@ function Get-TgMod([string]$Name) {
                 @{Folder='D3D12'; Signer='Microsoft Corporation'; Optional=@()
                   Files=@('D3D12Core.dll'); Notices=@('LICENSE-DirectX-Agility-SDK.txt')},
                 @{Folder='FidelityFX'; Signer='Advanced Micro Devices'; Optional=@()
-                  Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_denoiser_dx12.dll'); Notices=@('LICENSE-FidelityFX.md')})
+                  Files=@('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_denoiser_dx12.dll'); Notices=@('LICENSE-FidelityFX.md')},
+                # The notices of what TGPathTracing.Native.dll compiles in (CMakeLists.txt installs them next to it): NVIDIA's
+                # RTXDI and NRD (NVIDIA RTX SDKs license) and NRD's MathLib and ShaderMake reader (MIT). Packages are made from
+                # builds with NRD; a build without it has no MathLib or ShaderMake notice, and packaging says so.
+                @{Folder='Notices'; Signer=$null; Optional=@(); Files=@()
+                  Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt','LICENSE-MathLib.txt','LICENSE-ShaderMake.txt')})
               Extension='src/TGPathTracing/graphics-bridge-extension.json'
               Obsolete=@(Get-TgStandaloneBridge)}
         }

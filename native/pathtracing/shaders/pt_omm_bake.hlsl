@@ -91,20 +91,30 @@ void main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex) {
             // The texels the micro-triangle's box covers, its far edges open: an edge that lies exactly on a
             // texel boundary (UVs laid out on the texel grid) would otherwise pull in the next texel and leave
             // every micro-triangle there unknown. Only hits within rounding of such an edge may then read
-            // the next texel where the micromap has already decided.
+            // the next texel where the micromap has already decided. The alpha tile is filtered bilinearly
+            // (alpha_sample): every texel a point's 2x2 footprint reads counts, so a micro-triangle is opaque or
+            // transparent only when the filtered alpha is everywhere in it.
             float2 lo = floor(min(p0, min(p1, p2))), hi = ceil(max(p0, max(p1, p2))) - 1.0;
+            if (alphaTile) { lo = floor(min(p0, min(p1, p2)) - 0.5); hi = floor(max(p0, max(p1, p2)) - 0.5) + 1.0; }
             hi = max(hi, lo);
             float2 extent = hi - lo + 1.0;
-            if (!all(isfinite(extent)) || extent.x * extent.y > float(OMM_MAX_TEXELS)) {
+            // Far out on the texture plane a float no longer tells texels apart (from 2^24 on, and the wrap below
+            // loses them well before): the alpha test decides per hit there.
+            if (!all(isfinite(extent)) || !all(isfinite(lo)) || any(abs(lo) > 1048576.0) || extent.x * extent.y > float(OMM_MAX_TEXELS)) {
                 state = OMM_UNKNOWN_OPAQUE;
             } else {
                 bool anyOpaque = false, anyTransparent = false;
-                for (float y = lo.y; y <= hi.y; y += 1.0) {
-                    for (float x = lo.x; x <= hi.x; x += 1.0) {
+                const uint2 count = uint2(extent);
+                for (uint j = 0; j < count.y; ++j) {
+                    for (uint k = 0; k < count.x; ++k) {
+                        const float x = lo.x + float(k), y = lo.y + float(j);
                         // The tile repeats: texel coordinates wrap as frac() does for the alpha test.
                         uint2 texel = uint2(int2(float2(x, y) - floor(float2(x, y) / tileSize) * tileSize)) & (tileSize - 1u);
-                        float a = m.baseColor.a * (alphaTile ? alphas.Load(int3(origin + texel, 0)) : atlas.Load(int3(origin + texel, 0)).a);
-                        if (a >= m.alphaCutoff) anyOpaque = true; else anyTransparent = true;
+                        // An alpha tile holds coverage for the material's cutoff, its base alpha included (alpha_opaque), which
+                        // stops the rays other than the camera's by chance: known only where a texel is fully covered or bare.
+                        float a = alphaTile ? alphas.Load(int3(origin + texel, 0)) : m.baseColor.a * atlas.Load(int3(origin + texel, 0)).a;
+                        if (alphaTile) { if (a > 0.001) anyOpaque = true; if (a < 0.999) anyTransparent = true; }
+                        else if (a >= m.alphaCutoff) anyOpaque = true; else anyTransparent = true;
                     }
                 }
                 state = anyOpaque && anyTransparent ? OMM_UNKNOWN_OPAQUE : anyOpaque ? OMM_OPAQUE : OMM_TRANSPARENT;

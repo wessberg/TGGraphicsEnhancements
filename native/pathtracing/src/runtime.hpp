@@ -29,6 +29,8 @@ std::wstring native_root();
 constexpr uint32_t kAtlasSize=4096, kTileSize=64, kTilesPerRow=kAtlasSize/kTileSize, kMaxTiles=kTilesPerRow*kTilesPerRow;
 // The alpha atlas: the alpha of alpha-tested materials' textures as 256x256 tiles of a shared 4096x4096 R8 texture.
 constexpr uint32_t kAlphaTileSize=256, kAlphaTilesPerRow=kAtlasSize/kAlphaTileSize, kMaxAlphaTiles=kAlphaTilesPerRow*kAlphaTilesPerRow;
+// Lights' cookies: 64x64 tiles of a 1024x1024 atlas (pt_common.hlsli COOKIE_*).
+constexpr uint32_t kCookieTileSize=64, kCookieAtlasSize=1024, kCookieTilesPerRow=kCookieAtlasSize/kCookieTileSize, kMaxCookies=kCookieTilesPerRow*kCookieTilesPerRow;
 constexpr uint32_t kSkyWidth=512, kSkyHeight=256;
 // Characters' skinned positions on their way from the game's device: one shared texture per frame parity,
 // a vertex a texel (xyz, 1), 4096 a row.
@@ -53,7 +55,8 @@ struct MeshSource {
     std::vector<float> positions, uvs;
     std::vector<uint32_t> colors, indices;
 };
-struct TextureBake { int32_t tile=-1; uint64_t key=0; ComPtr<ID3D11Resource> texture; };
+// mask: a mask map (TGPT_RegisterMaskTexture), baked linear, its metallic and smoothness channels as channels names them.
+struct TextureBake { int32_t tile=-1; uint64_t key=0; ComPtr<ID3D11Resource> texture; float cutoff=0.5f; bool mask=false; uint32_t channels=0; };
 
 // One requested frame, from TGPT_SubmitFrame to the composite.
 struct FrameSlot {
@@ -69,8 +72,10 @@ struct FrameSlot {
 
 struct Engine {
     std::mutex mutex;
-    TGPT_Status status{sizeof(TGPT_Status), TGPT_ABI};
+    // cameraLight negative until the camera's light is first measured.
+    TGPT_Status status=[] { TGPT_Status s{sizeof(TGPT_Status), TGPT_ABI}; s.cameraLight=-1.f; return s; }();
     std::string unsupported;
+    std::string stageTimes; // the GPU time of a frame's stages over about the last second (TGPT_GetStageTimes)
     ComPtr<ID3D12Device> sharedDevice; uint32_t vendor=0;
     // Pending scene, main thread.
     int32_t nextMesh=1;
@@ -79,6 +84,8 @@ struct Engine {
     std::vector<TextureBake> newTextures;
     std::unordered_map<uint64_t, int32_t> alphaTiles;
     std::vector<TextureBake> newAlphaTextures;
+    std::unordered_map<uint64_t, int32_t> cookieTiles; // kept across scene clears: its atlas is never cleared
+    std::vector<TextureBake> newCookies;
     std::vector<TGPT_Material> materials; bool materialsDirty=false;
     std::vector<TGPT_Instance> instances; std::vector<uint32_t> materialIndices; bool instancesDirty=false;
     std::vector<TGPT_Light> lights; bool lightsDirty=false;
@@ -87,6 +94,18 @@ struct Engine {
     uint32_t clearGeneration=0;
     std::array<FrameSlot, 8> frames;
     TGPT_Guides guides{sizeof(TGPT_Guides), TGPT_ABI}; // the render thread's current guide textures
+    // Shadow Detail requests for render event 3 (TGPT_SetShadowDetail), by request number.
+    struct ShadowDetail { uint32_t request=0; uint64_t color=0; float strength=0; bool pending=false; };
+    std::array<ShadowDetail, 4> shadowDetail;
+    // Traced reflections on water for render event 4 (TGPT_SetWater), by frame sequence: HDRP's SSR texture, depth-stencil
+    // buffer and normal buffer at its transparent SSR step, and its reflection lighting multiplier.
+    struct Water { uint32_t sequence=0; uint64_t reflections=0, depth=0, normal=0; float multiplier=1; bool pending=false; };
+    std::array<Water, 4> water;
+    // Light scattered under skin (TGPT_SetDiffusionProfiles): per profile, Burley's shape (rgb, per metre) and filter radius.
+    std::array<float, 64> sssProfiles{};
+    bool sss=false;
+    // Light through thin skin (TGPT_SetSkinTransmission): per profile, its tint / 4, remap start, shape (per mm), remap span.
+    std::array<float, 128> transmission{};
 };
 Engine& engine();
 

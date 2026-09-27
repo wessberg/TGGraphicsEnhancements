@@ -11,6 +11,7 @@ namespace TGPathTracing
     {
         internal static Settings Settings;
         internal static ManualLogSource Log;
+        internal static PathTracingBehaviour Host; // runs the capture's coroutine
         internal static NativeTracer Tracer;
         internal static NativeStatus Status;
         internal static bool HaveStatus;
@@ -27,7 +28,7 @@ namespace TGPathTracing
             Status.Supported != 0 && Status.Disabled == 0 && !HdrpPasses.Failed;
 
         // The denoisers this PC runs (the Denoising row lists only these): DLSS Ray Reconstruction on an NVIDIA GPU with
-        // TG Better Upscaling installed, until NGX reports it does not run here; AMD Ray Regeneration where the native
+        // TG Better Upscaling installed, until NGX reports it does not run here; NVIDIA NRD and AMD Ray Regeneration where the native
         // side found it. Null until the native side has reported the GPU.
         internal static DenoiserChoice[] OfferedDenoisers
         {
@@ -36,7 +37,8 @@ namespace TGPathTracing
                 if (!HaveStatus || Status.DeviceReady == 0) return null;
                 bool rr = SystemInfo.graphicsDeviceVendorID == 0x10DE && Status.Supported != 0 && RayReconstruction.UpscalingInstalled && RayReconstruction.Reported != 0;
                 bool rrg = (Status.Features & Tgpt.FeatureRayRegeneration) != 0;
-                return Settings.Offered(rr, rrg);
+                bool nrd = (Status.Features & Tgpt.FeatureNrd) != 0;
+                return Settings.Offered(rr, rrg, nrd);
             }
         }
         // What Denoising starts on, and follows until the player picks another (Settings.Best).
@@ -72,6 +74,7 @@ namespace TGPathTracing
             {
                 float now = Time.unscaledTime;
                 Hotkeys();
+                WatchRayReconstruction(now);
                 if (now >= nextPoll)
                 {
                     nextPoll = now + 0.25f;
@@ -118,7 +121,7 @@ namespace TGPathTracing
                     nextReport = now + 10f;
                     Log.LogInfo("Path tracing: " + StatusText + " | scene: " + SceneCapture.Summary + " | characters " + CharacterCapture.Summary +
                         " | lights " + SceneLights.Count + (SceneLights.Sun.Valid ? " + sun" : ", no sun") +
-                        (SceneLights.PlacedLeftOut > 0 ? ", " + SceneLights.PlacedLeftOut + " placed lights left out" : "") + (SceneLights.LeftOut > 0 ? " (" + SceneLights.LeftOut + " left out: specular-only or on other light layers)" : "") + " | hook: " + HdrpPasses.LastFrame);
+                        (SceneLights.PlacedLeftOut > 0 ? ", " + SceneLights.PlacedLeftOut + " placed lights left out" : "") + (SceneLights.LeftOut > 0 ? " (" + SceneLights.LeftOut + " left out: specular-only or on other light layers)" : "") + " | " + HdrpPasses.ExposureText + " | hook: " + HdrpPasses.LastFrame);
                 }
             }
             catch (Exception ex)
@@ -128,12 +131,33 @@ namespace TGPathTracing
             }
         }
 
+        // DLSS Ray Reconstruction is the Denoising setting but hasn't denoised for a few seconds while frames are traced,
+        // shown and ask for its guides (TG Better Upscaling turned it off after failures, or never got them): said once on
+        // screen, as the built-in denoiser serves meanwhile, smearing moving things and blurring detail where Ray
+        // Reconstruction wouldn't. Loading before anything is traced doesn't count (it said so at the main menu).
+        private static float rrMissingSince = -1f;
+        private static bool rrMissingShown;
+        private static void WatchRayReconstruction(float now)
+        {
+            bool tracing = WantsRayReconstruction && Time.frameCount - RayReconstruction.GuidesFrame <= 2 && compositedAt >= 0f && now - compositedAt < 1f;
+            if (!tracing || RayReconstruction.Active) { rrMissingSince = -1f; return; }
+            if (rrMissingSince < 0f) { rrMissingSince = now; return; }
+            if (rrMissingShown || now - rrMissingSince < 5f) return;
+            // With FSR or XeSS upscaling, the built-in denoiser serving for Ray Reconstruction is the Denoising row's own
+            // fallback (its tooltip says to select DLSS): nothing to warn about. Asked again every 5 s.
+            if (!PathTracingRows.DlssSelected()) { rrMissingSince = now; return; }
+            rrMissingShown = true;
+            const string text = "DLSS Ray Reconstruction isn't denoising (TG Better Upscaling's log says why); the built-in denoiser is used meanwhile";
+            Log.LogWarning(text);
+            Notices.Show("tgpt.rr", PathTracingPlugin.Name, text, 10f);
+        }
+
         private static void Hotkeys()
         {
             if (Settings.ProbeKey.Value.IsDown())
             {
-                try { Probe.Report(); Notices.Show("tgpt.probe", PathTracingPlugin.Name, "What is under the crosshair: written to the log", 3f); }
-                catch (Exception ex) { Log.LogWarning("The probe failed: " + ex); }
+                try { DebugCapture.Start(Host); }
+                catch (Exception ex) { Log.LogWarning("The capture failed: " + ex); }
             }
             else if (Settings.ViewKey.Value.IsDown())
             {
@@ -178,7 +202,7 @@ namespace TGPathTracing
                 if (s.Supported == 0) return "unavailable: " + Tracer.UnsupportedReason();
                 ulong frames = s.FramesTraced - lastFramesTraced; lastFramesTraced = s.FramesTraced;
                 string denoiser = RayReconstruction.Active ? "DLSS Ray Reconstruction" : (s.Features & Tgpt.FeatureRayRegenerationActive) != 0 ? "AMD Ray Regeneration"
-                    : Settings.CurrentDenoiser == DenoiserChoice.None ? "no denoiser" : "built-in denoiser";
+                    : (s.Features & Tgpt.FeatureNrdActive) != 0 ? "NRD" : Settings.CurrentDenoiser == DenoiserChoice.None ? "no denoiser" : "built-in denoiser";
                 // DirectX Raytracing 1.2: opacity micromaps, and Shader Execution Reordering where the GPU reorders.
                 string raytracing = (s.Features & Tgpt.FeatureDxr12) == 0 ? "DirectX Raytracing 1.1"
                     : "DirectX Raytracing 1.2" + ((s.Features & Tgpt.FeatureSer) != 0 ? " with Shader Execution Reordering" : "") + ", opacity micromaps on " + s.MicromapMeshes + " meshes (" +

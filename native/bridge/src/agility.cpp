@@ -3,7 +3,9 @@
 #include "core.hpp"
 #include "diagnostics.hpp"
 #include <windows.h>
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -90,6 +92,36 @@ std::string outcome(const char* state, uint32_t requested, uint32_t system, uint
 std::filesystem::path failure_note() { return std::filesystem::path(core().root)/L"agility-extension-failed.txt"; }
 std::string redirectedKey; // this start's extension runtime and Windows' own, when the request names it
 
+// The GPUs and their driver versions as DirectX records them (HKLM\SOFTWARE\Microsoft\DirectX\{adapter}), for the failure
+// note: another GPU or driver tries the runtime again. From the registry, since loading dxgi.dll this early would stand in
+// for a dxgi.dll proxy in the game folder (ReShade) when the game loads it by name.
+std::string gpu_identity() {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\DirectX", 0, KEY_READ, &root)!=ERROR_SUCCESS) return "GPUs unknown";
+    std::vector<std::string> gpus;
+    for(DWORD i=0;;++i) {
+        wchar_t name[128]; DWORD length=128;
+        if(RegEnumKeyExW(root, i, name, &length, nullptr, nullptr, nullptr, nullptr)!=ERROR_SUCCESS) break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(root, name, 0, KEY_READ, &key)!=ERROR_SUCCESS) continue;
+        DWORD vendor=0, device=0, size=sizeof(DWORD); unsigned long long driver=0;
+        bool ok=RegQueryValueExW(key, L"VendorId", nullptr, nullptr, reinterpret_cast<BYTE*>(&vendor), &size)==ERROR_SUCCESS;
+        size=sizeof(DWORD); ok=ok && RegQueryValueExW(key, L"DeviceId", nullptr, nullptr, reinterpret_cast<BYTE*>(&device), &size)==ERROR_SUCCESS;
+        size=sizeof(driver); RegQueryValueExW(key, L"DriverVersion", nullptr, nullptr, reinterpret_cast<BYTE*>(&driver), &size);
+        RegCloseKey(key);
+        if(!ok || vendor==0x1414) continue; // Microsoft's software adapters
+        char text[64];
+        std::snprintf(text, sizeof text, "%04lX:%04lX driver %llX", static_cast<unsigned long>(vendor), static_cast<unsigned long>(device), driver);
+        gpus.emplace_back(text);
+    }
+    RegCloseKey(root);
+    std::sort(gpus.begin(), gpus.end());
+    gpus.erase(std::unique(gpus.begin(), gpus.end()), gpus.end());
+    std::string all;
+    for(const auto& gpu:gpus) all+=(all.empty() ? "" : ", ")+gpu;
+    return all.empty() ? "GPUs unknown" : "GPU "+all;
+}
+
 // An extension's newer runtime (see agility.hpp): true when the request now names it. line: what was found,
 // empty when no extension ships one that applies.
 bool use_extension_runtime(const std::vector<std::wstring>& extensions, uint32_t* requested, const char** folder,
@@ -107,14 +139,15 @@ bool use_extension_runtime(const std::vector<std::wstring>& extensions, uint32_t
     // Only newer than whatever would serve without it: Windows' own, or the game's file (not only its request).
     if(!newest || newest<=windows || newest<=wanted || newest<=otherwise) return false;
     const std::string offered=prefix+"; an extension ships Agility SDK "+std::to_string(newest)+" ("+narrow(best.wstring())+")";
-    // What the note is about: this runtime, Windows' own and the Windows build (an update tries again).
-    const std::string key=std::to_string(newest)+" on "+std::to_string(windows)+", Windows build "+fact("windows.build");
+    // What the note is about: this runtime, Windows' own, the Windows build and the GPUs with their drivers (a change of any
+    // tries again).
+    const std::string key=std::to_string(newest)+" on "+std::to_string(windows)+", Windows build "+fact("windows.build")+", "+gpu_identity();
     {
         std::ifstream note(failure_note());
         std::string previous;
         if(note && std::getline(note, previous) && previous==key) {
             line=outcome("extension-failed-before", wanted, windows, newest, offered+", but Direct3D 12 could not create a device with it on the last "
-                "start, so it is not used (a newer runtime or Windows update tries it again; so does deleting "+narrow(failure_note().wstring())+")");
+                "start, so it is not used (a newer runtime, a Windows update, another GPU or driver tries it again; so does deleting "+narrow(failure_note().wstring())+")");
             return false;
         }
     }

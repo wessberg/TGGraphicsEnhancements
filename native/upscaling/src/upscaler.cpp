@@ -63,6 +63,7 @@ struct State {
     uint32_t listIndex=0;
     tgb::SharedTexture color, depth, motion, output;
     tgb::SharedTexture guideDiffuse, guideSpecular, guideNormals; // Ray Reconstruction's, from TG Path Tracing
+    tgb::SharedTexture guideHitDistance, guideBeforeTransparency; // its optional inputs, from TG Path Tracing
     std::unique_ptr<Backend> fsr, xess, rr;
     uint32_t lastBackend=0;
     std::array<uint32_t, 4> failures{};
@@ -88,6 +89,7 @@ void release_d3d11() {
     st.linearClamp.Reset(); st.raster.Reset(); st.noDepth.Reset(); st.scratch.Reset();
     st.color=tgb::SharedTexture{}; st.depth=tgb::SharedTexture{}; st.motion=tgb::SharedTexture{}; st.output=tgb::SharedTexture{};
     st.guideDiffuse=tgb::SharedTexture{}; st.guideSpecular=tgb::SharedTexture{}; st.guideNormals=tgb::SharedTexture{};
+    st.guideHitDistance=tgb::SharedTexture{}; st.guideBeforeTransparency=tgb::SharedTexture{};
     st.fence.reset();
     if(st.c11) {
         UINT size=0; void* none=nullptr;
@@ -112,7 +114,7 @@ bool ensure_d3d11() {
         }
         if(!idle) {
             // Work the GPU may still run references these: kept for the rest of the session, never freed.
-            for(auto* t:{&st.color, &st.depth, &st.motion, &st.output, &st.guideDiffuse, &st.guideSpecular, &st.guideNormals}) {
+            for(auto* t:{&st.color, &st.depth, &st.motion, &st.output, &st.guideDiffuse, &st.guideSpecular, &st.guideNormals, &st.guideHitDistance, &st.guideBeforeTransparency}) {
                 tgb::quarantine(t->d11.Get()); tgb::quarantine(t->d12.Get()); tgb::quarantine(t->srv.Get());
                 tgb::quarantine(t->uav.Get()); tgb::quarantine(t->rtv.Get());
             }
@@ -325,6 +327,29 @@ Outcome process_inputs(const TGUP_Frame& f) {
                 copy(srv.Get(), *g.target, f.renderWidth, f.renderHeight);
             }
         }
+        // Its optional inputs, when TG Path Tracing wrote them this frame. Trouble with either leaves both out of this
+        // frame, never the frame itself: the hit distance, a single channel, was once read through the color view,
+        // which has none, and every frame was refused until Ray Reconstruction turned itself off.
+        bool extras=rr && f.specularHitDistance && f.colorBeforeTransparency;
+        if(extras) {
+            try {
+                const struct { uint64_t source; tgb::SharedTexture* target; DXGI_FORMAT format; tgb::ReadAs as; } optional[]={
+                    {f.specularHitDistance, &st.guideHitDistance, DXGI_FORMAT_R16_FLOAT, tgb::ReadAs::Depth}, // one float channel
+                    {f.colorBeforeTransparency, &st.guideBeforeTransparency, DXGI_FORMAT_R16G16B16A16_FLOAT, tgb::ReadAs::Color}};
+                for(const auto& g:optional) {
+                    auto* resource=reinterpret_cast<ID3D11Resource*>(uintptr_t(g.source));
+                    if(!on_game_device(resource)) { extras=false; break; }
+                    D3D11_TEXTURE2D_DESC d{};
+                    auto srv=tgb::typed_srv(st.d11.Get(), resource, g.as, &d);
+                    if(!srv || d.Width<f.renderWidth || d.Height<f.renderHeight) { extras=false; break; }
+                    ensure_shared(*g.target, f.renderWidth, f.renderHeight, g.format);
+                    copy(srv.Get(), *g.target, f.renderWidth, f.renderHeight);
+                }
+            } catch(const std::exception& e) {
+                extras=false;
+                log_throttled(std::string("Ray Reconstruction's optional inputs from TG Path Tracing are left out: ")+e.what());
+            }
+        }
         // D3D11 -> D3D12. From here on the queue signals whatever happens, so the game's context is
         // never left waiting for a value nothing produces.
         const uint64_t produced=st.fence.next();
@@ -338,6 +363,7 @@ Outcome process_inputs(const TGUP_Frame& f) {
             check(st.lists[index]->Reset(st.allocators[index].Get(), nullptr), "Reset upscaler list");
             Inputs in; in.color=st.color.d12.Get(); in.depth=st.depth.d12.Get(); in.motion=st.motion.d12.Get(); in.output=st.output.d12.Get();
             if(rr) { in.diffuseAlbedo=st.guideDiffuse.d12.Get(); in.specularAlbedo=st.guideSpecular.d12.Get(); in.normalRoughness=st.guideNormals.d12.Get(); }
+            if(extras) { in.specularHitDistance=st.guideHitDistance.d12.Get(); in.colorBeforeTransparency=st.guideBeforeTransparency.d12.Get(); }
             in.frame=&f; in.reset=(f.flags&TGUP_FLAG_RESET) || switched;
             const bool ok=backend->record(st.lists[index].Get(), in, error);
             check(st.lists[index]->Close(), "Close upscaler list");

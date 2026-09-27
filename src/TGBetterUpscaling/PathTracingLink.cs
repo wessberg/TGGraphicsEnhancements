@@ -10,7 +10,7 @@ namespace TGBetterUpscaling
     internal static class PathTracingLink
     {
         private static PropertyInfo wanted;
-        private static MethodInfo guides, ran, report;
+        private static MethodInfo guides, ran, report, extraGuides;
         private static int reported = -1;
         private static float nextLookup;
         private static bool broken;
@@ -33,6 +33,7 @@ namespace TGBetterUpscaling
             }
             guides = g; ran = r; wanted = w;
             report = type.GetMethod("Report", BindingFlags.Public | BindingFlags.Static); // not in older versions
+            extraGuides = type.GetMethod("TryGetExtraGuides", BindingFlags.Public | BindingFlags.Static); // nor this
             Session.Log.LogInfo("TG Path Tracing found: while it traces and DLSS is the upscaler, DLSS Ray Reconstruction denoises and upscales its frames.");
             return true;
         }
@@ -67,6 +68,22 @@ namespace TGBetterUpscaling
                 return diffuseAlbedo != 0 && specularAlbedo != 0 && normalRoughness != 0;
             }
             catch (Exception ex) { Break(ex); return false; }
+        }
+
+        // TG Path Tracing's optional inputs for this frame: the traced reflections' hit distance and the color before
+        // transparency, or false (an older TG Path Tracing, or none written this frame).
+        internal static bool TryExtraGuides(uint width, uint height, out ulong specularHitDistance, out ulong colorBeforeTransparency)
+        {
+            specularHitDistance = colorBeforeTransparency = 0;
+            try
+            {
+                if (!Find() || extraGuides == null) return false;
+                var args = new object[] { (int)width, (int)height, 0ul, 0ul };
+                if (!(bool)extraGuides.Invoke(null, args)) return false;
+                specularHitDistance = (ulong)args[2]; colorBeforeTransparency = (ulong)args[3];
+                return specularHitDistance != 0 && colorBeforeTransparency != 0;
+            }
+            catch (Exception ex) { Session.Log.LogWarning("TG Path Tracing's optional Ray Reconstruction inputs failed; they are left out: " + ex.Message); extraGuides = null; return false; }
         }
 
         // Tells TG Path Tracing whether NGX runs Ray Reconstruction on this GPU, once (its Denoising row lists it only then).

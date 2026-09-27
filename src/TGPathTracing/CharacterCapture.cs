@@ -2,7 +2,7 @@
 // Characters in the traced scene: the game draws them with its own GPU skinning (Kandra), which writes every
 // character's posed vertices, in world space, into one buffer each frame (its batch draws them with an identity
 // object-to-world). Just before a frame goes to the native side, the renderers nearest the camera are listed with
-// where their vertices are in that buffer; the native side copies them, rebuilds each one's acceleration structure
+// where their vertices are in that buffer; the native side copies them, updates each one's acceleration structure
 // and traces it with the world, so characters shadow themselves and what is around them, and block the light that
 // bounces there. Each renderer's triangles are read back from the game's index buffer once, without waiting; only
 // the submeshes the game draws (one per material) are kept. Once, a few traced vertices are checked against the
@@ -20,7 +20,11 @@ namespace TGPathTracing
 {
     internal static class CharacterCapture
     {
-        private const float MaxDistance = 30f;       // metres from the camera to a renderer's bounding sphere
+        // Metres from the camera to a renderer's bounding sphere, the nearest first. At 30 m their shadows popped in; past 45 m
+        // characters floated in the sun, where HDRP's cascades used to shadow them. Refitted in between rebuilds (scene.cpp
+        // kCharacterRebuild), a full set of 64 costs a fraction of a millisecond, so the far ones come too where the near ones
+        // leave room.
+        private const float MaxDistance = 100f;
         private const int MaxRenderers = 64;         // the native side's limit (a character is several renderers)
         private const int MaxVertices = 4096 * 128;  // what the native side's texture holds a frame
         private const int MaxSubmeshes = 8;          // TGPT_SKINNED_MATERIALS
@@ -53,6 +57,58 @@ namespace TGPathTracing
             characters.Clear();
             ++generation;
             Traced = 0;
+        }
+
+        // Hair up close is two layers: an alpha-tested first pass (FirstPass_*), which the tracer finds along camera rays
+        // and lights, and a transparent layer HDRP draws over it without depth, which the tracer can't find, so HDRP lit
+        // it with its own lights alone: black outside dialogue, white in a dialogue light. While tracing, a renderer that
+        // has both loses the transparent layer (every HDRP pass of its material but the shadow caster), and its traced
+        // first pass shows; eyebrows, which are only a transparent layer, keep theirs. Put back when tracing stops.
+        private static readonly Dictionary<Material, List<string>> hiddenLayers = new Dictionary<Material, List<string>>();
+        private static bool hideLayers, hideLogged;
+        private static readonly ShaderTagId LightMode = new ShaderTagId("LightMode");
+        internal static void HideHairLayers(bool on)
+        {
+            if (on == hideLayers) return;
+            hideLayers = on;
+            if (!on) RestoreHairLayers();
+        }
+        private static void RestoreHairLayers()
+        {
+            foreach (var entry in hiddenLayers)
+                try { if (entry.Key != null) foreach (var pass in entry.Value) entry.Key.SetShaderPassEnabled(pass, true); } catch { }
+            hiddenLayers.Clear();
+        }
+        private static void HideTransparentHair(Material[] materials, int count)
+        {
+            bool firstPass = false;
+            for (int s = 0; s < count; ++s)
+            {
+                var m = materials[s];
+                if (m != null && m.shader != null && m.shader.name.IndexOf("Hair", StringComparison.OrdinalIgnoreCase) >= 0 && !SceneCapture.CharacterLeftOut(m)) firstPass = true;
+            }
+            if (!firstPass) return;
+            for (int s = 0; s < count; ++s)
+            {
+                var m = materials[s];
+                if (m == null || m.shader == null || hiddenLayers.ContainsKey(m)) continue;
+                if (m.shader.name.IndexOf("Hair", StringComparison.OrdinalIgnoreCase) < 0 || !SceneCapture.CharacterLeftOut(m)) continue;
+                var passes = new List<string>();
+                for (int p = 0; p < m.shader.passCount; ++p)
+                {
+                    string mode = m.shader.FindPassTagValue(p, LightMode).name;
+                    if (string.IsNullOrEmpty(mode) || mode == "ShadowCaster" || passes.Contains(mode) || !m.GetShaderPassEnabled(mode)) continue;
+                    m.SetShaderPassEnabled(mode, false);
+                    passes.Add(mode);
+                }
+                hiddenLayers[m] = passes;
+                if (!hideLogged)
+                {
+                    hideLogged = true;
+                    Session.Log.LogInfo("Characters: hair's transparent layer (material \"" + m.name + "\", passes " + string.Join(", ", passes.ToArray()) +
+                        ") is hidden while tracing; its alpha-tested first pass shows, lit by the tracer");
+                }
+            }
         }
 
         // This frame's characters to the native side, just before the frame itself.
@@ -110,6 +166,7 @@ namespace TGPathTracing
                     int n = Math.Min(drawn, MaxSubmeshes);
                     var leftOut = new bool[n];
                     for (int s = 0; s < n; ++s) leftOut[s] = SceneCapture.CharacterLeftOut(materials[s]);
+                    if (hideLayers) HideTransparentHair(materials, n);
                     var character = Find(c.renderer, mesh, leftOut, data.sharedStartVertex);
                     if (character.Handle <= 0) continue;
                     var instance = new NativeSkinnedInstance { Mesh = character.Handle, FirstVertex = data.instanceStartVertex, VertexCount = mesh.vertexCount };

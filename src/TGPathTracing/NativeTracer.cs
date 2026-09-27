@@ -7,19 +7,32 @@ namespace TGPathTracing
 {
     internal static class Tgpt
     {
-        internal const uint Abi = 0x00010600;
+        internal const uint Abi = 0x00010F00;
         internal const uint FrameReset = 1, FrameGuides = 2;
         internal const uint OptionNoSpatial = 1, OptionNoTemporal = 2, OptionNoDenoiser = 4, OptionNoSpecular = 8, OptionRayReconstruction = 16;
-        internal const uint OptionRayRegeneration = 64;
-        internal const uint FeatureDxr12 = 1, FeatureSer = 2, FeatureRayRegeneration = 4, FeatureRayRegenerationActive = 8;
-        internal const int EventTrace = 1, EventComposite = 2;
-        internal const uint MaterialDoubleSided = 1, MaterialAlphaTest = 2, MaterialVertexColor = 4, MaterialAlphaTile = 8;
-        internal const uint InstanceAlphaTest = 1, InstanceHidden = 2, InstanceStandIn = 4;
+        internal const uint OptionRayRegeneration = 64, OptionNoPassThrough = 128, OptionDiVisibility = 256, OptionSpatialFeedback = 512, OptionNrd = 1024, OptionNoGiBoiling = 32768;
+        internal const uint OptionNoRadianceCache = 65536;
+        internal const uint OptionGlossyReflections = 262144;
+        internal const uint OptionGiVisibility = 2097152; // TGPT_OPTION_GI_VISIBILITY: the Crevice Light row
+        internal const uint OptionEmissiveLights = 131072;
+        internal const uint OptionNoHdrpShadows = 4194304, LightHdrpShadows = 0x10000;
+        internal const uint OptionGiOwnRays = 524288, OptionDiNoReuse = 1048576; // the capture's comparison of what boils
+        internal const uint LightNoSpecular = 0x20000;
+        internal const uint FeatureDxr12 = 1, FeatureSer = 2, FeatureRayRegeneration = 4, FeatureRayRegenerationActive = 8, FeatureNrd = 16, FeatureNrdActive = 32;
+        internal const int EventTrace = 1, EventComposite = 2, EventShadowDetail = 3, EventWater = 4;
+        internal const uint MaterialDoubleSided = 1, MaterialAlphaTest = 2, MaterialVertexColor = 4, MaterialAlphaTile = 8, MaterialCameraOnly = 16, MaterialHdrpShaded = 32, MaterialGlass = 64;
+        internal const uint MaterialMaskTile = 1024;
+        internal const uint MaterialEmissiveAlbedo = 128;
+        internal const uint MaterialTranslucent = 256;
+        internal const uint MaterialThinCloth = 512;
+        internal const uint MaterialStrands = 4096;
+        internal const uint MaterialSways = 8192;
+        internal const uint InstanceAlphaTest = 1, InstanceHidden = 2, InstanceStandIn = 4, InstanceMoving = 16;
         internal const uint NoStream = 0xFFFFFFFFu;
         internal const uint LightPoint = 0, LightSpot = 1, LightDirectional = 2;
     }
     // TGPT_VIEW_*: what the composite shows instead of the lit image.
-    public enum DebugView { None = 0, Albedo = 1, Normals = 2, Coverage = 3, Materials = 4, Indirect = 5, IndirectRaw = 6, Direct = 7 }
+    public enum DebugView { None = 0, Albedo = 1, Normals = 2, Coverage = 3, Materials = 4, Indirect = 5, IndirectRaw = 6, Direct = 7, Surfaces = 8, Specular = 9, Emissive = 10 }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     internal struct NativeSubmesh { internal uint IndexStart, IndexCount, BaseVertex, Topology; }
@@ -56,8 +69,9 @@ namespace TGPathTracing
         internal int AlbedoTile, EmissiveTile;
         internal float Smoothness, AlphaCutoff;
         internal uint Flags;
-        internal int AlphaTile;             // with MaterialAlphaTile: a RegisterAlphaTexture result
-        internal uint Reserved1, Reserved2;
+        internal int AlphaTile;             // with MaterialAlphaTile: a RegisterAlphaTexture result (AlphaCutoff then compares its coverage)
+        internal int MaskTile;              // with MaterialMaskTile: a RegisterMaskTexture result
+        internal uint MaskRemap;            // metallic's low and high end, then smoothness's, 8 bits each, low first
     }
     // TGPT_SkinnedInstance: a character this frame.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -86,7 +100,8 @@ namespace TGPathTracing
         internal float PositionX, PositionY, PositionZ; internal uint Type;
         internal float ColorR, ColorG, ColorB, Range;
         internal float DirectionX, DirectionY, DirectionZ, Radius;
-        internal float AngleScale, AngleOffset; internal uint Id, Flags;
+        internal float AngleScale, AngleOffset; internal uint Id, Flags; // Flags: 1 + its cookie, 0 without one
+        internal float UpX, UpY, UpZ, CookieScale;
     }
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     internal unsafe struct NativeFrame
@@ -101,14 +116,17 @@ namespace TGPathTracing
         internal fixed float PrevCameraPosition[4];
         internal fixed float SunDirection[4];
         internal fixed float SunColor[4];
-        internal uint FrameIndex, Bounces, SpatialSamples, TemporalCap;
+        internal uint FrameIndex, Bounces, SpatialSamples, GiHistory;
         internal uint Options, RaysPerPixel;
         internal float ReflectionBoost;
-        internal float ClampExposure;
+        internal float TracedGain;
         internal float MaxRayDistance, SkyIntensity, IndirectColor;
+        internal uint DiHistory, ThickProfiles;
         internal fixed float View[16];
         internal fixed float NonJitteredProj[16];
         internal fixed float Jitter[4];
+        internal fixed float Fog[4];
+        internal fixed float Forward[4];
     }
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     internal struct NativeStatus
@@ -124,6 +142,11 @@ namespace TGPathTracing
         internal int LastError; internal uint RenderWidth, RenderHeight, Composited;
         internal float D3d11Ms, FlushMs, WaitMs, RecordMs;
         internal uint Features, MicromapMeshes, MicromapInstances, MicromapsWaiting;
+        internal float CameraLight, CameraRadianceR, CameraRadianceG, CameraRadianceB;
+        internal float TracedLog2Mid, TracedLog2High;
+        internal uint TracedSamples, PickSurface;
+        internal uint PickInstance, PickMaterial; internal float PickDistance; internal uint PickFound;
+        internal uint WaterTraced, WaterApplied; // render event 4's frames, both wrapping
     }
 
     // DLSS Ray Reconstruction's guides (TGPT_Guides).
@@ -132,7 +155,8 @@ namespace TGPathTracing
     {
         internal uint Size, Abi, Width, Height;
         internal ulong DiffuseAlbedo, SpecularAlbedo, NormalRoughness; // ID3D11Resource*
-        internal uint FrameIndex, Reserved;
+        internal uint FrameIndex, ExtrasFrameIndex;
+        internal ulong SpecularHitDistance, ColorBeforeTransparency;   // ID3D11Resource*, written by the composite
     }
 
     // The native side, bound by GetProcAddress once TG Graphics Bridge has loaded it.
@@ -147,6 +171,8 @@ namespace TGPathTracing
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int RegisterSkinnedMeshFn(ref NativeCpuMeshDesc mesh, [In] uint[] submeshStarts, uint submeshCount);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetSkinnedFn(ulong buffer, uint stride, [In] NativeSkinnedInstance[] instances, uint count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int RegisterTextureFn(ulong key, ulong texture);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int RegisterAlphaTextureFn(ulong key, ulong texture, float cutoff);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int RegisterMaskTextureFn(ulong key, ulong texture, uint channels);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetMaterialsFn(uint first, [In] NativeMaterial[] materials, uint count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetSceneFn([In] NativeInstance[] instances, uint count, [In] uint[] indices, uint indexCount);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetLightsFn([In] NativeLight[] lights, uint count);
@@ -154,16 +180,24 @@ namespace TGPathTracing
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int ClearFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SubmitFrameFn(ref NativeFrame frame);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetCompositeFn(uint sequence, ulong color);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetShadowDetailFn(uint request, ulong color, float strength);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetWaterFn(uint sequence, ulong reflections, ulong depth, ulong normal, float reflectionMultiplier);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetDiffusionProfilesFn(float[] profiles, uint count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr GetEventFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetGuidesFn(ref NativeGuides guides);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern IntPtr GetModuleHandleW(string name);
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)] private static extern IntPtr GetProcAddress(IntPtr module, string name);
 
-        private ReadStatusFn readStatus; private TextFn unsupportedReason;
-        private RegisterMeshFn registerMesh; private RegisterCpuMeshFn registerCpuMesh; private RegisterTextureFn registerTexture, registerAlphaTexture;
+        private ReadStatusFn readStatus; private TextFn unsupportedReason, stageTimes;
+        private RegisterMeshFn registerMesh; private RegisterCpuMeshFn registerCpuMesh; private RegisterTextureFn registerTexture, registerCookie;
+        private RegisterAlphaTextureFn registerAlphaTexture;
+        private RegisterMaskTextureFn registerMaskTexture;
         private RegisterSkinnedMeshFn registerSkinnedMesh; private SetSkinnedFn setSkinned;
         private SetMaterialsFn setMaterials; private SetSceneFn setScene; private SetLightsFn setLights; private SetSkyFn setSky;
         private ClearFn clearScene; private SubmitFrameFn submitFrame; private SetCompositeFn setComposite; private GetGuidesFn getGuides;
+        private SetShadowDetailFn setShadowDetail;
+        private SetWaterFn setWater;
+        private SetDiffusionProfilesFn setDiffusionProfiles, setSkinTransmission;
         internal IntPtr RenderEvent { get; private set; }
         internal bool Connected => readStatus != null && submitFrame != null && RenderEvent != IntPtr.Zero;
         internal string Detail { get; private set; } = NativeName + " is not loaded. It starts through TG Graphics Bridge: check BepInEx/TGGraphicsBridge/Autoload.log " +
@@ -172,8 +206,8 @@ namespace TGPathTracing
         internal static unsafe void Validate()
         {
             if (Marshal.SizeOf(typeof(NativeSubmesh)) != 16 || Marshal.SizeOf(typeof(NativeMeshDesc)) != 144 || Marshal.SizeOf(typeof(NativeCpuMeshDesc)) != 56 ||
-                Marshal.SizeOf(typeof(NativeMaterial)) != 80 || Marshal.SizeOf(typeof(NativeInstance)) != 64 || Marshal.SizeOf(typeof(NativeLight)) != 64 ||
-                sizeof(NativeFrame) != 528 || Marshal.SizeOf(typeof(NativeStatus)) != 152 || Marshal.SizeOf(typeof(NativeGuides)) != 48 ||
+                Marshal.SizeOf(typeof(NativeMaterial)) != 80 || Marshal.SizeOf(typeof(NativeInstance)) != 64 || Marshal.SizeOf(typeof(NativeLight)) != 80 ||
+                sizeof(NativeFrame) != 568 || Marshal.SizeOf(typeof(NativeStatus)) != 208 || Marshal.SizeOf(typeof(NativeGuides)) != 64 ||
                 Marshal.SizeOf(typeof(NativeSkinnedInstance)) != 96)
                 throw new InvalidOperationException("TG Path Tracing native ABI packing mismatch.");
         }
@@ -193,18 +227,25 @@ namespace TGPathTracing
                 uint abi = Bind<GetAbiFn>(module, "TGPT_GetAbiVersion")();
                 if (abi != Tgpt.Abi) { Detail = "Native ABI 0x" + abi.ToString("X8") + " does not match this plugin's 0x" + Tgpt.Abi.ToString("X8") + ": reinstall TG Path Tracing."; return false; }
                 unsupportedReason = Bind<TextFn>(module, "TGPT_GetUnsupportedReason");
+                stageTimes = Bind<TextFn>(module, "TGPT_GetStageTimes");
                 registerMesh = Bind<RegisterMeshFn>(module, "TGPT_RegisterMesh");
                 registerCpuMesh = Bind<RegisterCpuMeshFn>(module, "TGPT_RegisterCpuMesh");
                 registerSkinnedMesh = Bind<RegisterSkinnedMeshFn>(module, "TGPT_RegisterSkinnedMesh");
                 setSkinned = Bind<SetSkinnedFn>(module, "TGPT_SetSkinned");
                 registerTexture = Bind<RegisterTextureFn>(module, "TGPT_RegisterTexture");
-                registerAlphaTexture = Bind<RegisterTextureFn>(module, "TGPT_RegisterAlphaTexture");
+                registerAlphaTexture = Bind<RegisterAlphaTextureFn>(module, "TGPT_RegisterAlphaTexture");
+                registerMaskTexture = Bind<RegisterMaskTextureFn>(module, "TGPT_RegisterMaskTexture");
+                registerCookie = Bind<RegisterTextureFn>(module, "TGPT_RegisterCookie");
                 setMaterials = Bind<SetMaterialsFn>(module, "TGPT_SetMaterials");
                 setScene = Bind<SetSceneFn>(module, "TGPT_SetScene");
                 setLights = Bind<SetLightsFn>(module, "TGPT_SetLights");
                 setSky = Bind<SetSkyFn>(module, "TGPT_SetSky");
                 clearScene = Bind<ClearFn>(module, "TGPT_ClearScene");
                 setComposite = Bind<SetCompositeFn>(module, "TGPT_SetComposite");
+                setShadowDetail = Bind<SetShadowDetailFn>(module, "TGPT_SetShadowDetail");
+                setWater = Bind<SetWaterFn>(module, "TGPT_SetWater");
+                setDiffusionProfiles = Bind<SetDiffusionProfilesFn>(module, "TGPT_SetDiffusionProfiles");
+                setSkinTransmission = Bind<SetDiffusionProfilesFn>(module, "TGPT_SetSkinTransmission");
                 getGuides = Bind<GetGuidesFn>(module, "TGPT_GetGuides");
                 var submit = Bind<SubmitFrameFn>(module, "TGPT_SubmitFrame");
                 var read = Bind<ReadStatusFn>(module, "TGPT_ReadStatus");
@@ -218,14 +259,17 @@ namespace TGPathTracing
         }
         internal bool ReadStatus(out NativeStatus status)
         {
-            status = new NativeStatus { Size = 152, Abi = Tgpt.Abi };
+            status = new NativeStatus { Size = 208, Abi = Tgpt.Abi };
             return Connected && readStatus(ref status) == 0;
         }
-        internal string UnsupportedReason()
+        internal string UnsupportedReason() => Text(unsupportedReason);
+        // What each stage of a frame costs the GPU, averaged over about the last second (the F8 report).
+        internal string StageTimes() => Text(stageTimes);
+        private static string Text(TextFn read)
         {
-            if (unsupportedReason == null) return "";
+            if (read == null) return "";
             var buffer = new byte[1024];
-            int length = unsupportedReason(buffer, (uint)buffer.Length);
+            int length = read(buffer, (uint)buffer.Length);
             return length > 0 ? Encoding.UTF8.GetString(buffer, 0, Math.Min(length, buffer.Length - 1)) : "";
         }
         internal int RegisterMesh(ref NativeMeshDesc mesh) => Connected ? registerMesh(ref mesh) : -100;
@@ -250,7 +294,10 @@ namespace TGPathTracing
         internal int SetSkinned(IntPtr buffer, uint stride, NativeSkinnedInstance[] instances, uint count) =>
             Connected ? setSkinned(unchecked((ulong)buffer.ToInt64()), stride, instances ?? new NativeSkinnedInstance[0], count) : -100;
         internal int RegisterTexture(ulong key, IntPtr texture) => Connected ? registerTexture(key, unchecked((ulong)texture.ToInt64())) : -100;
-        internal int RegisterAlphaTexture(ulong key, IntPtr texture) => Connected ? registerAlphaTexture(key, unchecked((ulong)texture.ToInt64())) : -100;
+        internal int RegisterAlphaTexture(ulong key, IntPtr texture, float cutoff) => Connected ? registerAlphaTexture(key, unchecked((ulong)texture.ToInt64()), cutoff) : -100;
+        // channels: the texture's channel (0 red to 3 alpha) holding metallic, and smoothness's two bits above it.
+        internal int RegisterMaskTexture(ulong key, IntPtr texture, uint channels) => Connected ? registerMaskTexture(key, unchecked((ulong)texture.ToInt64()), channels) : -100;
+        internal int RegisterCookie(ulong key, IntPtr texture) => Connected ? registerCookie(key, unchecked((ulong)texture.ToInt64())) : -100;
         internal int SetMaterials(uint first, NativeMaterial[] materials, uint count) => Connected ? setMaterials(first, materials, count) : -100;
         internal int SetScene(NativeInstance[] instances, uint count, uint[] indices, uint indexCount) => Connected ? setScene(instances, count, indices, indexCount) : -100;
         internal int SetLights(NativeLight[] lights, uint count) => Connected ? setLights(lights, count) : -100;
@@ -258,9 +305,22 @@ namespace TGPathTracing
         internal int ClearScene() => Connected ? clearScene() : -100;
         internal int SubmitFrame(ref NativeFrame frame) => Connected ? submitFrame(ref frame) : -100;
         internal int SetComposite(uint sequence, IntPtr color) => Connected ? setComposite(sequence, unchecked((ulong)color.ToInt64())) : -100;
+        internal int SetShadowDetail(uint request, IntPtr color, float strength) =>
+            Connected && setShadowDetail != null ? setShadowDetail(request, unchecked((ulong)color.ToInt64()), strength) : -100;
+        // Traced reflections on water for render event 4: HDRP's transparent SSR texture, its depth-stencil and normal buffers
+        // at that step, and its reflection lighting multiplier for the frame.
+        internal int SetWater(uint sequence, IntPtr reflections, IntPtr depth, IntPtr normal, float reflectionMultiplier) =>
+            Connected && setWater != null ? setWater(sequence, unchecked((ulong)reflections.ToInt64()), unchecked((ulong)depth.ToInt64()),
+                unchecked((ulong)normal.ToInt64()), reflectionMultiplier) : -100;
+        // Per diffusion profile: Burley's shape per channel (per metre) and the filter radius in metres (pt_sss.hlsl).
+        internal int SetDiffusionProfiles(float[] profiles, uint count) =>
+            Connected && setDiffusionProfiles != null ? setDiffusionProfiles(profiles, count) : -100;
+        // Per diffusion profile: HDRP's transmission tint / 4, thickness remap start (mm), shape per mm, remap span (mm).
+        internal int SetSkinTransmission(float[] profiles, uint count) =>
+            Connected && setSkinTransmission != null ? setSkinTransmission(profiles, count) : -100;
         internal bool ReadGuides(out NativeGuides guides)
         {
-            guides = new NativeGuides { Size = 48, Abi = Tgpt.Abi };
+            guides = new NativeGuides { Size = 64, Abi = Tgpt.Abi };
             return Connected && getGuides != null && getGuides(ref guides) == 0;
         }
     }

@@ -133,3 +133,41 @@ Reviewed 2026-09-22. The runtimes are the signed binaries shipped in the release
 - The game's `Awaken.TG.Main.Settings.Graphics.UpScaling` (the Upscaling row, its preference key
   `UpScalingType` and quality divisors) and `UpScalingController` (camera setup per upscaler), read
   from the game's `TG.Main.dll`.
+
+## TG Path Tracing references (ReSTIR, Ray Reconstruction, Ray Regeneration)
+
+Reviewed 2026-09-26.
+
+- NVIDIA RTXDI runtime library 3.1 ("3.1 Update", commit f12037fa8e97ebc08e9e3edfd2de528ed1772a4b,
+  2026-09-03), fetched into the gitignored `RTXDI-Library-3.1/` and compiled into
+  TGPathTracing.Native.dll, never committed: https://github.com/NVIDIA-RTX/RTXDI-Library. NVIDIA RTX
+  SDKs License (LICENSE.txt): distributable "as incorporated in object code format into a software
+  application", no source redistribution, and this notice:
+  This software contains source code provided by NVIDIA Corporation.
+  Integration guide and bridge (RAB_*) reference:
+  https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/Integration.md
+- NVIDIA NRD (Real-Time Denoisers) 4.17.3 (tag v4.17.3), fetched into the gitignored `NRD-SDK-4.17.3/` and compiled
+  into TGPathTracing.Native.dll as a static library with its shaders embedded as DXIL (RELAX's diffuse denoiser for
+  the bounced light: the Denoising choice NRD), never committed: https://github.com/NVIDIA-RTX/NRD. Its CMake downloads
+  ShaderMake, MathLib and DXC when it configures (MathLib and ShaderMake's blob reader are linked in: MIT, their notices
+  ship with the DLL). NVIDIA RTX SDKs License (LICENSE.txt) as for RTXDI above: object code only, no source
+  redistribution, the same notice (packaged as `Native/Notices/LICENSE-NVIDIA-RTX-SDKs.txt`); its limit to systems with
+  NVIDIA GPUs covers DLSS and NGX, not NRD. CMakeLists.txt refuses another release than 4.17.
+  Inputs and settings: the repository's README.md (INPUTS) and Include/NRDSettings.h. DOOM: The Dark Ages falls back
+  to "Nvidia's real-time denoiser" when Ray Reconstruction is off:
+  https://www.xda-developers.com/nvidia-doom-dark-ages-ray-reconstruction-path-tracing/
+- DLSS-RR Integration Guide (DLSS SDK 310.9.1, `doc/DLSS-RR Integration Guide.pdf`): section 3.5
+  (independent samples; ReSTIR recommended with randomized temporal reuse and permutation sampling),
+  3.7 (exposure, auto exposure and sharpening not supported).
+- AMD FSR Ray Regeneration 1.2.0 (`Kits/FidelityFX/docs/techniques/denoising.md`, FidelityFX SDK
+  2.3.0): section 5.1.2 (white noise; ReSTIR's cross-sample dependencies need permutation sampling or
+  randomized temporal reuse).
+- RTX Remix (dxvk-remix) presets for Ray Reconstruction, `rtx_options.cpp` `updatePathTracerPreset`:
+  https://github.com/NVIDIAGameWorks/dxvk-remix
+- Wyman et al., "A Gentle Introduction to ReSTIR" (SIGGRAPH 2023 course notes):
+  https://intro-to-restir.cwyman.org/presentations/2023ReSTIR_Course_Notes.pdf; Wyman and Panteleev,
+  "Rearchitecting Spatiotemporal Resampling for Production" (HPG 2021).
+- Chiang, Li and Burley, "Taming the Shadow Terminator" (SIGGRAPH 2019 talk):
+  https://media.disneyanimation.com/technology/publications/2019/TamingtheShadowTerminator.pdf
+- HDRP 17's `DLSSPass` and `HDRenderPipeline` (pre-exposure `Mathf.Clamp(hdCamera.GpuExposureValue(),
+  0.2f, 2f)` handed to DLSS), read from the game's `Unity.RenderPipelines.HighDefinition.Runtime.dll`.

@@ -108,17 +108,18 @@ vertex and index buffers in Unity's layout, a texture, materials, a point light,
 cubemap), rasterizes it into targets laid out as HDRP's GBuffer, and traces and composites it through
 the same render events; it checks the images and writes them as PNGs.
 
-Path Tracing is Full or Off (the Path Tracing config section, also in FoA Mod Manager; Insert turns it on
+Path Tracing is On or Off (the Path Tracing config section, also in FoA Mod Manager; Insert turns it on
 and off, Shift+Insert cycles the debug views; F8 writes to the log what is under the crosshair and the
-lights reaching it). Full lights deferred surfaces entirely by the tracer: ReSTIR DI (Bitterli et al.
+lights reaching it). On lights deferred surfaces entirely by the tracer: ReSTIR DI (Bitterli et al.
 2020) over the point and spot lights plus the sun, with traced shadows; ReSTIR GI (Ouyang et al. 2021)
 with temporal and spatial reuse for the light that bounces off the scene, each path vertex sampling the
-sun, one light and, with two bounces (the default), the sky; and traced reflections. HDRP's own indirect
+sun and the lights, and the path ending on a radiance cache that carries the light of every bounce after its
+last (one bounce by default), the sky's too; and traced reflections. HDRP's own indirect
 diffuse light (probes, lightmaps, SSGI) is off while tracing, and only lights that stand for something that
 emits light (a flame, a candle, a lamp, a magic effect) are traced: the ones placed to fake the light raster
 rendering lacks (fill lights, the light that follows the player) are left out. HDRP's emission is kept. Forward-lit
 surfaces (hair, eyes), transparents, water, particles and fog keep HDRP's lighting, with the game's own
-ambient light.
+ambient light; hair and eyes darkened by the traced shadows of the lights HDRP casts no shadows for.
 
 How it fits into HDRP's frame: a Harmony prefix on HDRP's opaque `RenderSSR`, which runs right after
 the GBuffer, records a custom pass that hands GBuffers 0 to 3, depth with stencil, motion vectors and
@@ -137,9 +138,12 @@ Vegetation Studio Pro places (with alpha-tested leaves), and Unity terrains (as 
 LOD per group or instance. Each mesh is read back from its GPU buffers once, converted to compact
 positions and UVs on a worker thread and given its own bottom-level acceleration structure. Materials
 keep their base color and texture (baked into a 64x64 tile of a shared atlas), emission and alpha
-testing. Lights are HDRP's point and spot lights and its sun, in HDRP's units; rays that escape
+testing, and their metallic and smoothness, texel by texel from the mask map where the tracer knows how the
+material's shader reads it (HDRP Lit's and the game's own); a metal drawn forward has no diffuse color, as in
+HDRP's metallic workflow, and where a path meets one it sends its reflected light on as diffuse light (its base color). Lights are HDRP's point and spot lights and its sun, in HDRP's units; rays that escape
 sample HDRP's sky reflection. Not traced, though HDRP still draws and lights them: statically batched
-renderers, particles and water. They cast no traced shadows and bounce no traced light.
+renderers, particles and water (rays pass through it; its reflections are traced, see Water Reflections). They
+cast no traced shadows and bounce no traced light.
 
 Where the GPU and driver offer DirectX Raytracing 1.2 (Shader Model 6.9 and raytracing tier 1.2, for
 example a GeForce RTX 40 or 50 with a current driver), every pass runs its Shader Model 6.9 build:
@@ -152,31 +156,48 @@ anything loads Direct3D 12, when it is newer than both Windows' runtime and the 
 The micromaps change no pixel: outside the game the same frames with and without them are identical.
 
 The options are rows of the game's Video settings, after the upscaling and frame generation rows:
-Path Tracing (Off, Full) and, nested under it while it is on, Denoising, Rays Per Pixel, Bounces,
-Indirect Color, Reflections, Spatial Samples, Ray Distance, Scene Radius, Sky Intensity, Reflection Boost
-and Debug View. FoA Mod Manager lists
-exactly the same rows; the hotkeys are in the config only.
+Path Tracing (Off, On) and, nested under it while it is on, Denoising, Exposure, Dark Adaptation, Shadow Detail,
+Rays Per Pixel, Bounces, Radiance Cache, Indirect Color, Reflections, Water Reflections, Hair Shadows, Fill Light Fog, Spatial Samples,
+Boiling Filter, Emissive Lights, Crevice Light, Ray Distance, Scene Radius, Sky Intensity, Reflection Boost and Debug View.
+FoA Mod Manager lists exactly the same rows; the hotkeys are in the config only.
 
-The Denoising row lists what this PC runs: None; Built-in, the tracer's own SVGF-style denoiser; Ray
-Regeneration, AMD's FSR Ray Regeneration (Radeon RX 9000, AMD's signed DLLs in `Native/FidelityFX`); and
-Ray Reconstruction, NVIDIA's DLSS Ray Reconstruction (RTX, with TG Better Upscaling installed, until
-NVIDIA's library says it doesn't run here), which denoises and upscales in one step while DLSS is the
-Upscaling setting (with another upscaler the built-in denoiser serves, and the row's tooltip says so).
-Denoising starts on the best one: Ray Reconstruction, then Ray Regeneration, then Built-in; Restore
+Water Reflections (On by default): the game's water (HDRP's water system) takes its reflections from HDRP's
+screen-space reflections, which find only what is on screen, and fills the rest from reflection probes and the
+sky. Right after that step the traced reflection replaces all of it, what HDRP's screen-space step found too (trees
+overhead, the bank behind the camera, grass within 20 m: rays from the water into the traced scene), while the water's
+shading (Fresnel, foam, refraction, fog) stays the game's. They are traced from HDRP's water depth and wave normals a frame late, averaged over frames and
+filtered over a few pixels, since no denoiser sees the water; leaves and grass in them are lit through from
+behind as on screen. Liquids that take HDRP's screen-space reflections get the same.
+
+The Denoising row lists what this PC runs: None; NRD, NVIDIA's Real-Time Denoisers (RELAX, on any GPU with
+DirectX Raytracing); Ray Regeneration, AMD's FSR Ray Regeneration (Radeon RX 9000, AMD's signed DLLs in
+`Native/FidelityFX`); and Ray Reconstruction, NVIDIA's DLSS Ray Reconstruction (RTX, with TG Better Upscaling
+installed, until NVIDIA's library says it doesn't run here), which denoises and upscales in one step while DLSS is
+the Upscaling setting (with another upscaler NRD serves, and the row's tooltip says so; so it does while Ray
+Regeneration can't). Denoising starts on the best one: Ray Reconstruction, then Ray Regeneration, then NRD; Restore
 Defaults picks the same. Until the player picks another it follows the PC (a new GPU); a pick of their own
 stays while the PC runs it. Ray Reconstruction works alongside RenoDX's DLSS 5.
 
 Indirect Color scales how much color the bounced light keeps from the surfaces it bounced off, at the same
 brightness: 1 as traced, 0 grey, more exaggerates the tint (a red cloth reddening the floor beside it); the
-default is 2. Reflection Boost makes every surface glossier and more reflective than the game made it: 0 leaves the materials as they are, the default 0.15 adds a little, 1 turns them nearly into mirrors to
-judge the traced reflections.
+default is 3. Reflection Boost makes every surface glossier and more reflective than the game made it: 0 leaves the
+materials as they are, the default 0.1 adds a little, 1 turns them nearly into mirrors to judge the traced reflections.
+
+Emissive Lights (on by default) samples glowing surfaces (embers, lit windows, magic crystals) as lights, as it
+does lamps, so the light they cast is far less noisy; off, only the rays that happen to meet them see it. A
+glowing surface right around a kept light (a lantern's glass round its candle) lights nothing itself: the light
+has its light. The Emissive debug view shows which glowing surface is which.
 
 Characters are traced too. The game skins them on the GPU (its Kandra renderer) into one buffer each frame;
-the renderers within 30 m of the camera (at most 64, a character being several) are copied from it to
-Direct3D 12 every frame and their acceleration structures rebuilt, so they shadow themselves and the floor
-and block the light that bounces around them. Their triangles are read back once (only the submeshes the game
-draws), with their texture coordinates, so hair and torn cloth edges are cut out by their texture's alpha as
-HDRP draws them (skin never is); transparent parts and eyes are left out of the traced scene.
+the renderers within 100 m of the camera (the nearest first, at most 64, a character being several) are copied
+from it to Direct3D 12 every frame and their acceleration structures refitted to the pose (rebuilt every fourth
+frame), so they shadow themselves and the floor and block the light that bounces around them. Their triangles are
+read back once (only the submeshes the game draws), with their texture coordinates, so torn cloth edges are cut
+out by their texture's alpha as HDRP draws them (skin never is), and hair stops a ray as much as its strands
+cover a texel, casting soft shadows; transparent parts are left out of the traced scene, and eyes are seen by camera
+rays only. Thin skin lit from behind (ears, nostrils, fingers) lets through the light HDRP's transmission does, where
+the traced geometry is thin enough, and hair and eyes, which HDRP shades itself, take the traced shadows of the
+lights HDRP casts none for (Hair Shadows).
 Rays start from the surfaces HDRP drew, which can lie a few centimetres inside the traced meshes (an arch drawn
 smoother than its triangles): a ray that first meets the inside of a mesh within about 15 cm passes out through
 it rather than finding no light. Lamps cast shadows as sharp as their HDRP Radius makes them.
@@ -347,6 +368,7 @@ are git-ignored):
 | `XeSS-SDK-3.0.2` | Intel XeSS SDK 3.0.2 release archive |
 | `AntiLag2-SDK-2.0.0a` | AMD Anti-Lag 2 SDK 2.0.0a release archive |
 | `DLSS-SDK-310.9.1` | `lib/Windows_x86_64/rel/nvngx_dlss.dll` and `LICENSE.txt` from NVIDIA's DLSS SDK 310.9.1 |
+| `RTXDI-Library-3.1` | NVIDIA's RTXDI runtime library 3.1 (`git clone https://github.com/NVIDIA-RTX/RTXDI-Library`), compiled into TG Path Tracing |
 
 CMake fetches MinHook v1.3.4 unless `-MinHookRoot` is given. The game needs the matching BepInEx
 already installed. `docs/SOURCES.md` links every SDK release.
@@ -443,3 +465,7 @@ input path.
 
 The source is MIT-licensed. The NVIDIA, AMD and Intel runtimes in a package keep their own licenses,
 which ship next to them; see `LICENSES/THIRD_PARTY.md`.
+
+TG Path Tracing's native DLL contains NVIDIA's RTXDI library, under the NVIDIA RTX SDKs License, which allows it
+in object code only; it is never part of this repository. This software contains source code provided by NVIDIA
+Corporation.

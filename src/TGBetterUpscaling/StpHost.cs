@@ -586,6 +586,8 @@ namespace TGBetterUpscaling
                 {
                     Fallback(ctx, source, "TG Path Tracing wrote no Ray Reconstruction guides this frame"); return;
                 }
+                if (rr && !PathTracingLink.TryExtraGuides(frame.RenderWidth, frame.RenderHeight, out frame.SpecularHitDistance, out frame.ColorBeforeTransparency))
+                    frame.SpecularHitDistance = frame.ColorBeforeTransparency = 0;
                 int result = Session.Upscaler.SubmitFrame(ref frame);
                 if (result != 0) { Fallback(ctx, source, "the native side refused the frame (" + result + ")"); return; }
                 // One event: the request carries its destination, so the native side upscales and writes it.

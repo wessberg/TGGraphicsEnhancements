@@ -89,6 +89,13 @@ TGPT_EXPORT int32_t TGPT_CALL TGPT_ReadStatus(TGPT_Status* out) {
     if(!out || out->size!=sizeof(TGPT_Status) || out->abi!=TGPT_ABI) return -1;
     try { auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex); *out=e.status; return 0; } catch(...) { return -2; }
 }
+TGPT_EXPORT int32_t TGPT_CALL TGPT_GetStageTimes(char* buffer, uint32_t size) {
+    try {
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        if(buffer && size) { const size_t n=std::min<size_t>(e.stageTimes.size(), size-1); std::memcpy(buffer, e.stageTimes.data(), n); buffer[n]=0; }
+        return int32_t(e.stageTimes.size());
+    } catch(...) { return -2; }
+}
 TGPT_EXPORT int32_t TGPT_CALL TGPT_GetUnsupportedReason(char* buffer, uint32_t size) {
     try {
         auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
@@ -211,7 +218,7 @@ TGPT_EXPORT int32_t TGPT_CALL TGPT_RegisterTexture(uint64_t key, uint64_t textur
         return tile;
     } catch(...) { return -10; }
 }
-TGPT_EXPORT int32_t TGPT_CALL TGPT_RegisterAlphaTexture(uint64_t key, uint64_t texture) {
+TGPT_EXPORT int32_t TGPT_CALL TGPT_RegisterAlphaTexture(uint64_t key, uint64_t texture, float cutoff) {
     if(!texture) return -1;
     try {
         ComPtr<ID3D11Texture2D> t2d;
@@ -224,7 +231,47 @@ TGPT_EXPORT int32_t TGPT_CALL TGPT_RegisterAlphaTexture(uint64_t key, uint64_t t
         const int32_t tile=int32_t(e.alphaTiles.size());
         e.alphaTiles.emplace(key, tile);
         TextureBake bake; bake.tile=tile; bake.key=key; bake.texture=t2d; // referenced until baked
+        bake.cutoff=std::isfinite(cutoff) ? cutoff : 0.5f;
         e.newAlphaTextures.push_back(std::move(bake));
+        return tile;
+    } catch(...) { return -10; }
+}
+TGPT_EXPORT int32_t TGPT_CALL TGPT_RegisterMaskTexture(uint64_t key, uint64_t texture, uint32_t channels) {
+    if(!texture) return -1;
+    try {
+        ComPtr<ID3D11Texture2D> t2d;
+        if(FAILED(reinterpret_cast<IUnknown*>(uintptr_t(texture))->QueryInterface(IID_PPV_ARGS(&t2d)))) return -2;
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        if(!e.status.supported) return -6;
+        // The color tiles' atlas under keys of their own (a texture can be one material's color and another's mask), one a
+        // texture and channels.
+        const uint64_t own=(key^(uint64_t(channels&0xFu)<<59))|(1ull<<63);
+        const auto found=e.textureTiles.find(own);
+        if(found!=e.textureTiles.end()) return found->second;
+        // Color first: a material without its mask map keeps its constants, one without its texture loses its colors.
+        if(e.textureTiles.size()>=kMaxTiles/4*3) return -3;
+        const int32_t tile=int32_t(e.textureTiles.size());
+        e.textureTiles.emplace(own, tile);
+        TextureBake bake; bake.tile=tile; bake.key=own; bake.texture=t2d; bake.mask=true; bake.channels=channels&0xFu; // referenced until baked
+        e.newTextures.push_back(std::move(bake));
+        e.status.textures=uint32_t(e.textureTiles.size());
+        return tile;
+    } catch(...) { return -10; }
+}
+TGPT_EXPORT int32_t TGPT_CALL TGPT_RegisterCookie(uint64_t key, uint64_t texture) {
+    if(!texture) return -1;
+    try {
+        ComPtr<ID3D11Texture2D> t2d;
+        if(FAILED(reinterpret_cast<IUnknown*>(uintptr_t(texture))->QueryInterface(IID_PPV_ARGS(&t2d)))) return -2;
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        if(!e.status.supported) return -6;
+        const auto found=e.cookieTiles.find(key);
+        if(found!=e.cookieTiles.end()) return found->second;
+        if(e.cookieTiles.size()>=kMaxCookies) return -3;
+        const int32_t tile=int32_t(e.cookieTiles.size());
+        e.cookieTiles.emplace(key, tile);
+        TextureBake bake; bake.tile=tile; bake.key=key; bake.texture=t2d; // referenced until baked
+        e.newCookies.push_back(std::move(bake));
         return tile;
     } catch(...) { return -10; }
 }
@@ -303,6 +350,51 @@ TGPT_EXPORT int32_t TGPT_CALL TGPT_SetComposite(uint32_t sequence, uint64_t colo
     } catch(...) { return -10; }
 }
 TGPT_EXPORT void* TGPT_CALL TGPT_GetRenderEvent() { return reinterpret_cast<void*>(&tgpt::render_event); }
+TGPT_EXPORT int32_t TGPT_CALL TGPT_SetShadowDetail(uint32_t request, uint64_t color, float strength) {
+    if(!color || !(strength>0.f) || !(strength<1e30f)) return -1;
+    try {
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        auto& slot=e.shadowDetail[request%e.shadowDetail.size()];
+        slot.request=request; slot.color=color; slot.strength=strength<1.f ? strength : 1.f; slot.pending=true;
+        return 0;
+    } catch(...) { return -10; }
+}
+TGPT_EXPORT int32_t TGPT_CALL TGPT_SetWater(uint32_t sequence, uint64_t reflections, uint64_t depth, uint64_t normal, float reflectionMultiplier) {
+    if(!reflections || !depth || !normal || !(reflectionMultiplier>=0.f) || !(reflectionMultiplier<1e30f)) return -1;
+    try {
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        if(!e.status.supported || e.status.disabled) return -6;
+        auto& slot=e.water[sequence%e.water.size()];
+        slot.sequence=sequence; slot.reflections=reflections; slot.depth=depth; slot.normal=normal;
+        slot.multiplier=reflectionMultiplier; slot.pending=true;
+        return 0;
+    } catch(...) { return -10; }
+}
+TGPT_EXPORT int32_t TGPT_CALL TGPT_SetDiffusionProfiles(const float* profiles, uint32_t count) {
+    if(count>16 || (count && !profiles)) return -1;
+    try {
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        e.sssProfiles.fill(0.f); e.sss=false;
+        for(uint32_t i=0;i<count*4;++i) {
+            const float v=profiles[i];
+            e.sssProfiles[i]=(v>0.f && v<1e30f) ? v : 0.f;
+        }
+        for(uint32_t i=0;i<count;++i) if(e.sssProfiles[i*4+3]>0.f) e.sss=true;
+        return 0;
+    } catch(...) { return -10; }
+}
+TGPT_EXPORT int32_t TGPT_CALL TGPT_SetSkinTransmission(const float* profiles, uint32_t count) {
+    if(count>16 || (count && !profiles)) return -1;
+    try {
+        auto& e=engine(); std::lock_guard<std::mutex> lock(e.mutex);
+        e.transmission.fill(0.f);
+        for(uint32_t i=0;i<count*8;++i) {
+            const float v=profiles[i];
+            e.transmission[i]=(v>=0.f && v<1e30f) ? v : 0.f;
+        }
+        return 0;
+    } catch(...) { return -10; }
+}
 TGPT_EXPORT int32_t TGPT_CALL TGPT_GetGuides(TGPT_Guides* guides) {
     if(!guides || guides->size!=sizeof(TGPT_Guides) || guides->abi!=TGPT_ABI) return -1;
     try {

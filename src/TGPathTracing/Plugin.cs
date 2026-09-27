@@ -20,7 +20,7 @@ namespace TGPathTracing
             // An error here would otherwise end the plugin without a trace: this game writes no Unity log.
             try { Session.Start(Config, Logger); }
             catch (Exception ex) { Logger.LogError(Name + " couldn't start; it stays off this session: " + ex); }
-            gameObject.AddComponent<PathTracingBehaviour>();
+            Session.Host = gameObject.AddComponent<PathTracingBehaviour>();
         }
         private void OnDestroy() { Session.Stop(); }
     }

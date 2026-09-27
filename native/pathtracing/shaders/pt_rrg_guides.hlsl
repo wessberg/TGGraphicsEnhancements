@@ -31,13 +31,18 @@ void main(uint2 p : SV_DispatchThreadID) {
     // Clip-space w is the distance along the view direction, which Unity's view space counts as -z.
     float3 rel = s.position - g.cameraPos.xyz;
     float z = -mul(g.viewProj, float4(rel, 1.0)).w;
-    float prevZ = -mul(g.prevViewProj, float4(s.position - g.prevCameraPos.xyz, 1.0)).w;
+    // HDRP's previous view-projection takes positions relative to this frame's camera (it moves the previous camera's
+    // matrix by the camera's move: HDCamera, camera-relative rendering).
+    float prevZ = -mul(g.prevViewProj, float4(rel, 1.0)).w;
     Texture2D<float2> mv = ResourceDescriptorHeap[g.inputs1.y];
     depth[p] = z;
     motion[p] = float4(-mv.Load(int3(p, 0)), prevZ - z, 0.0);
-    normals[p] = float4(octahedral(s.normal), s.roughness, 0.0);
-    float3 spec = specular_albedo(s.f0, s.roughness, saturate(dot(s.normal, normalize(-rel))));
-    diffuseAlbedo[p] = float4(sqrt(saturate(s.albedo)), 1.0);
+    // See-through glass is specular only (pt_specular refracts what lies behind it into the reflections): no diffuse albedo,
+    // a specular albedo that covers the light it lets through, the tracer's near-mirror roughness (pt_prepare), and a
+    // material type of its own (AMD's normals' alpha, in thirds), which keeps its light and its neighbours' apart.
+    normals[p] = float4(octahedral(s.normal), s.roughness, s.glass ? 1.0 / 3.0 : 0.0);
+    float3 spec = specular_guide_albedo(s, saturate(dot(s.normal, normalize(-rel))));
+    diffuseAlbedo[p] = float4(s.glass ? 0.0 : sqrt(saturate(s.albedo)), 1.0);
     specularAlbedo[p] = float4(sqrt(saturate(spec)), 1.0);
     RWTexture2D<float4> specular = ResourceDescriptorHeap[g.signals.w];
     float4 light = specular[p];

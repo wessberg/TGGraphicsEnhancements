@@ -55,6 +55,10 @@ void main(uint2 p : SV_DispatchThreadID) {
     if (weightSum > 0.01) {
         history /= weightSum;
         if (moments) { historyMoments /= weightSum; len = historyMoments.z; } else len = historyLength / weightSum;
+        // The history is stored relative to the previous frame's reference radiance: into this frame's.
+        float rescale = g.radiance.y > 0.0 && g.radiance.y < 1e30 ? g.radiance.y / reference_radiance() : 1.0;
+        history *= rescale;
+        historyMoments.xy *= float2(rescale, rescale * rescale);
     } else { len = 0.0; }
     len = min(len + 1.0, maxLength);
     float alpha = len > 1.0 ? max(1.0 / len, 1.0 / maxLength) : 1.0;
@@ -75,7 +79,8 @@ void main(uint2 p : SV_DispatchThreadID) {
         // Few frames of history: their variance says little, so filter hard until it settles.
         if (len < 4.0) variance = max(variance, l * l * (4.0 - len));
         momentsOut[p] = float4(m, len, 0.0);
-        historyOut[p] = float4(color, variance);
+        // The standard deviation: the variance of a hot spot passed half precision's largest value.
+        historyOut[p] = float4(color, sqrt(variance));
     } else {
         historyOut[p] = float4(color, len);
     }

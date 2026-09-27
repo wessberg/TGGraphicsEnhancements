@@ -14,6 +14,9 @@ namespace TGBetterUpscaling
     {
         internal readonly bool Known, Stp, Dlss, Fsr, Xess;
         internal readonly string[] FsrVersions; // AMD's names, in the order the runtime reports them
+        // The FSR version that runs on this GPU: AMD's default, the newest its runtime offers here (the native log
+        // confirms it when FSR starts). Null without FSR.
+        internal readonly string FsrVersion;
         // Each upscaler's quality modes as its runtime reports them, highest render scale first. Empty:
         // that upscaler keeps the game's render-scale slider.
         internal readonly QualityMode[] DlssModes, FsrModes, XessModes;
@@ -24,6 +27,7 @@ namespace TGBetterUpscaling
             // FSR and XeSS take HDRP's place for STP, so they need what STP needs.
             Fsr = fsr && stp; Xess = xess && stp;
             FsrVersions = (fsrVersions ?? new string[0]).ToArray();
+            FsrVersion = Fsr ? Newest(FsrVersions) : null;
             DlssModes = Dlss ? QualityModes.Sorted(dlssModes) : new QualityMode[0];
             FsrModes = Fsr ? QualityModes.Sorted(fsrModes) : new QualityMode[0];
             XessModes = Xess ? QualityModes.Sorted(xessModes) : new QualityMode[0];
@@ -43,7 +47,56 @@ namespace TGBetterUpscaling
             return false;
         }
         internal UpscalerSetting[] Upscalers => ((UpscalerSetting[])Enum.GetValues(typeof(UpscalerSetting))).Where(Offers).ToArray();
-        internal static string Label(UpscalerSetting upscaler) => upscaler.ToString();
+        // What the Upscaling row and FoA Mod Manager call an upscaler: FSR by the short name of the version that runs
+        // ("FSR 4", "FSR 3.1": the major and minor number of AMD's version name, a .0 minor dropped), its full version in the
+        // FSR rows' tooltips and the logs; the others by name. The config keeps the plain name ("FSR"), so a stored choice
+        // stays valid whatever version a later session runs.
+        internal string LabelOf(UpscalerSetting upscaler)
+        {
+            string version = upscaler == UpscalerSetting.FSR ? ShortVersion(FsrVersion) : null;
+            return version != null ? "FSR " + version : upscaler.ToString();
+        }
+        internal static string Label(UpscalerSetting upscaler) => Session.Settings?.Capabilities?.LabelOf(upscaler) ?? upscaler.ToString();
+        // "4.0.2" -> "4", "3.1.5" -> "3.1"; null for a name without a number.
+        internal static string ShortVersion(string name)
+        {
+            var parts = VersionNumbers(name);
+            if (parts.Count == 0) return null;
+            return parts.Count > 1 && parts[1] != 0 ? parts[0] + "." + parts[1] : parts[0].ToString();
+        }
+        // A version name's numbers ("4.0.2" -> 4, 0, 2), as the native side reads them (tgup_policy.hpp version_numbers).
+        private static List<uint> VersionNumbers(string name)
+        {
+            var parts = new List<uint>();
+            if (string.IsNullOrEmpty(name)) return parts;
+            int i = 0;
+            while (i < name.Length && !Digit(name[i])) ++i;
+            while (i < name.Length && Digit(name[i]))
+            {
+                uint value = 0;
+                while (i < name.Length && Digit(name[i])) { value = Math.Min(100000u, value * 10u + (uint)(name[i] - '0')); ++i; }
+                parts.Add(value);
+                if (i + 1 < name.Length && name[i] == '.' && Digit(name[i + 1])) ++i; else break;
+            }
+            return parts;
+        }
+        private static bool Digit(char c) => c >= '0' && c <= '9';
+        // The newest of the versions, compared by their numbers (tgup_policy.hpp newest_version); null for none.
+        private static string Newest(string[] names)
+        {
+            string best = null; List<uint> bestParts = null;
+            foreach (var name in names)
+            {
+                var parts = VersionNumbers(name);
+                if (best == null || Newer(parts, bestParts)) { best = name; bestParts = parts; }
+            }
+            return best;
+        }
+        private static bool Newer(List<uint> a, List<uint> b)
+        {
+            for (int i = 0; i < a.Count && i < b.Count; i++) if (a[i] != b[i]) return a[i] > b[i];
+            return a.Count > b.Count;
+        }
     }
     internal sealed class Settings
     {
@@ -222,9 +275,12 @@ namespace TGBetterUpscaling
             bool known = caps != null;
             var upscalers = known ? caps.Upscalers : (UpscalerSetting[])Enum.GetValues(typeof(UpscalerSetting));
             // Unknown until the game and the native side report; until then every value is kept.
+            Func<string, string> label = v => known ? caps.LabelOf(Parse(v, UpscalerSetting.None)) : v;
             upscaler = Rebind(upscaler, upscalers.Select(u => u.ToString()).ToArray(),
-                (known && caps.Dlss ? UpscalerSetting.DLSS : known && caps.Stp ? UpscalerSetting.STP : UpscalerSetting.None).ToString(),
-                v => Capabilities.Label(Parse(v, UpscalerSetting.None)));
+                (known && caps.Dlss ? UpscalerSetting.DLSS : known && caps.Stp ? UpscalerSetting.STP : UpscalerSetting.None).ToString(), label);
+            // FoA Mod Manager names the choices as the Video tab does (FSR with its version once AMD's runtime reported),
+            // also when the offered upscalers stayed the same and the entry wasn't bound again.
+            rows[UpscalerKey].ChoiceLabels = string.Join(";", upscalers.Select(u => u + "=" + label(u.ToString())).ToArray());
             rows[UpscalerKey].Visible = !known || upscalers.Length > 1;
             rows[SharpnessKey].Visible = Upscaler == UpscalerSetting.FSR;
             // Each upscaler's modes as its runtime reports them, listed for the selected upscaler only, as

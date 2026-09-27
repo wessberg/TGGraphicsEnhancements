@@ -95,7 +95,16 @@ if(TGFG_BUILD_NATIVE)
   configure_file(native/framegen/shaders/interop_shader.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/interop_shader.hpp" @ONLY)
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/native/upscaling/shaders/upscale.hlsl" TGUP_UPSCALE_SHADER)
   configure_file(native/upscaling/shaders/upscale_shader.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/upscale_shader.hpp" @ONLY)
-  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/shaders/d3d11.hlsl" TGPT_D3D11_SHADER)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/shaders/d3d11.hlsl" TGPT_D3D11_SOURCE)
+  # MSVC takes at most 16380 characters in one string literal: the text goes in as adjacent raw literals of 8000 each.
+  string(LENGTH "${TGPT_D3D11_SOURCE}" TGPT_D3D11_LENGTH)
+  set(TGPT_D3D11_SHADER "")
+  set(TGPT_D3D11_OFFSET 0)
+  while(TGPT_D3D11_OFFSET LESS TGPT_D3D11_LENGTH)
+    string(SUBSTRING "${TGPT_D3D11_SOURCE}" ${TGPT_D3D11_OFFSET} 8000 TGPT_D3D11_CHUNK)
+    string(APPEND TGPT_D3D11_SHADER "R\"TGPTHLSL(${TGPT_D3D11_CHUNK})TGPTHLSL\"\n")
+    math(EXPR TGPT_D3D11_OFFSET "${TGPT_D3D11_OFFSET}+8000")
+  endwhile()
   configure_file(native/pathtracing/shaders/d3d11_shader.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/d3d11_shader.hpp" @ONLY)
   # The embedded HLSL is read at configure time: editing it has to configure again, or the DLL keeps the old text.
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -125,6 +134,56 @@ if(TGFG_BUILD_NATIVE)
   if(NOT TG_DXC)
     message(FATAL_ERROR "dxc.exe not found. Unpack DXC 1.9 or newer into DXC-<version> beside this file, or set TG_DXC.")
   endif()
+  # NVIDIA RTXDI (ReSTIR's temporal and spatial reuse: permutation sampling, the boiling filter, bias correction),
+  # fetched beside this file as RTXDI-Library-<version> (or RTXDI_ROOT) and compiled into the path tracer, never
+  # committed: the NVIDIA RTX SDKs License allows it only in object code (docs/SOURCES.md).
+  set(RTXDI_ROOT "" CACHE PATH "NVIDIA RTXDI-Library root (contains Include/Rtxdi/RtxdiParameters.h)")
+  set(TG_RTXDI "${RTXDI_ROOT}")
+  if(NOT TG_RTXDI)
+    file(GLOB TG_LOCAL_RTXDI LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/RTXDI-Library-*")
+    list(SORT TG_LOCAL_RTXDI ORDER DESCENDING)
+    if(TG_LOCAL_RTXDI)
+      list(GET TG_LOCAL_RTXDI 0 TG_RTXDI)
+    endif()
+  endif()
+  if(NOT EXISTS "${TG_RTXDI}/Include/Rtxdi/RtxdiParameters.h" OR NOT EXISTS "${TG_RTXDI}/Source/RtxdiUtils.cpp")
+    message(FATAL_ERROR "NVIDIA RTXDI not found. Clone github.com/NVIDIA-RTX/RTXDI-Library into RTXDI-Library-<version> beside this file, or set RTXDI_ROOT.")
+  endif()
+  # NVIDIA NRD (Real-Time Denoisers: RELAX, the fallback denoiser for GPUs without Ray Reconstruction or Ray Regeneration),
+  # fetched beside this file as NRD-SDK-<version> (or NRD_ROOT) and compiled in as a static library with its shaders
+  # embedded as DXIL, never committed: the NVIDIA RTX SDKs License allows it only in object code (docs/SOURCES.md).
+  # Its configure step downloads the tools it builds with (ShaderMake, MathLib, DXC). Without it the path tracer builds
+  # without NRD, and the built-in denoiser serves.
+  option(TGPT_WITH_NRD "Build TG Path Tracing with NVIDIA NRD when its SDK is present" ON)
+  set(NRD_ROOT "" CACHE PATH "NVIDIA NRD root (contains Include/NRD.h)")
+  set(TG_NRD "${NRD_ROOT}")
+  if(NOT TG_NRD)
+    file(GLOB TG_LOCAL_NRD LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/NRD-SDK-*")
+    list(SORT TG_LOCAL_NRD ORDER DESCENDING)
+    if(TG_LOCAL_NRD)
+      list(GET TG_LOCAL_NRD 0 TG_NRD)
+    endif()
+  endif()
+  set(TGPT_NRD OFF)
+  if(TGPT_WITH_NRD AND EXISTS "${TG_NRD}/Include/NRD.h")
+    # The release the integration was checked against (nrd_denoiser.cpp, pt_nrd_prep.hlsl): another one is refused
+    # rather than compiled in unnoticed.
+    file(STRINGS "${TG_NRD}/Include/NRD.h" TG_NRD_VERSION REGEX "#define NRD_VERSION_(MAJOR|MINOR) ")
+    if(NOT TG_NRD_VERSION MATCHES "NRD_VERSION_MAJOR 4" OR NOT TG_NRD_VERSION MATCHES "NRD_VERSION_MINOR 17")
+      message(FATAL_ERROR "TG Path Tracing is integrated with NVIDIA NRD 4.17 (${TG_NRD} is another version): check out v4.17.3, or configure with -DTGPT_WITH_NRD=OFF")
+    endif()
+    set(NRD_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+    set(NRD_NRI OFF CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_SPIRV_SHADERS OFF CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_DXIL_SHADERS ON CACHE BOOL "" FORCE)
+    set(NRD_SHADERS_PATH "${CMAKE_CURRENT_BINARY_DIR}/nrd-shaders" CACHE STRING "" FORCE)
+    add_subdirectory("${TG_NRD}" "${CMAKE_CURRENT_BINARY_DIR}/nrd" EXCLUDE_FROM_ALL)
+    set(TGPT_NRD ON)
+    message(STATUS "TG Path Tracing: NVIDIA NRD from ${TG_NRD}")
+  else()
+    message(STATUS "TG Path Tracing: no NVIDIA NRD (NRD-SDK-<version> beside this file, or NRD_ROOT); the built-in denoiser serves")
+  endif()
   set(PT_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/native/pathtracing/shaders")
   set(PT_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated/pathtracing")
   file(MAKE_DIRECTORY "${PT_GENERATED}")
@@ -133,18 +192,22 @@ if(TGFG_BUILD_NATIVE)
   # Each pass twice: Shader Model 6.6 for every DXR 1.1 GPU, and 6.9 (DirectX Raytracing 1.2: opacity
   # micromaps) for where the device offers it; the GI and reflection passes also as ray generation shaders
   # with Shader Execution Reordering. The tracer picks a set when it starts.
-  set(PT_SHADER_DEPENDS "${PT_SHADER_DIR}/pt_common.hlsli" "${PT_SHADER_DIR}/pt_restir.hlsli" "${PT_SHADER_DIR}/pt_root.hlsli")
-  foreach(entry prepare:pt_prepare gi:pt_gi giSpatial:pt_gi_spatial di:pt_di diSpatial:pt_di_spatial specular:pt_specular
-                temporal:pt_temporal atrous:pt_atrous compose:pt_compose)
+  # The shaders' own headers and RTXDI's: an edit to either rebuilds every pass (its parameter blocks are in the
+  # constant layout the C++ side fills).
+  file(GLOB_RECURSE TG_RTXDI_HEADERS "${TG_RTXDI}/Include/*.h" "${TG_RTXDI}/Include/*.hlsli")
+  set(PT_SHADER_DEPENDS "${PT_SHADER_DIR}/pt_common.hlsli" "${PT_SHADER_DIR}/pt_restir.hlsli" "${PT_SHADER_DIR}/pt_root.hlsli"
+    "${PT_SHADER_DIR}/pt_rtxdi.hlsli" "${PT_SHADER_DIR}/pt_boil.hlsli" ${TG_RTXDI_HEADERS})
+  foreach(entry prepare:pt_prepare probe:pt_probe gi:pt_gi giSpatial:pt_gi_spatial di:pt_di diSpatial:pt_di_spatial specular:pt_specular
+                temporal:pt_temporal atrous:pt_atrous compose:pt_compose water:pt_water hdrpShadow:pt_hdrp_shadow)
     string(REPLACE ":" ";" parts "${entry}")
     list(GET parts 0 variable)
     list(GET parts 1 name)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}.h"
-      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl" VERBATIM)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}_dxr12.h"
-      COMMAND "${TG_DXC}" -nologo -T cs_6_9 -E main -D PT_DXR12 -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}_dxr12.h" -Vn ${variable}Dxr12 "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_9 -E main -D PT_DXR12 -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}_dxr12.h" -Vn ${variable}Dxr12 "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl (Shader Model 6.9)" VERBATIM)
     list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}.h" "${PT_GENERATED}/${name}_dxr12.h")
@@ -154,23 +217,32 @@ if(TGFG_BUILD_NATIVE)
     list(GET parts 0 variable)
     list(GET parts 1 name)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}_ser.h"
-      COMMAND "${TG_DXC}" -nologo -T lib_6_9 -D PT_DXR12 -D PT_SER -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}_ser.h" -Vn ${variable}Ser "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T lib_6_9 -D PT_DXR12 -D PT_SER -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}_ser.h" -Vn ${variable}Ser "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl (ray generation, Shader Execution Reordering)" VERBATIM)
     list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}_ser.h")
   endforeach()
   # Passes that trace no rays: one Shader Model 6.6 build serves both sets (the opacity micromap bake, AMD Ray
-  # Regeneration's guides, and characters' skinned positions).
-  foreach(entry ommBake:pt_omm_bake rrgGuides:pt_rrg_guides skinUnpack:pt_skin)
+  # Regeneration's guides, characters' skinned positions, RTXDI's boiling filter for the GI reservoirs, the radiance
+  # cache's frame, and the emissive triangles' records).
+  foreach(entry ommBake:pt_omm_bake rrgGuides:pt_rrg_guides skinUnpack:pt_skin giBoil:pt_gi_boil meter:pt_meter sss:pt_sss cache:pt_cache emissive:pt_emissive)
     string(REPLACE ":" ";" parts "${entry}")
     list(GET parts 0 variable)
     list(GET parts 1 name)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}.h"
-      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl" VERBATIM)
     list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}.h")
   endforeach()
+  # NRD's front end (the tracer's signals into its inputs), with NRD's own packing from its NRD.hlsli.
+  if(TGPT_NRD)
+    add_custom_command(OUTPUT "${PT_GENERATED}/pt_nrd_prep.h"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -I "${TG_NRD}/Shaders" -Fh "${PT_GENERATED}/pt_nrd_prep.h" -Vn nrdPrep "${PT_SHADER_DIR}/pt_nrd_prep.hlsl"
+      DEPENDS "${PT_SHADER_DIR}/pt_nrd_prep.hlsl" ${PT_SHADER_DEPENDS} "${TG_NRD}/Shaders/NRD.hlsli" "${TG_NRD}/Shaders/NRDConfig.hlsli"
+      COMMENT "DXC pt_nrd_prep.hlsl" VERBATIM)
+    list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/pt_nrd_prep.h")
+  endif()
   add_custom_target(TGPathTracingShaders DEPENDS ${PT_SHADER_HEADERS})
 
   add_library(TGGraphicsBridge.Native SHARED
@@ -207,11 +279,15 @@ if(TGFG_BUILD_NATIVE)
   # No d3d12.lib: every D3D12 call goes through the bridge's device, so the DLL never loads d3d12.dll itself.
   add_library(TGPathTracing.Native SHARED
     native/pathtracing/src/extension.cpp native/pathtracing/src/scene.cpp native/pathtracing/src/tracer.cpp
-    native/pathtracing/src/ray_regeneration.cpp)
+    native/pathtracing/src/ray_regeneration.cpp native/pathtracing/src/nrd_denoiser.cpp "${TG_RTXDI}/Source/RtxdiUtils.cpp")
   add_dependencies(TGPathTracing.Native TGPathTracingShaders)
+  if(TGPT_NRD)
+    target_link_libraries(TGPathTracing.Native PRIVATE NRD)
+    target_compile_definitions(TGPathTracing.Native PRIVATE TGPT_NRD=1)
+  endif()
   # AMD FSR Ray Regeneration: the FSR API's headers; the runtime is AMD's signed DLLs, loaded at run time.
   target_include_directories(TGPathTracing.Native PRIVATE ${PT_INCLUDE} ${BRIDGE_INCLUDE} "${CMAKE_CURRENT_BINARY_DIR}/generated" "${PT_GENERATED}"
-    "${FIDELITYFX_ROOT}/Kits/FidelityFX/api/include" "${FIDELITYFX_ROOT}/Kits/FidelityFX/denoisers/include")
+    "${FIDELITYFX_ROOT}/Kits/FidelityFX/api/include" "${FIDELITYFX_ROOT}/Kits/FidelityFX/denoisers/include" "${TG_RTXDI}/Include")
   target_compile_definitions(TGPathTracing.Native PRIVATE ${TG_DEFINES})
   target_link_libraries(TGPathTracing.Native PRIVATE d3d11 d3dcompiler dxguid)
 
@@ -221,6 +297,8 @@ if(TGFG_BUILD_NATIVE)
     endforeach()
   endif()
   if(BUILD_TESTING)
+    # The staged native DLLs the GPU tests load (build.cmd install stages them there).
+    set(TG_TEST_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" CACHE PATH "Staged native DLLs the GPU tests load")
     add_executable(tgfg_shader_tests tests/shader_tests.cpp)
     target_include_directories(tgfg_shader_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(tgfg_shader_tests PRIVATE d3dcompiler)
@@ -252,20 +330,20 @@ if(TGFG_BUILD_NATIVE)
     target_include_directories(tgup_gpu_smoke PRIVATE ${BRIDGE_INCLUDE} ${UP_INCLUDE})
     target_compile_definitions(tgup_gpu_smoke PRIVATE ${TG_DEFINES})
     target_link_libraries(tgup_gpu_smoke PRIVATE dxgi d3d11 d3d12)
-    add_test(NAME tgup_gpu_smoke COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native")
+    add_test(NAME tgup_gpu_smoke COMMAND tgup_gpu_smoke "${TG_TEST_NATIVE_DIR}")
     set_tests_properties(tgup_gpu_smoke PROPERTIES SKIP_RETURN_CODE 77)
     # Unity's order: the DXGI factory and D3D11 device exist before the bridge starts.
-    add_test(NAME tgup_gpu_smoke_unity_order COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first)
+    add_test(NAME tgup_gpu_smoke_unity_order COMMAND tgup_gpu_smoke "${TG_TEST_NATIVE_DIR}" --factory-first)
     set_tests_properties(tgup_gpu_smoke_unity_order PROPERTIES SKIP_RETURN_CODE 77)
     # With TG Path Tracing: DLSS Ray Reconstruction (NGX) starts, and denoises and upscales a noisy frame.
-    add_test(NAME tgup_gpu_smoke_with_pt COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first --with-pt)
+    add_test(NAME tgup_gpu_smoke_with_pt COMMAND tgup_gpu_smoke "${TG_TEST_NATIVE_DIR}" --factory-first --with-pt)
     set_tests_properties(tgup_gpu_smoke_with_pt PROPERTIES SKIP_RETURN_CODE 77)
     # All three mods on one bridge, installed as in BepInEx: frame generation's Streamline and Ray Reconstruction's
     # NGX on the same device (Streamline runs when UnityPlayer.dll sits beside the test; see docs/TESTING.md).
-    add_test(NAME tgup_gpu_smoke_all_mods COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first --with-fg --with-pt --installed)
+    add_test(NAME tgup_gpu_smoke_all_mods COMMAND tgup_gpu_smoke "${TG_TEST_NATIVE_DIR}" --factory-first --with-fg --with-pt --installed)
     set_tests_properties(tgup_gpu_smoke_all_mods PROPERTIES SKIP_RETURN_CODE 77)
     # Frame generation and upscaling without TG Path Tracing, installed: Ray Reconstruction never starts NGX.
-    add_test(NAME tgup_gpu_smoke_fg_installed COMMAND tgup_gpu_smoke "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" --factory-first --with-fg --installed)
+    add_test(NAME tgup_gpu_smoke_fg_installed COMMAND tgup_gpu_smoke "${TG_TEST_NATIVE_DIR}" --factory-first --with-fg --installed)
     set_tests_properties(tgup_gpu_smoke_fg_installed PROPERTIES SKIP_RETURN_CODE 77)
     # The path tracer end to end on this machine's GPU: the bridge boots with the extension, a synthetic
     # scene is registered and rasterized into an HDRP-style GBuffer, and frames are traced and composited
@@ -275,7 +353,10 @@ if(TGFG_BUILD_NATIVE)
     target_include_directories(tgpt_gpu_test PRIVATE ${BRIDGE_INCLUDE} ${PT_INCLUDE})
     target_compile_definitions(tgpt_gpu_test PRIVATE ${TG_DEFINES})
     target_link_libraries(tgpt_gpu_test PRIVATE dxgi d3d11 d3dcompiler)
-    add_test(NAME tgpt_gpu_test COMMAND tgpt_gpu_test "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/Native" "${CMAKE_CURRENT_BINARY_DIR}/tgpt-images")
+    if(TGPT_NRD)
+      target_compile_definitions(tgpt_gpu_test PRIVATE TGPT_EXPECT_NRD=1) # the staged DLL has NRD: its checks must run
+    endif()
+    add_test(NAME tgpt_gpu_test COMMAND tgpt_gpu_test "${TG_TEST_NATIVE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/tgpt-images")
     set_tests_properties(tgpt_gpu_test PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   # Component TGNative: MinHook's own install rules (headers, static library) stay out of the mods.
@@ -283,4 +364,13 @@ if(TGFG_BUILD_NATIVE)
   install(TARGETS TGFG.Native RUNTIME DESTINATION TGFrameGeneration COMPONENT TGNative)
   install(TARGETS TGBetterUpscaling.Native RUNTIME DESTINATION TGBetterUpscaling COMPONENT TGNative)
   install(TARGETS TGPathTracing.Native RUNTIME DESTINATION TGPathTracing COMPONENT TGNative)
+  # The notices of what is compiled into it, next to it: NVIDIA's RTXDI (and NRD) under the NVIDIA RTX SDKs license (object
+  # code only), and with NRD its MathLib and ShaderMake's blob reader under MIT (LICENSES/THIRD_PARTY.md).
+  install(FILES "${TG_RTXDI}/LICENSE.txt" DESTINATION TGPathTracing/Notices RENAME LICENSE-NVIDIA-RTX-SDKs.txt COMPONENT TGNative)
+  if(TGPT_NRD)
+    FetchContent_GetProperties(mathlib)
+    FetchContent_GetProperties(shadermake)
+    install(FILES "${mathlib_SOURCE_DIR}/LICENSE.txt" DESTINATION TGPathTracing/Notices RENAME LICENSE-MathLib.txt COMPONENT TGNative)
+    install(FILES "${shadermake_SOURCE_DIR}/LICENSE.txt" DESTINATION TGPathTracing/Notices RENAME LICENSE-ShaderMake.txt COMPONENT TGNative)
+  endif()
 endif()

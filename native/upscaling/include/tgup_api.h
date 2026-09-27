@@ -9,7 +9,7 @@
 #define TGUP_EXPORT extern "C"
 #define TGUP_CALL
 #endif
-#define TGUP_ABI 0x00010300u
+#define TGUP_ABI 0x00010400u
 
 // Upscaling technologies, values shared with the plugin.
 #define TGUP_BACKEND_NONE 0u
@@ -54,6 +54,9 @@ struct TGUP_Frame {
     // Ray Reconstruction's camera, as NVIDIA takes it: row-major matrices that multiply row vectors on the
     // left. The camera's world-to-view matrix, and HDRP's unjittered projection (its GPU form, reversed Z).
     float worldToView[16], viewToClip[16];
+    // Ray Reconstruction's optional inputs (TG Path Tracing's, the render size; 0 without): the traced reflections' hit
+    // distance (world units), and the color before transparent surfaces and particles were drawn.
+    uint64_t specularHitDistance, colorBeforeTransparency;
 };
 // A quality mode as the runtime reports it: the vendor's id and its per-axis upscale ratio (output /
 // render). FSR: FfxApiUpscaleQualityMode, 0 (Native AA) to 4 (Ultra Performance). XeSS:
@@ -85,7 +88,7 @@ struct TGUP_Status {
 };
 #pragma pack(pop)
 #ifdef __cplusplus
-static_assert(sizeof(TGUP_Frame)==264, "TG Better Upscaling frame ABI");
+static_assert(sizeof(TGUP_Frame)==280, "TG Better Upscaling frame ABI");
 static_assert(sizeof(TGUP_Status)==88, "TG Better Upscaling status ABI");
 static_assert(sizeof(TGUP_Mode)==8, "TG Better Upscaling mode ABI");
 static_assert(sizeof(TGUP_DlssOverride)==24, "TG Better Upscaling DLSS override ABI");

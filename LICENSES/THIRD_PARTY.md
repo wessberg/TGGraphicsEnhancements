@@ -40,11 +40,20 @@ NVAPI: `native/upscaling/src/nvidia_profile.cpp` declares the few NVAPI structur
 setting IDs it uses after NVIDIA's `nvapi.h`, `nvapi_interface.h` and `NvApiDriverSettings.h`
 (github.com/NVIDIA/nvapi, MIT license); `nvapi64.dll` is the driver's own and not redistributed.
 
+NVIDIA RTXDI 3.1 and NVIDIA NRD 4.17.3 (Real-Time Denoisers): TG Path Tracing compiles both into
+`TGPathTracing.Native.dll` (NRD with its shaders embedded) under the NVIDIA RTX SDKs license, which allows them in
+object code form as part of an application and not their source: this repository contains none of it (the SDKs are
+fetched beside it, see docs/SOURCES.md). The package places that license next to the DLL as
+`Native/Notices/LICENSE-NVIDIA-RTX-SDKs.txt`. NRD links NVIDIA's MathLib and ShaderMake's blob reader, both under the
+MIT license, whose notices go there too as `Native/Notices/LICENSE-MathLib.txt` and `LICENSE-ShaderMake.txt` (a
+build without NRD has neither). CMakeLists.txt installs all three with the DLL.
+
 AMD Anti-Lag 2 SDK v2.0.0a is a header compiled into TGFG.Native.dll under the MIT license;
 include its notice with any distributed binary. MinHook is linked into TGGraphicsBridge.Native.dll.
 
 The SDKs themselves are not part of this repository; the build scripts expect them next to it
-(`FidelityFX-SDK-2.3.0`, `XeSS-SDK-3.0.2`, `AntiLag2-SDK-2.0.0a`, `DLSS-SDK-310.9.1`, see docs/SOURCES.md).
+(`FidelityFX-SDK-2.3.0`, `XeSS-SDK-3.0.2`, `AntiLag2-SDK-2.0.0a`, `DLSS-SDK-310.9.1`, `RTXDI-Library-3.1`,
+`NRD-SDK-4.17.3`, see docs/SOURCES.md).
 
 BepInEx, Il2CppInterop, Unity, TextMeshPro, and game assemblies are referenced from
 the user's installation and are not bundled. Do not upload proprietary game

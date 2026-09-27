@@ -262,13 +262,9 @@ namespace TGGraphicsBridge
             foreach (var fact in facts.Where(f => f.Key.StartsWith("nvidia.", StringComparison.OrdinalIgnoreCase)).OrderBy(f => f.Key))
                 sb.Append(fact.Key.Substring(7)).Append('=').Append(fact.Value).Append(' ');
             driverReport = sb.ToString().Trim();
-            uint limit = DriverValue(facts, "nvidia.frameRateLimit", out string limitWhere);
-            if (limit > 0)
-                Notices.Set("compat.nvidia.fps", NoticeLevel.Warning, "NVIDIA Max Frame Rate", limit + " fps",
-                    "The driver limits this game to " + limit + " fps, generated frames included. Turn Max Frame Rate off for it in the NVIDIA App.",
-                    "The NVIDIA driver limits this game to " + limit + " fps (Max Frame Rate in the " + limitWhere + "). That limits the frames frame generation shows, " +
-                    "which can keep it from raising the framerate. Set Max Frame Rate to Off in the NVIDIA App or NVIDIA Control Panel, or use the game's own Framerate Limit.");
-            else Notices.Clear("compat.nvidia.fps");
+            // The driver's Max Frame Rate has no alert of its own: it counts generated frames too, and a cap
+            // above what frame generation reaches (a few fps under the refresh rate, as with G-SYNC) does
+            // nothing to it. TG Frame Generation's framerate check names it when the frames on screen sit at it.
             uint smooth = DriverValue(facts, "nvidia.smoothMotion", out string smoothWhere);
             if (smooth != 0)
                 Notices.Set("compat.nvidia.smoothmotion", NoticeLevel.Problem, "NVIDIA Smooth Motion", "On",
@@ -276,12 +272,18 @@ namespace TGGraphicsBridge
                     "NVIDIA Smooth Motion is on for this game (" + smoothWhere + "). It is the driver's own frame generation and runs on top of TG Frame Generation's. " +
                     "Turn Smooth Motion off for Fall of Avalon in the NVIDIA App (Graphics > Program Settings), or turn frame generation off here.");
             else Notices.Clear("compat.nvidia.smoothmotion");
+            // VSync the driver forces on is no problem in itself: NVIDIA's DLSS-G guide supports it (it overrides
+            // the game's), and with G-SYNC it is NVIDIA's own advice for frame generation. Where it does raise
+            // latency, with the display on another GPU, the "High latency" alert says so. Only a sync to every
+            // second, third or fourth refresh gets an alert here.
             uint vsync = DriverValue(facts, "nvidia.vsync", out string vsyncWhere);
-            if (vsync == 0x47814940 || vsync == 0x32610244 || vsync == 0x71271021 || vsync == 0x13245256)
-                Notices.Set("compat.nvidia.vsync", NoticeLevel.Warning, "NVIDIA Vertical Sync", "Forced on",
-                    "The driver forces VSync on for this game. Set Vertical sync to the 3D application setting in the NVIDIA App.",
-                    "The NVIDIA driver forces VSync on for this game (" + vsyncWhere + "), whatever the game's own VSync setting says. With frame generation, VSync holds " +
-                    "the frames on screen to the display's refresh rate. Set Vertical sync to \"Use the 3D application setting\" in the NVIDIA App or Control Panel.");
+            int every = vsync == 0x32610244 ? 2 : vsync == 0x71271021 ? 3 : vsync == 0x13245256 ? 4 : 0;
+            if (every > 0)
+                Notices.Set("compat.nvidia.vsync", NoticeLevel.Warning, "NVIDIA Vertical Sync", "1/" + every + " refresh",
+                    "The driver syncs this game to 1/" + every + " of the refresh rate, which can cap frame generation. Set Vertical sync to On or Off in the NVIDIA App.",
+                    "The NVIDIA driver syncs this game to 1/" + every + " of the display's refresh rate (" + vsyncWhere + "), whatever the game's own VSync setting says. " +
+                    "Frame generation's swapchains don't all present that way, which can cap or unsettle the frames on screen. Set Vertical sync to On, Off or " +
+                    "\"Use the 3D application setting\" in the NVIDIA App or Control Panel.");
             else Notices.Clear("compat.nvidia.vsync");
             uint dlssg = DriverValue(facts, "nvidia.dlssgMode", out string dlssgWhere);
             if (dlssg == 1)
