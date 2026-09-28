@@ -6,6 +6,19 @@ own numbers: v0.5.0 is the release published on Nexus as Frame Generation 1.0.2.
 
 TG Path Tracing (new, prototype, Mono version)
 
+- A character's hair takes the color the game gives it later too: the game colors hair on each character's own copy of the
+  material, sometimes after the character first shows, and the tracer, which read it once, kept a far character's hair
+  grey (the material's default) until it came near. Hair's color is read again every frame now.
+- Hair is shaded by the tracer, not by HDRP: its color is its shader's (RealHair's diffuse map times _DiffuseColor and
+  _DiffuseStrength; read as the texture alone it came out grey), camera rays stop at its strands wherever they meet them,
+  it is lit through from behind as thin cloth is, and Reflection Boost leaves it alone. The eyes still keep HDRP's shading
+  (darkened by the traced shadows) until the tracer reads their textures: the log now lists the eye, eyebrow and lash
+  shaders' textures and values for that.
+- The direct light's reuse keeps a light choice for 4 frames, not RTXDI's 20 (NVIDIA RTX Remix's choice with Ray
+  Reconstruction): a hanging cage's thin bars boiled, where the temporal reuse can't be permuted. The F8 capture's
+  frame-to-frame change on them: 0.40 at 20, 0.14 at 4, 0.11 without the reuse at all.
+- The F8 capture's boiling comparison adds the bounced light's reuse over 4 frames instead of 8, and the image as traced
+  again once settled: the first pair follows the report straight away, while the HUD and the image can still change.
 - Fill Light Fog (a new Video row, On by default): the game's fill lights, which path tracing replaces, light no surface but
   still light the game's fog as in the game, so interiors keep their haze (the tavern's came from its 24 fill lights, and
   was gone). Off: only the traced lights light the fog, to compare.

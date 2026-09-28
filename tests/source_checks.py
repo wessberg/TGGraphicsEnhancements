@@ -840,8 +840,9 @@ class SourceConsistency(unittest.TestCase):
         self.assertNotIn("metallic * 0.8", common)
         self.assertIn("return float2(lerp(ends.x, ends.y, 1.0 - t.r), lerp(ends.z, ends.w, 1.0 - t.a));", common)
         prepare = self.text(PT + "shaders/pt_prepare.hlsl")
-        self.assertIn("roughness = lerp(traced.roughness, 0.05, boost);", prepare)
-        self.assertIn("f0 = lerp(traced.f0, 0.6, 0.7 * boost);", prepare)
+        self.assertIn("roughness = lerp(traced.roughness, 0.05, forwardBoost);", prepare)
+        self.assertIn("f0 = lerp(traced.f0, 0.6, 0.7 * forwardBoost);", prepare)
+        self.assertIn("const float forwardBoost = strands ? 0.0 : boost;", prepare)
         tracer = self.text(PT + "src/tracer.cpp")
         self.assertIn("v.Format=b.mask ? linear_view(d.Format) : color_view(d.Format);", tracer)
         self.assertIn("case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;", tracer)
@@ -1275,7 +1276,7 @@ class SourceConsistency(unittest.TestCase):
         # ReSTIR GI's history is RTXDI's default of 8 frames (1 was the least grainy with the tracer's own reuse, before
         # RTXDI's decorrelation); the hidden Bounced light history sets another.
         self.assertIn('BouncedLightHistory = file.Bind(Advanced, "Bounced light history", 0, Hidden(', settings)
-        self.assertIn("GiHistory = settings.BouncedLightHistory.Value > 0 ? (uint)settings.BouncedLightHistory.Value : 8u,", self.text("src/TGPathTracing/HdrpPasses.cs"))
+        self.assertIn("GiHistory = DebugCapture.GiHistory != 0 ? DebugCapture.GiHistory : settings.BouncedLightHistory.Value > 0 ? (uint)settings.BouncedLightHistory.Value : 8u,", self.text("src/TGPathTracing/HdrpPasses.cs"))
         self.assertIn("k.giTemporal.maxHistoryLength=f.giHistory ? std::clamp(f.giHistory, 1u, 64u) : 8u;", self.text(PT + "src/tracer.cpp"))
         test = self.text("tests/pathtracing_gpu_test.cpp")
         self.assertIn('{"history 1, still", 1, false, false, false, false, 0.06}', test)
@@ -1365,7 +1366,8 @@ class SourceConsistency(unittest.TestCase):
                       "k.diTemporal.maxHistoryLength=f.diHistory ? std::clamp(f.diHistory, 1u, 64u) : 20u;",
                       "rtxdi::FillNeighborOffsetBuffer(bytes.data(), kNeighborOffsets);", "k.extra[1]=st.material[prev].uav;"]:
             self.assertIn(token, tracer)
-        self.assertIn("DiHistory = settings.DirectLightHistory.Value > 0 ? (uint)settings.DirectLightHistory.Value : 20u,", self.text("src/TGPathTracing/HdrpPasses.cs"))
+        # The direct light's history is 4 (RTXDI's 20 boiled on a cage's bars: the capture's 0.40 at 20, 0.14 at 4).
+        self.assertIn("DiHistory = DebugCapture.DiHistory != 0 ? DebugCapture.DiHistory : settings.DirectLightHistory.Value > 0 ? (uint)settings.DirectLightHistory.Value : 4u,", self.text("src/TGPathTracing/HdrpPasses.cs"))
         # ReSTIR GI's reuse is RTXDI's too: its temporal reuse in pt_gi (a ray generation shader with Shader Execution
         # Reordering, so its boiling filter, which synchronizes a thread group, runs in a compute pass of its own), its
         # spatial reuse in pt_gi_spatial, over one reservoir buffer with both frames' arrays.
@@ -1465,12 +1467,13 @@ class SourceConsistency(unittest.TestCase):
         tracer = self.text(PT + "src/tracer.cpp")
         harness = self.text("tests/pathtracing_gpu_test.cpp")
         # Hair stops a ray by chance, as much of a texel as its strands cover (not where a fifth is covered: hard, full
-        # shadows of every card), camera rays excepted (HDRP shades hair); micromaps would settle it by the cutoff instead.
+        # shadows of every card), camera rays excepted (HDRP drew hair at the pixel); micromaps would settle it by the cutoff
+        # instead.
         self.assertIn("#define MATERIAL_STRANDS 4096", common)
         self.assertIn("#define TGPT_MATERIAL_STRANDS 4096u", header)
         self.assertIn("internal const uint MaterialStrands = 4096;", managed)
         strands = common.index("if ((m.flags & MATERIAL_STRANDS) != 0)")
-        self.assertLess(common.index("if ((m.flags & MATERIAL_HDRP_SHADED) != 0 && g_cameraRays) return true;"), strands)
+        self.assertLess(common.index("if ((m.flags & (MATERIAL_HDRP_SHADED | MATERIAL_STRANDS)) != 0 && g_cameraRays) return true;"), strands)
         self.assertLess(strands, common.index("return a >= m.alphaCutoff;"))
         self.assertIn("if(materials_[index].flags&TGPT_MATERIAL_STRANDS) { mesh.omm=Mesh::Omm::None; return; }", scene)
         self.assertIn("if ((mat.Flags & Tgpt.MaterialAlphaTile) != 0) mat.Flags |= Tgpt.MaterialStrands;", self.text("src/TGPathTracing/SceneCapture.cs"))
@@ -1623,7 +1626,8 @@ class SourceConsistency(unittest.TestCase):
         # The eyes stop camera rays and stay HDRP's (its eye shader refracts the iris): traced, they took the sclera's
         # texture; left out, the camera ray went on to the socket behind them. Both came out white.
         self.assertIn("AlphaCutoff = 0f, Flags = Tgpt.MaterialAlphaTest | Tgpt.MaterialCameraOnly | Tgpt.MaterialHdrpShaded });", self.text("src/TGPathTracing/SceneCapture.cs"))
-        self.assertIn("const bool hdrp = (materials[hit.material].flags & MATERIAL_HDRP_SHADED) != 0 ||", self.text(PT + "shaders/pt_prepare.hlsl"))
+        # Only what HDRP shades itself (the eyes, for now) keeps its shading; hair drawn forward is the tracer's.
+        self.assertIn("const bool hdrp = (materials[hit.material].flags & MATERIAL_HDRP_SHADED) != 0;", self.text(PT + "shaders/pt_prepare.hlsl"))
         self.assertIn('"a surface HDRP shades itself stops the camera ray and keeps its shading"', self.text("tests/pathtracing_gpu_test.cpp"))
         self.assertIn("float most = Mathf.Clamp(gameEv - settings.ExposureLowest.Value, 0f, 12f);", passes)
         self.assertIn("TracedGain = TracedGain,", passes)
@@ -1744,15 +1748,20 @@ class SourceConsistency(unittest.TestCase):
         # One record of a light's own dimmers, whether it was darkened as placed light, carried the gain, or both in turn:
         # path tracing off gives back exactly what the game had (two lists could leave a light at 0).
         self.assertIn("if (!originals.TryGetValue(id, out var entry)) { entry = (data, data.lightDimmer, data.affectsVolumetric); originals[id] = entry; }", lights)
-        # Far away a character keeps only its first hair pass: camera rays leave it to HDRP's hair shader (the game colors
-        # hair there, not in the texture), as HDRP's own transparent hair layer does up close.
-        self.assertIn("mat.Flags |= Tgpt.MaterialHdrpShaded;", self.text("src/TGPathTracing/SceneCapture.cs"))
-        # Camera rays stop at such surfaces whatever the alpha: HDRP decided the pixel's coverage, and by the tracer's alpha a
-        # ray slipped between strands to the scalp, so far hair flickered between HDRP's and the traced grey.
-        self.assertIn("if ((m.flags & MATERIAL_HDRP_SHADED) != 0 && g_cameraRays) return true;", self.text(PT + "shaders/pt_common.hlsli"))
-        # And a character's forward pixels stay HDRP's whatever the camera ray meets on it (it missed far hair's few cards for
-        # the head behind them, traced as grey skin): characters' instances are marked.
-        self.assertIn("(instances[hit.instance].flags & INSTANCE_CHARACTER) != 0", self.text(PT + "shaders/pt_prepare.hlsl"))
+        # Hair is shaded by the tracer, colored as its shader colors it (RealHair: _DiffuseColor times _DiffuseStrength; read as
+        # the texture alone it came out grey), never left to HDRP's hair shader.
+        capture = self.text("src/TGPathTracing/SceneCapture.cs")
+        self.assertIn('float strength = m.HasProperty("_DiffuseStrength") ? Mathf.Clamp(m.GetFloat("_DiffuseStrength"), 0f, 4f) : 1f;', capture)
+        self.assertNotIn("mat.Flags |= Tgpt.MaterialHdrpShaded;", capture) # set for the eyes alone (their own material)
+        # Read again every frame: the game colors a character's hair on its clone after it first shows (far hair stayed grey).
+        self.assertIn("if (hairColors.TryGetValue(index, out var read)) RefreshHairColor(m, index, read);", capture)
+        self.assertIn("if (index < materialsUploaded && tracer != null && tracer.Connected) tracer.SetMaterials(index, new[] { mat }, 1);", capture)
+        # Camera rays stop at hair (and what HDRP shades) whatever the alpha: HDRP decided the pixel's coverage, and by the
+        # tracer's alpha a ray slipped between strands to the scalp, so far hair flickered with the traced skin behind it.
+        self.assertIn("if ((m.flags & (MATERIAL_HDRP_SHADED | MATERIAL_STRANDS)) != 0 && g_cameraRays) return true;", self.text(PT + "shaders/pt_common.hlsli"))
+        # A character's forward pixels no longer stay HDRP's whatever the camera ray meets (the rule: nothing keeps HDRP's
+        # shading while tracing); characters' instances stay marked.
+        self.assertNotIn("(instances[hit.instance].flags & INSTANCE_CHARACTER) != 0", self.text(PT + "shaders/pt_prepare.hlsl"))
         self.assertIn("(alpha ? TGPT_INSTANCE_ALPHA_TEST : 0u)|TGPT_INSTANCE_CHARACTER", self.text(PT + "src/scene.cpp"))
         # Glass (by name): shadow rays pass through by chance as bright as its color, micromaps skip it (they would make
         # its texels opaque to every ray), and while tracing it has a glass's finish (the game's values come back after).

@@ -69,6 +69,7 @@ void main(uint2 p : SV_DispatchThreadID) {
     bool forward = false;
     bool hdrpShaded = false; // found as a surface HDRP shades itself: HDRP's light, darkened by the traced shadows (pt_hdrp_shadow)
     bool eye = false;        // of those, one seen by camera rays only: an eye (pt_compose gives it the traced bounced light)
+    bool hairLike = false;   // a character's hair, shaded by the tracer: lit through from behind as thin cloth is (mat bit 4)
     // Within 60 m (a distant card or impostor keeps HDRP's look); eyes and unlit decals are in the traced scene for camera
     // rays only (MATERIAL_CAMERA_ONLY). The eyes stop the ray and stay HDRP's (MATERIAL_HDRP_SHADED): its eye shader
     // refracts the iris under the cornea from textures of its own. Missing from the traced scene, they let the ray on to
@@ -83,12 +84,12 @@ void main(uint2 p : SV_DispatchThreadID) {
         g_cameraRays = false;
         if (found) {
             StructuredBuffer<MaterialRecord> materials = ResourceDescriptorHeap[g.scene0.w];
-            StructuredBuffer<InstanceRecord> instances = ResourceDescriptorHeap[g.scene0.x];
-            // A character's forward-drawn pixels (its hair far away, where only its first hair pass is left, its brows, its
-            // eyes) stay HDRP's whatever the camera ray meets on it: its skin and clothes are deferred and never come this
-            // way. Through a far character's few hair cards, a camera ray often missed them for the head a few centimetres
-            // behind (the window is 23 cm at 20 m), whose skin was traced there instead: grey hair flickering with HDRP's.
-            const bool hdrp = (materials[hit.material].flags & MATERIAL_HDRP_SHADED) != 0 || (instances[hit.instance].flags & INSTANCE_CHARACTER) != 0;
+            // What HDRP shades itself (the eyes, until the tracer reads their textures) keeps HDRP's light, darkened by the
+            // traced shadows. Everything else drawn forward is shaded by the tracer, a character's hair too: camera rays stop
+            // at its strands wherever they meet them (alpha_opaque), so they no longer slip between the cards of a far
+            // character's hair to the head behind.
+            const bool hdrp = (materials[hit.material].flags & MATERIAL_HDRP_SHADED) != 0;
+            const bool strands = (materials[hit.material].flags & MATERIAL_STRANDS) != 0;
             hdrpShaded = hdrp;
             // Its color the traced material's (the bounced light pt_compose gives it is times it): GBuffer0 holds nothing of a
             // surface drawn forward.
@@ -100,13 +101,18 @@ void main(uint2 p : SV_DispatchThreadID) {
                 const SurfaceMaterial traced = hit_material(hit);
                 color = linear_to_srgb(saturate(traced.albedo));
                 normal = hit.normal; geo = hit.normal; // towards the camera; GBuffers 1 and 2 hold nothing of its own
-                roughness = lerp(traced.roughness, 0.05, boost);
-                f0 = lerp(traced.f0, 0.6, 0.7 * boost);
+                // Reflection Boost leaves hair as the game made it, as it leaves skin.
+                const float forwardBoost = strands ? 0.0 : boost;
+                roughness = lerp(traced.roughness, 0.05, forwardBoost);
+                f0 = lerp(traced.f0, 0.6, 0.7 * forwardBoost);
                 // HDRP's Unlit (seen by camera rays only, lit by the tracer as the floor under it) reflects nothing, as in the
                 // game: with a dielectric's 0.04 and the default finish, a portal's black core reflected the two bright lights
                 // inside it, a glowing white orb where the game shows a dark one.
                 if ((materials[hit.material].flags & MATERIAL_CAMERA_ONLY) != 0) { f0 = 0.0; roughness = 1.0; }
-                translucent = false;
+                // Hair lets light through from behind, as thin cloth does (its CLOTH_TRANSMISSION, near RealHair's own
+                // _TransmittanceMultiplier of 0.33): the sun or a lamp behind a head lights its hair's edges.
+                translucent = strands;
+                hairLike = strands;
                 deferred = true; forward = true;
             }
         }
@@ -160,5 +166,5 @@ void main(uint2 p : SV_DispatchThreadID) {
     nrm[p] = uint2(pack_normal(normal), (uint(roughness * 255.0 + 0.5) & 0xFF) | (deferred ? 0x100u : 0u) | (translucent ? 0x200u : 0u) | (pack_normal22(geo) << 10));
     mat[p] = uint2(pack_rgba8(float4(color, forward ? 1.0 : 0.0)),
                    pack_rgba8(float4(linear_to_srgb(saturate(thin ? transmittance : f0)),
-                                     float((complex ? 1u : 0u) | (glass ? 2u : 0u) | (cloth ? 4u : 0u) | (eye ? 8u : 0u) | (thin ? 16u : 0u) | (hdrpShaded ? 32u : 0u)) / 255.0)));
+                                     float((complex ? 1u : 0u) | (glass ? 2u : 0u) | (cloth || hairLike ? 4u : 0u) | (eye ? 8u : 0u) | (thin ? 16u : 0u) | (hdrpShaded ? 32u : 0u)) / 255.0)));
 }

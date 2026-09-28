@@ -872,12 +872,14 @@ namespace TGPathTracing
                     FrameIndex = (uint)Time.frameCount, Bounces = (uint)settings.Bounces.Value, SpatialSamples = (uint)settings.SpatialSamples.Value,
                     RaysPerPixel = DebugCapture.Rays != 0 ? DebugCapture.Rays : (uint)settings.RaysPerPixel.Value,
                     // ReSTIR's histories in frames, which NVIDIA RTXDI's reuse decorrelates for the denoisers (permutation
-                    // sampling, the boiling filter): its defaults of 20 for direct light and 8 for bounced light, which
-                    // NVIDIA's sample keeps with DLSS Ray Reconstruction too, unless the config's Direct light history
-                    // or Bounced light history sets another. (Before RTXDI a history of 1 was the least grainy: the
-                    // tracer's own reuse permuted too little, and longer reuse made noise stand still.)
-                    DiHistory = settings.DirectLightHistory.Value > 0 ? (uint)settings.DirectLightHistory.Value : 20u,
-                    GiHistory = settings.BouncedLightHistory.Value > 0 ? (uint)settings.BouncedLightHistory.Value : 8u,
+                    // sampling, the boiling filter): 4 for direct light, as NVIDIA's RTX Remix keeps it with Ray
+                    // Reconstruction, and RTXDI's 8 for bounced light, unless the config's Direct light history or Bounced
+                    // light history sets another. RTXDI's 20 for direct light boiled on thin geometry, where its temporal
+                    // reuse isn't permuted: the F8 capture's frame-to-frame change on a cage's bars 0.40 at 20, 0.14 at 4,
+                    // 0.11 without the reuse. (Before RTXDI a history of 1 was the least grainy: the tracer's own reuse
+                    // permuted too little, and longer reuse made noise stand still.)
+                    DiHistory = DebugCapture.DiHistory != 0 ? DebugCapture.DiHistory : settings.DirectLightHistory.Value > 0 ? (uint)settings.DirectLightHistory.Value : 4u,
+                    GiHistory = DebugCapture.GiHistory != 0 ? DebugCapture.GiHistory : settings.BouncedLightHistory.Value > 0 ? (uint)settings.BouncedLightHistory.Value : 8u,
                     TracedGain = TracedGain,
                     ThickProfiles = ThickProfiles(hd),
                     Options = settings.Options | DebugCapture.ExtraOptions | (RayReconstruction.Active ? Tgpt.OptionRayReconstruction : Session.WantsRayRegeneration ? Tgpt.OptionRayRegeneration : 0u),

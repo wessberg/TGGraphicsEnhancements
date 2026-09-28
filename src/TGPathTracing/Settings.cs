@@ -167,7 +167,7 @@ namespace TGPathTracing
                 "ReSTIR DI keeps whether a pixel sees its light (NVIDIA RTXDI's initial visibility and ray-traced bias correction): fewer " +
                 "bright dots inside strong lights' shadows and less noise, but lamps' shadow edges several times softer. For testing."));
             DirectLightHistory = file.Bind(Advanced, "Direct light history", 0, Hidden(
-                "How many frames ReSTIR DI keeps reusing a light choice (NVIDIA RTXDI's maxHistoryLength), 1 to 64; 0 is its default of 20. For testing."));
+                "How many frames ReSTIR DI keeps reusing a light choice (NVIDIA RTXDI's maxHistoryLength), 1 to 64; 0 is the default of 4 (RTXDI's 20 boiled on thin geometry). For testing."));
             // Earlier keys for it, "Auto exposure lowest EV" (2) and "Auto exposure darkest EV" (5), each left the tavern
             // overblown: replaced (configs keep a key's saved value, not its new default).
             file.Remove(file.Bind(Advanced, "Auto exposure lowest EV", 2f, Hidden("No longer used.")).Definition);

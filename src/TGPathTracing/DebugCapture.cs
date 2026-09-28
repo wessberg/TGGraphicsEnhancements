@@ -25,8 +25,9 @@ namespace TGPathTracing
         // Read by the frame the capture pass hands to the native side: the sky's light off, and the pass-through off.
         internal static bool SkyOff;
         internal static uint ExtraOptions;
-        // Read by the same frame: the rays per pixel the comparison of what boils traces (0: the row's).
-        internal static uint Rays;
+        // Read by the same frame: the rays per pixel the comparison of what boils traces (0: the row's), and the frames
+        // ReSTIR DI and GI reuse a sample over (0: the defaults or the config's).
+        internal static uint Rays, DiHistory, GiHistory;
         // Read by the water reflections' hook: HDRP's own reflections on water, for the shot that compares them.
         internal static bool WaterOff;
         private const int ImageWidth = 1920;
@@ -49,9 +50,15 @@ namespace TGPathTracing
             var log = new StringBuilder();
             try
             {
-                Notices.Show("tgpt.capture", PathTracingPlugin.Name, "Capturing for about 16 seconds: hold still", 16f);
+                Notices.Show("tgpt.capture", PathTracingPlugin.Name, "Capturing for about 22 seconds: hold still", 22f);
                 string probe = "";
                 try { probe = Probe.Text(24); Session.Log.LogInfo(probe); } catch (Exception ex) { probe = "The probe failed: " + ex; }
+                try
+                {
+                    var cam = Camera.main;
+                    if (cam != null) probe += "\n\n== Characters along the crosshair" + CharacterCapture.DescribeAlongRay(cam.transform.position, cam.transform.forward);
+                }
+                catch (Exception ex) { probe += "\n\n== Characters along the crosshair: failed: " + ex.Message; }
                 string report = "";
                 try { report = Report(probe); } catch (Exception ex) { report = "The report failed: " + ex; }
                 File.WriteAllText(Path.Combine(dir, "report.txt"), report);
@@ -76,9 +83,14 @@ namespace TGPathTracing
                 // out; what none loses comes from elsewhere (the radiance cache, the denoiser).
                 var change = new StringBuilder("Boiling (frame-to-frame change of the image's middle, in 8x8-pixel blocks of 8-bit levels, a quarter " +
                                                "of a second apart; the crosshair's 128 pixels around in brackets): as traced " + BlockChange(first, kept, keptWidth, keptHeight));
-                yield return Pair(dir, "01d-bounced-light-own-rays", Tgpt.OptionGiOwnRays, 16u, log, change, "the bounced light from each pixel's own 16 rays alone");
-                yield return Pair(dir, "01e-direct-light-no-reuse", Tgpt.OptionDiNoReuse, 0u, log, change, "the direct light without its reuse");
-                yield return Pair(dir, "01f-neither-reused", Tgpt.OptionGiOwnRays | Tgpt.OptionDiNoReuse, 16u, log, change, "neither");
+                yield return Pair(dir, "01d-bounced-light-own-rays", Tgpt.OptionGiOwnRays, 16u, 0u, log, change, "the bounced light from each pixel's own 16 rays alone");
+                yield return Pair(dir, "01e-direct-light-no-reuse", Tgpt.OptionDiNoReuse, 0u, 0u, log, change, "the direct light without its reuse");
+                yield return Pair(dir, "01f-neither-reused", Tgpt.OptionGiOwnRays | Tgpt.OptionDiNoReuse, 16u, 0u, log, change, "neither");
+                // The bounced light's reuse over 4 frames instead of 8 (the direct light's is 4 now: over RTXDI's 20 a cage's bars
+                // boiled), and the image as traced again once it has settled like the others: the first pair is taken right
+                // after the report, and the HUD and the image around it can still be changing.
+                yield return Pair(dir, "01g-bounced-light-history-4", 0u, 0u, 0u, log, change, "the bounced light's reuse over 4 frames", 4u);
+                yield return Pair(dir, "01h-as-traced-settled", 0u, 0u, 0u, log, change, "as traced again, settled");
                 log.Insert(0, change.Append("\n").ToString());
                 var views = new[] { DebugView.Direct, DebugView.Indirect, DebugView.IndirectRaw, DebugView.Specular, DebugView.Albedo, DebugView.Normals,
                                     DebugView.Coverage, DebugView.Materials, DebugView.Surfaces, DebugView.Emissive };
@@ -118,7 +130,7 @@ namespace TGPathTracing
             }
             finally
             {
-                SkyOff = false; ExtraOptions = 0; WaterOff = false; Rays = 0; keep = false;
+                SkyOff = false; ExtraOptions = 0; WaterOff = false; Rays = 0; DiHistory = 0; GiHistory = 0; keep = false;
                 settings.CurrentView = view;
                 settings.CurrentMode = mode;
                 try { File.AppendAllText(Path.Combine(dir, "report.txt"), "\n\n== Capture\n" + log); } catch { }
@@ -130,9 +142,10 @@ namespace TGPathTracing
 
         // One of the comparisons of what boils: the image with those options (and rays per pixel) once the denoiser's history
         // has settled on it, again a quarter of a second later, and the difference between the two; their change goes in change.
-        private static IEnumerator Pair(string dir, string name, uint options, uint rays, StringBuilder log, StringBuilder change, string what)
+        private static IEnumerator Pair(string dir, string name, uint options, uint rays, uint diHistory, StringBuilder log, StringBuilder change, string what,
+                                        uint giHistory = 0u)
         {
-            ExtraOptions = options; Rays = rays;
+            ExtraOptions = options; Rays = rays; DiHistory = diHistory; GiHistory = giHistory;
             yield return new WaitForSecondsRealtime(2f);
             keep = true;
             yield return Shot(dir, name, log);
@@ -142,7 +155,7 @@ namespace TGPathTracing
             keep = false;
             if (first != null && kept != null && first.Length == kept.Length) SaveDifference(dir, name + "-difference", first, kept, keptWidth, keptHeight);
             change.Append("; " + what + " " + BlockChange(first, kept, keptWidth, keptHeight));
-            ExtraOptions = 0; Rays = 0;
+            ExtraOptions = 0; Rays = 0; DiHistory = 0; GiHistory = 0;
         }
         // The mean change between two shots over the 8x8-pixel blocks of the image's middle (the HUD's corners, top and bottom
         // left out), in 8-bit levels of their luma, with its 90th percentile, and in brackets the mean over the 128 pixels

@@ -302,7 +302,7 @@ Surface load_surface(uint2 p, uint surfaceIndex, uint normalIndex, uint material
         s.forward = color.a > 0.5;
         float4 spec = unpack_rgba8(m.y);
         s.f0 = srgb_to_linear(spec.rgb);
-        const uint bits = m.y >> 24; // pt_prepare: 1 a complex surface, 2 glass, 4 thin cloth, 8 an eye, 16 thin skin, 32 shaded by HDRP
+        const uint bits = m.y >> 24; // pt_prepare: 1 a complex surface, 2 glass, 4 thin cloth or hair, 8 an eye, 16 thin skin, 32 shaded by HDRP
         if (s.translucent && (bits & 4u) != 0) s.through = CLOTH_TRANSMISSION;
         s.complex = (bits & 1u) != 0;
         s.glass = (bits & 2u) != 0;
@@ -550,11 +550,11 @@ bool alpha_opaque(uint instanceId, uint geometry, uint primitive, float2 bary) {
     if ((m.flags & MATERIAL_ALPHA_TEST) == 0) return true;
     // Seen by camera rays only (eyes, unlit decals): every other ray passes through it.
     if ((m.flags & MATERIAL_CAMERA_ONLY) != 0 && !g_cameraRays) return false;
-    // A camera ray stops at a surface HDRP shades itself wherever it meets one: the pixel is one HDRP drew (forward, at
-    // the depth the ray looks around), and HDRP's own alpha test decided what covers it. By the tracer's, a camera ray
-    // slipped between hair strands HDRP drew there to the scalp behind, and the traced skin replaced HDRP's hair from
-    // frame to frame (far hair flickering grey and dark). Other rays keep the strands' own alpha.
-    if ((m.flags & MATERIAL_HDRP_SHADED) != 0 && g_cameraRays) return true;
+    // A camera ray stops at hair (and at a surface HDRP shades itself) wherever it meets it: the pixel is one HDRP drew
+    // forward, at the depth the ray looks around, and HDRP's own alpha test decided what covers it. By the tracer's, a
+    // camera ray slipped between strands HDRP drew there to the scalp behind, and the traced skin took the hair's place
+    // from frame to frame (far hair flickering grey and dark). Other rays keep the strands' own alpha.
+    if ((m.flags & (MATERIAL_HDRP_SHADED | MATERIAL_STRANDS)) != 0 && g_cameraRays) return true;
     // Glass lets a ray through by chance, as bright as its color is (each crossing the square root of its luminance: a
     // closed object's two, its luminance), whether it carries a shadow, the sky's or bounced light (as the light it
     // stops, the shadow of a bottle is as dark: sky rays it stopped every time left clear glass half a solid shadow).

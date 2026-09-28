@@ -126,6 +126,63 @@ namespace TGPathTracing
             }
         }
 
+        // For the F8 report: the characters along the crosshair's ray (within 1.5 m of it, nearest first, four at most), each
+        // renderer's materials as the game draws them now (the hair color the game gave it, transparent or opaque, whether the
+        // tracer hides its passes) and what the tracer made of each. A far character's hair came out grey while HDRP's was
+        // colored: this names the material each of them uses.
+        internal static string DescribeAlongRay(Vector3 eye, Vector3 forward)
+        {
+            var sb = new System.Text.StringBuilder();
+            try
+            {
+                var manager = KandraRendererManager.Instance;
+                var renderers = manager?.ActiveRenderers;
+                if (manager == null || renderers == null) return "none (no Kandra renderers)";
+                var near = new List<(KandraRenderer renderer, float along, float off)>();
+                foreach (var r in renderers)
+                {
+                    if (r == null || !r.isActiveAndEnabled) continue;
+                    uint slot = r.RenderingId;
+                    if (!manager.IsRegistered(slot)) continue;
+                    manager.GetBoundsAndRootBone(slot, out float4 sphere, out float4x4 _);
+                    var centre = new Vector3(sphere.x, sphere.y, sphere.z) - eye;
+                    float along = Vector3.Dot(centre, forward);
+                    if (along <= 0f) continue;
+                    float off = (centre - forward * along).magnitude - sphere.w;
+                    if (off > 1.5f) continue;
+                    near.Add((r, along, off));
+                }
+                near.Sort((a, b) => a.along.CompareTo(b.along));
+                if (near.Count == 0) return "none within 1.5 m of the crosshair's ray";
+                int shown = 0;
+                var seenRoots = new HashSet<Transform>();
+                foreach (var n in near)
+                {
+                    if (shown >= 12) break;
+                    var root = n.renderer.transform.root;
+                    if (!seenRoots.Contains(root) && seenRoots.Count >= 4) continue;
+                    seenRoots.Add(root);
+                    ++shown;
+                    var rd = n.renderer.rendererData;
+                    var materials = rd.RenderingMaterials;
+                    sb.Append("\n  \"" + n.renderer.name + "\" (character \"" + root.name + "\") " + n.along.ToString("0.0") + " m along the ray, " +
+                        Mathf.Max(0f, n.off).ToString("0.00") + " m off it; " + (materials != null ? materials.Length : 0) + " materials:");
+                    if (materials == null) continue;
+                    for (int i = 0; i < materials.Length; i++)
+                    {
+                        var m = materials[i];
+                        if (m == null) { sb.Append("\n    [" + i + "] none"); continue; }
+                        sb.Append("\n    [" + i + "] \"" + m.name + "\" #" + m.GetInstanceID() + " (" + (m.shader != null ? m.shader.name : "no shader") + ")" +
+                            (m.HasProperty("_DiffuseColor") ? ", _DiffuseColor " + m.GetColor("_DiffuseColor").ToString("0.00") : "") +
+                            (m.HasProperty("_SurfaceType") ? (m.GetFloat("_SurfaceType") > 0.5f ? ", transparent" : ", opaque") : "") +
+                            (hiddenLayers.ContainsKey(m) ? ", its passes hidden while tracing" : "") + "; traced: " + SceneCapture.DescribeCharacterMaterial(m));
+                    }
+                }
+            }
+            catch (Exception ex) { sb.Append(" (" + ex.GetType().Name + ": " + ex.Message + ")"); }
+            return sb.ToString();
+        }
+
         private static void CaptureCharacters(NativeTracer tracer, Vector3 camera)
         {
             var manager = KandraRendererManager.Instance;

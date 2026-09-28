@@ -52,6 +52,15 @@ namespace TGPathTracing
         private static readonly Dictionary<long, int> alphaTiles = new Dictionary<long, int>(); // by texture and cutoff
         private static readonly Dictionary<long, int> maskTiles = new Dictionary<long, int>(); // by texture and channels
         private static readonly Dictionary<int, uint> characterMaterials = new Dictionary<int, uint>();
+        // Hair's traced color by its material's index, read again every frame (RefreshHairColor): the game colors a character's
+        // hair on its own clone of the material, sometimes after the character first shows. Read once, a far character's hair
+        // kept the clone's default grey (_DiffuseColor 0.698) until it came near and another clone was read.
+        private static readonly Dictionary<uint, Vector3> hairColors = new Dictionary<uint, Vector3>();
+        private static readonly HashSet<string> hairColorLogged = new HashSet<string>();
+        // Hair materials by instance, and whether they were left out (transparent) when last read: the game switches a
+        // character's hair between transparent and opaque with its distance (CharacterMaterial reads it again then).
+        private static readonly Dictionary<int, bool> hairSeen = new Dictionary<int, bool>();
+        private static int hairFlipsLogged;
         private static readonly HashSet<string> characterShadersSeen = new HashSet<string>();
         private static readonly string[] StrandNames = { "Hair", "Lash", "Brow", "Beard", "Fur", "Mustache", "Moustache" };
         private static readonly HashSet<string> unlitSeen = new HashSet<string>();
@@ -97,7 +106,7 @@ namespace TGPathTracing
         internal static void Reset()
         {
             VegetationCapture.Reset(); LeshyCapture.Reset(); materialLists.Clear();
-            meshes.Clear(); materials.Clear(); materialList.Clear(); tiles.Clear(); alphaTiles.Clear(); maskTiles.Clear(); characterMaterials.Clear(); terrains.Clear(); meshQueue.Clear(); queued.Clear();
+            meshes.Clear(); materials.Clear(); materialList.Clear(); tiles.Clear(); alphaTiles.Clear(); maskTiles.Clear(); characterMaterials.Clear(); hairColors.Clear(); hairSeen.Clear(); terrains.Clear(); meshQueue.Clear(); queued.Clear();
             GlassFinish.Reset();
             exposureWeighted.Clear(); exposureFollowed = float.NaN; placed.Clear(); placedNext.Clear();
             terrainMaterial = uint.MaxValue;
@@ -417,8 +426,21 @@ namespace TGPathTracing
         {
             EnsureDefaults();
             if (m == null) return Neutral;
-            int key = unchecked(m.GetInstanceID() * 2 + (textured ? 1 : 0));
-            if (characterMaterials.TryGetValue(key, out uint index)) return index;
+            // Read again when it turns transparent or opaque: the game makes a character's hair transparent near the camera
+            // and opaque farther away (BodyFeatures.RefreshDistanceBand), on the same material. Read once while transparent (left
+            // out), the hair the game draws opaque far away stayed invisible to rays, and its grey first layer showed instead.
+            bool leftOut = CharacterLeftOut(m);
+            int key = unchecked(m.GetInstanceID() * 4 + (textured ? 1 : 0) + (leftOut ? 2 : 0));
+            if (hairSeen.TryGetValue(m.GetInstanceID(), out bool wasLeftOut) && wasLeftOut != leftOut && hairFlipsLogged++ < 12)
+                Session.Log.LogInfo("Characters: hair material \"" + m.name + "\" turned " + (leftOut ? "transparent (left out; its first layer traced)" : "opaque (traced)") +
+                    ", color " + (m.HasProperty("_DiffuseColor") ? m.GetColor("_DiffuseColor").ToString("0.00") : "none"));
+            if (hairSeen.ContainsKey(m.GetInstanceID()) || (m.shader != null && m.shader.name.IndexOf("Hair", StringComparison.OrdinalIgnoreCase) >= 0))
+                hairSeen[m.GetInstanceID()] = leftOut;
+            if (characterMaterials.TryGetValue(key, out uint index))
+            {
+                if (hairColors.TryGetValue(index, out var read)) RefreshHairColor(m, index, read);
+                return index;
+            }
             var shader = m.shader;
             string shaderName = shader != null ? shader.name : "";
             bool alphaTest = (m.HasProperty("_AlphaCutoffEnable") && m.GetFloat("_AlphaCutoffEnable") > 0.5f) || m.IsKeywordEnabled("_ALPHATEST_ON");
@@ -472,14 +494,23 @@ namespace TGPathTracing
                     }
                     mat.AlphaCutoff = Mathf.Min(cut ? mat.AlphaCutoff : 0.5f, 0.2f);
                     if ((mat.Flags & Tgpt.MaterialAlphaTile) != 0) mat.Flags |= Tgpt.MaterialStrands;
-                    // Camera rays stop at hair and leave it to HDRP's hair shader, as up close (where HDRP draws the
-                    // transparent hair layer over it): the game colors hair in its shader, not in the texture the tracer
-                    // reads, and far away, where a character keeps only this first pass, the traced hair came out grey.
-                    // Other rays still meet it: it shadows the face and the neck.
-                    mat.Flags |= Tgpt.MaterialHdrpShaded;
+                    // Shaded by the tracer, as everything is while tracing: camera rays stop at it wherever they meet it
+                    // (pt_common alpha_opaque: HDRP drew hair at that pixel), and its color is its shader's. The game's
+                    // RealHair colors its diffuse map by _DiffuseColor times _DiffuseStrength (read as the texture alone
+                    // it came out grey); its finish is between _SmoothnessMin and _SmoothnessMax.
+                    bool realHair = shaderName.IndexOf("RealHair", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (realHair)
+                    {
+                        var tint = HairColor(m, new Vector3(mat.BaseR, mat.BaseG, mat.BaseB));
+                        mat.BaseR = tint.x; mat.BaseG = tint.y; mat.BaseB = tint.z;
+                        if (m.HasProperty("_SmoothnessMin") && m.HasProperty("_SmoothnessMax"))
+                            mat.Smoothness = Mathf.Clamp01(0.5f * (m.GetFloat("_SmoothnessMin") + m.GetFloat("_SmoothnessMax")));
+                    }
                     materialList.Add(mat); index = (uint)(materialList.Count - 1);
-                    how = (mat.Flags & Tgpt.MaterialStrands) != 0 ? "hair, stopping rays as much as its strands cover a texel, left to HDRP's hair shader for camera rays"
-                        : "hair, cut out by its texture's alpha (a fifth of a texel covered), left to HDRP's hair shader for camera rays";
+                    if (realHair) hairColors[index] = new Vector3(mat.BaseR, mat.BaseG, mat.BaseB);
+                    how = ((mat.Flags & Tgpt.MaterialStrands) != 0 ? "hair, stopping rays as much as its strands cover a texel" : "hair, cut out by its texture's alpha (a fifth of a texel covered)") +
+                        ", shaded by the tracer (color " + mat.BaseR.ToString("0.00") + ", " + mat.BaseG.ToString("0.00") + ", " + mat.BaseB.ToString("0.00") +
+                        ", smoothness " + mat.Smoothness.ToString("0.00") + ")";
                 }
                 else { index = world; how = cut ? "traced with its texture, cut out by its alpha" : "traced with its texture"; }
             }
@@ -499,27 +530,75 @@ namespace TGPathTracing
             if (characterShadersSeen.Add(shaderName + "|" + how))
             {
                 Session.Log.LogInfo("Characters: shader \"" + shaderName + "\" (material \"" + m.name + "\") " + how);
-                // Hair's color is its shader's, not its texture's (rays see it grey): what the shader has to color it by.
-                if (strands && shader != null) Session.Log.LogInfo("Characters: hair shader \"" + shaderName + "\" colors and values: " + ShaderValues(m, shader));
+                // What the shaders of hair, eyes, eyebrows and lashes color them by (the tracer shades them all: the eyes'
+                // textures and the brows' and lashes' still to be read from these).
+                bool strandLike = strands || m.name.IndexOf("Brow", StringComparison.OrdinalIgnoreCase) >= 0 || m.name.IndexOf("Lash", StringComparison.OrdinalIgnoreCase) >= 0;
+                if ((strandLike || eye) && shader != null)
+                    Session.Log.LogInfo("Characters: shader \"" + shaderName + "\" (material \"" + m.name + "\") colors, values and textures: " + ShaderValues(m, shader));
             }
             characterMaterials[key] = index;
             if (!materialNames.ContainsKey(index)) materialNames[index] = m.name + " (" + shaderName + ", a character's)";
             return index;
         }
-        // A material's colors, vectors and numbers as its shader names them, for the log.
+        // What the tracer made of a character's material, for the F8 report: its traced material (for either texture state it
+        // was read in) and color, or that it was never read.
+        internal static string DescribeCharacterMaterial(Material m)
+        {
+            if (m == null) return "no material";
+            var parts = new List<string>();
+            int id = m.GetInstanceID();
+            for (int variant = 0; variant < 4; variant++)
+            {
+                if (!characterMaterials.TryGetValue(unchecked(id * 4 + variant), out uint index)) continue;
+                string state = ((variant & 1) != 0 ? "textured" : "untextured") + ((variant & 2) != 0 ? ", read while transparent" : ", read while opaque");
+                if (index == Invisible) { parts.Add(state + ": invisible to rays"); continue; }
+                if (index >= materialList.Count) { parts.Add(state + ": #" + index); continue; }
+                var mat = materialList[(int)index];
+                parts.Add(state + ": #" + index + " color (" + mat.BaseR.ToString("0.00") + ", " + mat.BaseG.ToString("0.00") + ", " + mat.BaseB.ToString("0.00") + ")" +
+                    ((mat.Flags & Tgpt.MaterialStrands) != 0 ? ", strands" : "") + ((mat.Flags & Tgpt.MaterialHdrpShaded) != 0 ? ", HDRP-shaded" : ""));
+            }
+            return parts.Count > 0 ? string.Join("; ", parts.ToArray()) : "never read";
+        }
+        // RealHair's color: its diffuse map times _DiffuseColor times _DiffuseStrength (linear).
+        private static Vector3 HairColor(Material m, Vector3 fallback)
+        {
+            var tint = m.HasProperty("_DiffuseColor") ? LinearColor(m.GetColor("_DiffuseColor")) : fallback;
+            float strength = m.HasProperty("_DiffuseStrength") ? Mathf.Clamp(m.GetFloat("_DiffuseStrength"), 0f, 4f) : 1f;
+            return tint * strength;
+        }
+        // A hair material's color as the game has it now: where it changed since it was read, its traced material follows.
+        private static void RefreshHairColor(Material m, uint index, Vector3 read)
+        {
+            var now = HairColor(m, read);
+            if ((now - read).sqrMagnitude < 1e-6f || index >= materialList.Count) return;
+            var mat = materialList[(int)index];
+            mat.BaseR = now.x; mat.BaseG = now.y; mat.BaseB = now.z;
+            materialList[(int)index] = mat;
+            hairColors[index] = now;
+            var tracer = Session.Tracer;
+            if (index < materialsUploaded && tracer != null && tracer.Connected) tracer.SetMaterials(index, new[] { mat }, 1);
+            if (hairColorLogged.Add(m.name) && hairColorLogged.Count <= 16)
+                Session.Log.LogInfo("Characters: hair \"" + m.name + "\" colored after it was first read, (" + read.x.ToString("0.00") + ", " + read.y.ToString("0.00") + ", " +
+                    read.z.ToString("0.00") + ") -> (" + now.x.ToString("0.00") + ", " + now.y.ToString("0.00") + ", " + now.z.ToString("0.00") + "): its traced color follows");
+        }
+        // A material's colors, vectors, numbers and textures as its shader names them, for the log.
         private static string ShaderValues(Material m, Shader shader)
         {
             var sb = new System.Text.StringBuilder();
             try
             {
-                for (int i = 0; i < shader.GetPropertyCount() && sb.Length < 1500; i++)
+                for (int i = 0; i < shader.GetPropertyCount() && sb.Length < 6000; i++)
                 {
                     string name = shader.GetPropertyName(i);
                     switch (shader.GetPropertyType(i))
                     {
                         case ShaderPropertyType.Color: case ShaderPropertyType.Vector: sb.Append(name).Append(' ').Append(m.GetVector(name).ToString("0.###")).Append("; "); break;
                         case ShaderPropertyType.Float: case ShaderPropertyType.Range: sb.Append(name).Append(' ').Append(m.GetFloat(name).ToString("0.###")).Append("; "); break;
-                        case ShaderPropertyType.Texture: sb.Append(name).Append(m.GetTexture(name) != null ? " (texture); " : " (none); "); break;
+                        case ShaderPropertyType.Texture:
+                            var t = m.GetTexture(name);
+                            sb.Append(name).Append(t != null ? " (\"" + t.name + "\" " + t.width + "x" + t.height + ", scale " + m.GetTextureScale(name).ToString("0.###") +
+                                ", offset " + m.GetTextureOffset(name).ToString("0.###") + "); " : " (none); ");
+                            break;
                     }
                 }
             }
@@ -1366,7 +1445,13 @@ namespace TGPathTracing
                     }
                     else lod = ", no LOD";
                     string shadows = em.HasComponent<Unity.Entities.Graphics.RenderFilterSettings>(e) ? em.GetSharedComponent<Unity.Entities.Graphics.RenderFilterSettings>(e).ShadowCastingMode.ToString() : "no filter settings";
-                    sb.Append("\n  Drake mesh \"" + (mesh != null ? mesh.name : mm.meshIndex < meshData.Count ? "(not loaded: not traced)" : "(no such mesh)") + "\" submesh " + mm.submesh + ", " + shadows +
+                    // Its material, and whether rays see it: a traced mesh whose material is transparent is invisible to them
+                    // (glass jars HDRP draws as transparent read "traced" here without it).
+                    var materialData = manager.LoadingManager.MaterialLoadingData;
+                    Material material = mm.materialIndex < materialData.Count ? Loaded(materialData[mm.materialIndex].loadingHandle, materialData[mm.materialIndex].counter) : null;
+                    string seen = material == null ? ", its material not loaded" : ", material \"" + material.name + "\" (" + (material.shader != null ? material.shader.name : "no shader") + ")" +
+                        (MaterialIndex(material) == Invisible ? ": invisible to rays (transparent, unlit or water: HDRP draws it after the traced light)" : "");
+                    sb.Append("\n  Drake mesh \"" + (mesh != null ? mesh.name : mm.meshIndex < meshData.Count ? "(not loaded: not traced)" : "(no such mesh)") + "\" submesh " + mm.submesh + seen + ", " + shadows +
                         (em.HasComponent<MaterialMeshInfo>(e) ? ", drawn" : ", not loaded for drawing") + lod +
                         (mesh != null && meshes.TryGetValue(mesh.GetInstanceID(), out var entry) ? (entry.Failed ? ", its mesh failed to register" : "") : mesh != null ? ", its mesh not registered yet" : ""));
                 }
