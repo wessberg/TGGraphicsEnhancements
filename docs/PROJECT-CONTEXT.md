@@ -488,9 +488,9 @@ already has for the case (Exclusive Fullscreen: `SetForbiddenOptions`, not a pol
 - Camera cuts reset every history: a new camera, HDRP's `resetPostProcessingHistory` rising edge, a > 60 degree turn,
   a > 20 m jump. The radiance cache survives cuts.
 - DLSS 5 with tracing: with RR, upscaling is TGBU's RR on the bridge device, and the add-on's neural rendering binds
-  to its own proxy ("BindDevice rejected a distinct live D3D12 device"): an add-on limitation, told to the owner. The
-  public DLSS SDK 310.9.1 has no neural-rendering API, so a DLSS 5 of our own isn't possible. `ReShade.log` sits in the
-  game root and stays open while the game runs: copy it to read it.
+  to its own proxy ("BindDevice rejected a distinct live D3D12 device"): an add-on limitation. R7 corrects "impossible":
+  310.9.1 lacks a public NR API; NVIDIA's sample requires a beta NGX SDK. Direct bridge NGX spec: `docs/DLSS5-SPEC.md`.
+  SDK access, D3D12 contract and NR release rights unconfirmed. First NGX paths and post-NR FG capture need coordination.
 
 ### 9.7 Surfaces
 - Metals: path vertices are diffuse-only, so `SurfaceMaterial.reflectance` = base colour (a metal's specular energy

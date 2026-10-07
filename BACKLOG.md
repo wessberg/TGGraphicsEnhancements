@@ -91,6 +91,8 @@ Path tracing:
   editor. Asked the owner 2026-09-28 whether to move the capture (F7?); their keyboard has no Insert key.
 
 Frame generation, upscaling, bridge:
+- 2026-10-07 (round-07): native DLSS 5 spec: `docs/DLSS5-SPEC.md`. Direct NGX, no RenoDX/ReShade.
+  Owner assigns implementation elsewhere. SDK access, D3D12 contract and runtime release rights unconfirmed.
 - Hitches on fast pans with all three FG backends (Streamline: "Frame rate over 100.00ms"), open since 2026-09-20.
 - `reflex.crossAdapterCopy=1.3ms` with `crossAdapter=0` (the 4060 laptop report): unexplained.
 - Menu-text bloom with RenoDX's DLSS 5 add-on and our mods (the owner suspects the add-on's Present stage).
