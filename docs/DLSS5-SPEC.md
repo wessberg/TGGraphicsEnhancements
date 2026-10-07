@@ -1,13 +1,15 @@
 # TG Neural Rendering - high-level DLSS 5 specification
 
-Status: researched design, 2026-10-07. Backend implementation and public release remain conditional on authorized
-SDK/runtime access. This document is the handoff requested by the owner; it authorizes no claim that DLSS 5 already
-works in TG Graphics Bridge. Working name: **TG Neural Rendering**, GUID `com.wessberg.tgneuralrendering`.
+Status: researched design, updated 2026-10-07 with public-NGX and player-supplied-runtime findings. A beta SDK is not
+a mandatory build dependency. Normal NGX loading of NR is a candidate, not a measured success; caller workarounds
+are not license-cleared. Evidence and limits: [DLSS5-RESEARCH.md](DLSS5-RESEARCH.md). Working name:
+**TG Neural Rendering**, GUID `com.wessberg.tgneuralrendering`.
 
 ## Goal
 
 Add optional NVIDIA DLSS 5 Neural Rendering to Tainted Grail: The Fall of Avalon using TG Graphics Bridge. Players
-install one TG mod, enable a Video setting, and get the enhanced scene with unchanged interface text. RenoDX and
+install one TG mod, supply the NR DLL if required, enable a Video setting, and get the enhanced scene with unchanged
+interface text. The owner expressly accepts supplying that DLL. RenoDX and
 ReShade are not dependencies. The owner wants an independent NVIDIA SDK integration, with control over inputs,
 placement and tuning. This is a separate visual enhancement; it does not replace Better Upscaling, Frame Generation
 or Path Tracing, and must never be described as physically traced lighting.
@@ -25,36 +27,53 @@ or Path Tracing, and must never be described as physically traced lighting.
 | Must we reuse RenoDX? | An independent implementation using authorized NVIDIA interfaces contains no RenoDX code and needs no RenoDX port license. No rights to its separate NR binary were established; this design does not use it. [RenoDX public-source license](https://github.com/clshortfuse/renodx/blob/main/LICENSE) |
 
 Sources above were inspected on 2026-10-07. Moving-branch links are observations, not pinned build dependencies.
-Before implementing the backend, record the exact SDK version, source revision, runtime hashes and applicable terms.
+The follow-up [research](DLSS5-RESEARCH.md) establishes an additional route: build against the public SDK's generic
+NGX API and load a player-supplied NR model. Community examples establish independent adapters but also contain
+caller compatibility measures. They do not prove success through the ordinary NVIDIA loader. Record exact SDK
+version, source revision, runtime hashes and applicable terms for each supported profile.
 
 ## Access and release requirements
 
-The [public RTX SDK license](https://github.com/NVIDIA/DLSS/blob/main/LICENSE.txt) conditionally permits SDK use and
-application distribution in object code, requires substantive application functionality and protective terms, and
-restricts reverse engineering, circumvention and standalone SDK redistribution. The supplement adds NVIDIA-GPU,
-credit/trademark and commercial-release notification conditions. Section 19 gives
-`nvidia-rtx-license-questions@nvidia.com` for license questions. Beta-specific agreements may change what is allowed.
+The redistribution grant and its conditions are recorded in [the research](DLSS5-RESEARCH.md#licensing-findings-and-limits).
+Do not treat contacting NVIDIA for a special redistribution exception as mandatory for standard licensed SDK use.
+The exact NR runtime's terms and any caller workaround are separate questions. BYO delivery removes our model
+redistribution; it is not a blanket grant for the player's acquisition/use or for bypassing runtime restrictions.
 
-No supplied beta agreement or authorized NR runtime was available to review. Therefore **this inquiry cannot
-confirm our eligibility, access or release permission**. A signed DLL, a game shipping DLSS 5, or a community mod
-working is not evidence of our rights to ship that DLL. A download by the player's installer also needs an authorized
-source and applicable permission. SDK evaluation permission must be distinguished from public-release permission.
+Research decisions and implementation acceptance conditions:
 
-The implementation handoff has these prerequisites:
-
-| Required answer/material | Current state | Completion evidence |
+| Material/decision | Research outcome | Implementation condition |
 | --- | --- | --- |
-| Independent mod developer eligible for NR beta access | Unconfirmed | NVIDIA supplies access or an applicable public access policy. |
-| Matching Windows x64 D3D12 headers, libraries, release runtime/model and integration guide | Not obtained | Authorized package with version, manifest and hashes; documented NR interface present. |
-| Distribution with a free third-party game mod, including Nexus hosting/donation points | Unconfirmed | Applicable package agreement or NVIDIA clarification covers that use and the intended delivery method. |
-| Application identity, notification, credit and branding requirements | NR-specific details unconfirmed | Record applicable requirements and the correct project/application registration. |
-| D3D11-to-D3D12 resource sharing on the bridge device | Plausible, untested for NR | Matching SDK documentation plus a successful shared-device probe. |
-| GPU, driver, OS, formats, motion/depth/mask conventions and supported SR/RR/FG combinations | Exact NR contract unconfirmed | Matching guide and runtime queries, followed by the tests below. |
+| Build SDK | Public NGX, including its D3D12 feature API; no mandatory beta helper. | Pin the public SDK and link its public interface. |
+| Model delivery | Owner accepts player-supplied `nvngx_dlssnr.dll`; no official public NR package established. | Omit model from our release; validate the supplied file and fail gracefully when absent. |
+| Backend route | Normal NGX driver-core dispatch first, shared device/session. | Distinguish discovery, creation and actual evaluation; success on our device remains unmeasured. |
+| NR-specific interface | Community mapping exists; NVIDIA sample corroborates input concepts. It is unofficial. | Isolate a versioned adapter and verify accepted resources/settings with that runtime. No arbitrary private-vtable offsets. |
+| Caller compatibility | Reviewed examples use naming/import workarounds; permission not established. | No silent fallback to those measures or another game's identity. A refusal is a recorded failure. |
+| Packaging rights | Standard SDK grant exists with conditions; NR-specific bundling grant not established. | Ship our integration with applicable SDK terms/notices; BYO model mode remains the default delivery. |
+| Beta access | No public download/admission policy established. | Optional future supported backend; not a prerequisite for compiling the public adapter. |
 
-The next agent may prepare managed rows, status plumbing and input validation while these are pending. It must not
-substitute guessed feature numbers, parameter strings, another game's application ID, patched binaries or a leaked
-package for the official NR backend. If authorized access is unavailable, leave the backend unavailable and report
-that prerequisite; do not present the feature as implemented.
+The implementation agent is not assigned another SDK-access or licensing survey. Implement the stated public-API
+candidate and measure it. If the supplied runtime refuses normal loading, report the exact stage/result; a public
+source example containing a bypass is not permission to adopt it. No successful runtime call is claimed by this spec.
+
+## Player-supplied runtime
+
+Use `BepInEx/TGNeuralRendering/Native/DLSS/nvngx_dlssnr.dll` as the defined placement. Also discover an existing
+game-folder NR DLL without replacing it. Prefer the mod-folder file when both exist, report the selection, and keep
+the existing compatible DLSS set intact. Register the selected folder before the shared NGX session starts.
+
+Validate x64 format, NVIDIA signature and version/hash using the bridge's existing trust policy. A valid signature
+establishes file identity, not permission or compatible hardware. Patched community runtimes may fail that policy;
+accepting BYO did not authorize weakening it. Take hardware availability from actual runtime results.
+
+The mod does not bundle, patch, rehost or automatically download the model, extract it from another game, rename
+the game executable, or require a ReShade add-on. Existing community download URLs are evidence of availability,
+not an authorized dependency feed. A future authorized redistribution grant can replace BYO packaging separately.
+
+When missing, show an amber alert on the Neural Rendering row with one precise instruction, for example:
+"The Neural Rendering DLL is missing. Put your nvngx_dlssnr.dll in BepInEx/TGNeuralRendering/Native/DLSS and restart."
+Explain an unsupported or rejected file separately from a missing file. Do not route players through a settings
+wizard or hand them motion-vector, NGX or HDR troubleshooting chores. Installing the mod without the DLL must leave
+Better Upscaling, Frame Generation, Path Tracing and normal rendering usable.
 
 ## Architecture
 
@@ -68,7 +87,7 @@ is a lifecycle interface, not a shared post-processing scheduler. The implementa
 for the NR render event and color handoff. Independent custom-pass registration order is insufficient.
 
 NGX initialization and DLL discovery must be coordinated with TGFG and TGBU. TGFG's current search-path addition is
-conditional on TGBU plus TGPT; it does not register a new NR folder. Establish the authorized NR paths before the
+conditional on TGBU plus TGPT; it does not register a new NR folder. Establish the selected NR paths before the
 first NGX initialization on the shared device. Keep per-feature handles separate, serialize access as the SDK
 requires, and never shut down another mod's active NGX session when disabling NR. Resolve compatible DLL versions
 as a documented set; preserve TGBU's settled rule for existing game-folder DLSS sets.
@@ -95,7 +114,7 @@ flowchart LR
     E --> F[TGFG presentation or normal presentation]
 ```
 
-This is the intended integration order; verify it against the delivered D3D12 guide and actual HDRP graph. Use one
+This is the intended integration order; verify it against the runtime profile and actual HDRP graph. Use one
 NR evaluation per real gameplay frame. Apply it to the scene before interface composition, with color already at
 the required display range/resolution. Never run it again on each generated frame.
 
@@ -110,21 +129,22 @@ XeSS FG. An NR-only installation must process the scene with FG and Better Upsca
 
 ## Input and lifetime contract
 
-This table defines what our integration must establish. Concrete encodings come from the delivered guide, not
-from the Vulkan sample or existing FG constants.
+This table defines what our integration must establish. For a BYO runtime, record the encoding in its validated
+profile, with the public observations that support it. An authorized guide takes precedence when available.
+Do not assume that the Vulkan sample's scales or the existing FG constants apply unchanged.
 
 | Input/state | Required behavior |
 | --- | --- |
 | Color/output | Correct format, transfer function, exposure, gamut, extent and orientation. Distinct valid output until evaluation succeeds; preserve original scene on failure. |
 | Motion | Actual game motion, including camera and moving objects. Record units, direction, scale, jitter convention and orientation; match color and frame ID. Never substitute zero motion to make a call succeed. |
 | Depth | Match the same view/frame; declare hardware reversed depth or linear view depth accurately. Include viewport and near/far information when required. |
-| Masks | Use only documented semantics, formats and resampling. Derive engine masks from real game data; distinguish them from the model's optional automatic mask. |
+| Masks | Use semantics/formats established by the supported profile. Derive engine masks from real game data; distinguish them from the model's optional automatic mask. |
 | Resolution | Record render/display sizes and every input subrectangle. Rebuild resources for resize and dynamic-resolution changes as required. |
-| History | Reset on activation, camera cuts, loads, discontinuities and incompatible feature/model/size changes according to the SDK. Do not reset every normal frame. |
+| History | Reset on activation, camera cuts, loads, discontinuities and incompatible feature/model/size changes. Do not reset every normal frame. |
 | Resource ownership | Keep Unity resources alive until their GPU reads/copies finish. Preserve render-graph dependencies and D3D11 state. |
 | Synchronization | Producer and consumer fences have separate signalling owners. Prevent reuse before completion; bound error recovery without presenting an old or partially written frame. |
 
-Support the game's SDR path first. HDR support is conditional on the documented NR color contract and a validated
+Support the game's SDR path first. HDR support is conditional on an established NR color contract and a validated
 conversion/composition path. Do not clip HDR into SDR and call HDR supported. If a color mode is unsupported, disable
 NR for that mode with an explanatory row tooltip while the game's rendering continues.
 
@@ -137,11 +157,12 @@ into tracer lighting, exposure, materials or denoiser history. Debug views shoul
 Keep one independent `DLSS Neural Rendering` Off/On row. Start Off for the first validation build. Final tuning and
 default require the owner's in-game verdict. Keep SR quality and FG settings in their existing rows.
 
-Provide controls for effect strength, model/style and detail/tone/skin adjustments only when the supplied SDK
-documents them for the selected runtime. [NVIDIA's controls overview](https://www.nvidia.com/en-us/geforce/news/dlss-5-3d-guided-neural-rendering/)
-confirms developer tuning and masking. Exact rows, values and ranges remain to be frozen after SDK receipt; do not
-copy the sample's fixed style list as a capability table. Prefer plain player labels such as Strength, Detail and
-Color, with tooltips explaining the specific documented effect. Avoid exposing developer mask-channel plumbing.
+Expose Strength first; add model/style and detail/tone/skin controls only for validated runtime profiles. NVIDIA's
+[controls overview](https://www.nvidia.com/en-us/geforce/news/dlss-5-3d-guided-neural-rendering/) confirms tuning and
+masking, but does not provide a universal runtime enumeration API. Preserve model defaults until a control is
+verified. A pinned profile may describe validated controls; it must not invent unsupported hardware capabilities.
+Prefer plain labels such as Strength, Detail and Color with tooltips explaining the established effect. Avoid
+exposing developer mask-channel plumbing. Recreate handles on changes if that runtime latches settings at creation.
 
 Video and FoA Mod Manager must show identical rows, choices, order, visibility and disabled reasons. Query the
 runtime for availability; persist valid settings and clamp them when capabilities change. Unsupported hardware,
@@ -154,17 +175,20 @@ evaluation ran; a successful evaluation is not the owner's visual approval.
 
 ## Delivery and acceptance
 
-1. **Access record:** resolve the prerequisite table; record package/license/version and D3D12 contracts. Keep
-   proprietary SDK files outside tracked source. Establish public-source versus private-beta disclosure boundaries.
+1. **Dependency record:** public SDK version, this research, adapter profile and supplied runtime version/hash.
+   Keep proprietary SDK files outside tracked source and the supplied model outside release packages. No beta
+   download or licensing survey is assigned to the implementation agent.
 2. **Device probe:** on the actual bridge device, demonstrate feature discovery, creation, evaluation, resize and
-   release with the authorized runtime; repeat with TGFG/Streamline and TGBU RR active. No image-quality claim yet.
+   release through normal NGX with the supplied runtime; repeat with TGFG/Streamline and TGBU RR active. No
+   image-quality claim yet. If normal NGX fails, retain the error and do not silently invoke a caller workaround.
 3. **Scene pass:** NR runs once on a correctly matched gameplay frame, before UI and before TGFG scene capture.
    Test both game versions, camera cuts, loading, resolution changes and Off restoration.
 4. **Compatibility and appearance:** test NR alone; Better Upscaling with DLSS/DLAA, FSR, XeSS and STP; FG Off and
    each supported FG backend; TGPT with RR and NRD on Mono; SDR and any declared HDR support. A combination may be
    withheld only for a documented contract conflict or reproduced failure with evidence.
 5. **Player release:** owner approves the appearance and defaults, required checks pass, and permitted runtime
-   delivery is integrated into normal Vortex packaging. Coordinate all mod versions and bump the bridge version
+   delivery uses the specified BYO layout in normal Vortex packaging. Apply the release obligations identified
+   in the research; this spec does not license a caller workaround. Coordinate versions and bump the bridge version
    for bridge changes. Ask before changing zip contents, as AGENTS.md requires.
 
 Add meaningful tests for frame/viewport matching, resets, invalid resources and failure fallback; mutation-check
@@ -177,11 +201,11 @@ Run the game's tests only through `tools/harness/Run-PtHarness.ps1` and extend i
 Follow AGENTS.md's GPU gate, build/install/deploy/hash checks and testing rules. The current PT offline harness
 does not exercise this NR path. No performance promise is made before measurement.
 
-## NVIDIA inquiry draft - not sent
+## Optional NVIDIA clarification draft - not sent
 
 Recipient: `nvidia-rtx-license-questions@nvidia.com` (ask for routing to the DLSS NR SDK-access team).
 
-Subject: DLSS 5 Neural Rendering SDK access and distribution for a free game mod
+Subject: DLSS Neural Rendering runtime access and caller compatibility for a free game mod
 
 We maintain TG Better Upscaling and TG Frame Generation for Tainted Grail: The Fall of Avalon
 (https://github.com/wessberg/TGFrameGeneration). We would like to add an independent DLSS 5 Neural Rendering
@@ -200,12 +224,16 @@ Could you confirm:
 4. Which driver/OS/GPU, color/HDR, depth/motion/mask, history and feature-ordering contracts apply, including use
    with non-DLSS upscalers and denoisers.
 
-We are requesting an authorized integration package and release terms. Please route this inquiry to the appropriate
-SDK-access and licensing contacts.
+We understand that the standard RTX SDK license already grants conditional compiled application redistribution.
+We are asking about access and NR-specific runtime/caller restrictions, not assuming every SDK integration needs
+a separate exception. We can distribute our integration with a player-supplied NR DLL if model bundling is not
+available. Please route the unresolved questions to the appropriate contacts.
 
 ## Handoff verdict
 
-The independent design is plausible and the direct NGX approach is evidenced. **SDK access, the D3D12 contract and
-NR runtime redistribution are not confirmed.** The next agent must resolve those prerequisites before implementing
-the vendor backend or promising a distributable mod. This research changed documentation only; no SDK was acquired,
-external inquiry sent, backend built or game tested.
+Implement the public-NGX adapter on our existing bridge, with the specified player-supplied runtime layout. No beta
+helper, RenoDX or ReShade is a required build dependency. The normal loader's success with NR on our shared device
+is unmeasured; the reviewed working community routes do not establish a license-cleared caller workaround. BYO
+addresses model bundling, not every runtime-use restriction. Those limits remain visible in the handoff and must
+not become claims that NR is supported or cleared. This research acquired no NR binary, sent no external inquiry,
+and built or tested no NR backend. See [DLSS5-RESEARCH.md](DLSS5-RESEARCH.md) for the completed investigation.

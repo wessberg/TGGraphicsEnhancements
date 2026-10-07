@@ -489,8 +489,8 @@ already has for the case (Exclusive Fullscreen: `SetForbiddenOptions`, not a pol
   a > 20 m jump. The radiance cache survives cuts.
 - DLSS 5 with tracing: with RR, upscaling is TGBU's RR on the bridge device, and the add-on's neural rendering binds
   to its own proxy ("BindDevice rejected a distinct live D3D12 device"): an add-on limitation. R7 corrects "impossible":
-  310.9.1 lacks a public NR API; NVIDIA's sample requires a beta NGX SDK. Direct bridge NGX spec: `docs/DLSS5-SPEC.md`.
-  SDK access, D3D12 contract and NR release rights unconfirmed. First NGX paths and post-NR FG capture need coordination.
+  Public NGX can build an NR adapter without beta helpers; owner accepts a supplied model DLL. `docs/DLSS5-SPEC.md`.
+  `docs/DLSS5-RESEARCH.md`: community caller workarounds not cleared; normal NGX unmeasured. First paths/FG capture matter.
 
 ### 9.7 Surfaces
 - Metals: path vertices are diffuse-only, so `SurfaceMaterial.reflectance` = base colour (a metal's specular energy

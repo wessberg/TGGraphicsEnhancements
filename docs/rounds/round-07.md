@@ -69,13 +69,52 @@ remain settled. No code, runtime, package, installed file or running agent chang
 The spec distinguishes facts from proposed behavior. SDK eligibility, the actual D3D12 input/lifecycle contract and
 release rights require the authorized package or a NVIDIA response. No external message was sent. Source checks
 passed 88/88 on the current working tree; this is source consistency, not a licensing or GPU acceptance test.
-The owner then requested a commit before finalizing. Stage this spec, this round and only this inquiry's changes
-to BACKLOG, PROJECT-CONTEXT and ROUNDS; the pre-existing PT and release changes stay outside that documentation commit.
+The owner then requested a commit before finalizing. Initial docs committed as `5b014d3`; pre-existing PT and
+release changes stayed outside that documentation commit.
+
+## Follow-up: public SDK and player-supplied runtime
+
+The owner questioned the license and the supposed need to contact NVIDIA. The earlier wording conflated beta
+access with redistribution permission. The standard SDK license already grants conditional application distribution;
+beta labeling alone is not a blanket redistribution ban. The owner then ruled: "These are all parts of your job,
+not the implementers. Your task is to thoroughly research these things. If it ends up being that people need to
+brign their own .dll for the neural rendering part of the sdk, so be it".
+
+Finished the public-source investigation in `docs/DLSS5-RESEARCH.md` and revised the spec. The public SDK has generic
+D3D12 NGX dispatch and slot 18. Beta helper headers are not inherently required to write an independent adapter.
+The owner accepts shipping our integration separately from a supplied `nvngx_dlssnr.dll`. Defined its placement,
+discovery, signature/version handling, initial search-path registration and missing-file alert. BYO does not make
+the model part of our package, but does not itself grant runtime use or permission for a caller workaround.
+
+Inspected actual source at pinned revisions: UniversalDLSS5 `e47518a74ff539df2a16c71f8aa5c0b7038e8c5a`, UnityDLSSNR
+`4781026526ead653e0c594fbbc66c3a210489291`, OptiScaler-Susemi `3def828dadbd79f887996a6733ae261abe0e669f`.
+Their working independent paths include caller naming/import measures or fallback to them. A valid NVIDIA signature,
+a signed file on disk, or no separate helper DLL is not proof of normal NGX loading without circumvention.
+The normal driver-core candidate exists in source, but an older investigation reports failed creation. No normal
+create/evaluate success was measured here. Public SDK versus model-export signatures must not be confused; private
+parameter-vtable offsets and another game's identity are excluded from the candidate.
+
+Verified official release metadata: DLSS 310.9.1 and Streamline 2.14.1, both published September 8. No public NR
+package/access policy established. A read-only search of this PC's NVIDIA DriverStore directories found no
+`nvngx_dlssnr.dll`, correcting reliance on community claims that the driver necessarily contains it. No model
+download, proprietary binary analysis, GPU probe, source implementation, package change or game run was performed.
+Public code was read in memory; no third-party implementation code was copied into tracked files. SDK license
+section 4(d) leaves caller workarounds uncleared. No external contact was sent or implied to have answered.
+
+Follow-up verification: `python tests/source_checks.py` passed all 89 checks on the current tree; the earlier run
+had 88. This is source consistency, not an NR GPU or licensing verdict.
+
+The implementation handoff now specifies public NGX plus BYO as a concrete candidate, with beta integration optional.
+The implementation agent measures discovery/create/evaluate/image correctness on the shared device; it is not
+assigned another access/licensing survey. A failed ordinary call must stay a recorded failure, never become an
+undisclosed compatibility fallback. Outstanding runtime-use permission is an external evidence limit, not a claim
+that the research found a cleared working backend. All sources, decisions and limits are in the research/spec.
 
 ## ▶ Starter prompt (R8)
 
 Read BACKLOG and PROJECT-CONTEXT, then `docs/DLSS5-SPEC.md` if working on native DLSS 5. The owner requested the spec
-for another agent to implement. Resolve authorized NVIDIA NR beta SDK/runtime access, D3D12 contracts and distribution
-terms first; the spec contains an unsent inquiry. The current interface is a lifecycle API, not a render-stage
-scheduler. NR must run before TGFG's HUD-less capture, and its search paths must exist at the first NGX initialization.
+for another agent to implement and accepts a supplied NR DLL. Read `docs/DLSS5-RESEARCH.md`; beta helpers are optional.
+Implement the public-NGX candidate with the specified BYO layout; do not repeat access research or silently adopt
+an uncleared caller workaround. The current interface is lifecycle, not render scheduling. NR precedes TGFG's
+HUD-less capture and registers its path before first NGX initialization. No NR runtime success has been measured.
 If returning to PT, read round-06's newest work and starter prompt; this round changed none of its code or deployment.
