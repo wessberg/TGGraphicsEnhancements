@@ -1,0 +1,225 @@
+{
+ "about": "The view each scenario's save was made with, found by tools/harness/calibrate.py from the save's own picture (a save does not keep the look up or down). Written by a machine: run Run-PtHarness.ps1 -Calibrate to renew it.",
+ "views": {
+  "caustics-glass": {
+   "pitch": 42,
+   "yawOffset": 0,
+   "match": 0.302,
+   "matchLevel": 0.071,
+   "slot": "Slot_88",
+   "saved": "2026-10-06 14:19:06",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "metal": {
+   "pitch": 9,
+   "yawOffset": 0,
+   "match": 0.504,
+   "matchLevel": 0.133,
+   "slot": "Slot_89",
+   "saved": "2026-10-06 14:20:02",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "npc-day": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.555,
+   "matchLevel": 0.555,
+   "slot": "Slot_50",
+   "saved": "2026-04-12 00:21:47",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "npc-candle": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.816,
+   "matchLevel": 0.816,
+   "slot": "Slot_82",
+   "saved": "2026-09-26 00:24:46",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "tavern-room": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.579,
+   "matchLevel": 0.579,
+   "slot": "QuickSave_3",
+   "saved": "2026-09-26 01:49:24",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "boil-cage": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.594,
+   "matchLevel": 0.594,
+   "slot": "Slot_84",
+   "saved": "2026-10-06 14:11:33",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "glass-jars": {
+   "pitch": 16,
+   "yawOffset": 0,
+   "match": 0.523,
+   "matchLevel": 0.408,
+   "slot": "AutoSave_0",
+   "saved": "2026-09-28 01:40:30",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "water-day": {
+   "pitch": 19,
+   "yawOffset": 0,
+   "match": 0.518,
+   "matchLevel": 0.177,
+   "slot": "Slot_86",
+   "saved": "2026-10-06 14:14:46",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "water-torch": {
+   "pitch": 10,
+   "yawOffset": 0,
+   "match": 0.811,
+   "matchLevel": 0.421,
+   "slot": "Slot_87",
+   "saved": "2026-10-06 14:17:25",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "door-strap": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.691,
+   "matchLevel": 0.691,
+   "slot": "Slot_85",
+   "saved": "2026-10-06 14:13:25",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "dark-room": {
+   "pitch": 10,
+   "yawOffset": 0,
+   "match": 0.598,
+   "matchLevel": 0.354,
+   "slot": "AutoSave_4",
+   "saved": "2026-09-28 01:45:11",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "doorway": {
+   "pitch": 21,
+   "yawOffset": 0,
+   "match": 0.259,
+   "matchLevel": -0.035,
+   "slot": "QuickSave_1",
+   "saved": "2026-09-26 12:55:41",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "forest": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.486,
+   "matchLevel": 0.412,
+   "slot": "Slot_37",
+   "saved": "2026-04-05 23:51:28",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "vista": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.418,
+   "matchLevel": 0.392,
+   "slot": "Slot_77",
+   "saved": "2026-04-26 23:43:13",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "night": {
+   "pitch": -10,
+   "yawOffset": 0,
+   "match": 0.44,
+   "matchLevel": 0.312,
+   "kept": "the matched view",
+   "slot": "Slot_93",
+   "saved": "2026-10-06 15:49:24",
+   "run": "20261006-162149"
+  },
+  "fog": {
+   "pitch": -10,
+   "yawOffset": 0,
+   "match": 0.729,
+   "matchLevel": 0.469,
+   "slot": "Slot_47",
+   "saved": "2026-04-11 23:57:27",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "glow": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.648,
+   "matchLevel": 0.648,
+   "kept": "level, as loaded",
+   "slot": "Slot_92",
+   "saved": "2026-10-06 15:48:09",
+   "run": "20261006-162149"
+  },
+  "stairwell": {
+   "pitch": -22,
+   "yawOffset": 0,
+   "match": 0.538,
+   "matchLevel": 0.144,
+   "slot": "Slot_80",
+   "saved": "2026-09-26 00:05:00",
+   "run": "20261006-144730",
+   "kept": "the matched view"
+  },
+  "campfire": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.448,
+   "matchLevel": 0.448,
+   "slot": "Slot_26",
+   "saved": "2026-04-03 15:29:43",
+   "run": "20261006-144730",
+   "kept": "level, as loaded"
+  },
+  "refract-jar": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.414,
+   "matchLevel": 0.414,
+   "kept": "level, as loaded",
+   "slot": "Slot_90",
+   "saved": "2026-10-06 15:44:57",
+   "run": "20261006-155040"
+  },
+  "candle": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.569,
+   "matchLevel": 0.569,
+   "kept": "level, as loaded",
+   "slot": "Slot_91",
+   "saved": "2026-10-06 15:45:59",
+   "run": "20261006-162149"
+  },
+  "hair-eyebrows": {
+   "pitch": 0,
+   "yawOffset": 0,
+   "match": 0.471,
+   "matchLevel": 0.471,
+   "kept": "level, as loaded",
+   "slot": "Slot_94",
+   "saved": "2026-10-06 16:49:57",
+   "run": "20261006-170243"
+  }
+ }
+}

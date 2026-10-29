@@ -14,18 +14,24 @@ namespace TGPathTracing
         internal static PathTracingBehaviour Host; // runs the capture's coroutine
         internal static NativeTracer Tracer;
         internal static NativeStatus Status;
+        internal static NativeDiagnostics Diagnostics;
         internal static bool HaveStatus;
-        private static bool stopped = true, reportedSupport, reportedDisabled;
+        private static bool stopped = true, reportedSupport, reportedReady, reportedDisabled;
         private static float nextPoll, nextDiscovery, nextReport;
+        // The notice "building the traced world" shows once the world has been arriving for this long (Arrival.cs).
+        private const float BuildingNoticeAfter = 2f;
         private static ulong lastFramesTraced;
         private static uint lastComposited; private static float compositedAt = -1f;
         private static int skyId; private static IntPtr skyPointer;
-        private const ulong GeometryBudget = 2560ul << 20;
-        private static float nextClear;
+        private static bool sceneResetPending;
+        private static int arrivalRules = -1; // the hidden "Arrival as before" as last read (-1: not read yet)
+        private static void SceneUnloaded(UnityEngine.SceneManagement.Scene scene) { sceneResetPending = true; }
 
-        // HDRP's frame goes to the tracer: a mode is on, the native side is bound, can trace and has not given up.
-        internal static bool WantsFrames => !stopped && Settings.CurrentMode != TracingMode.Off && Tracer != null && Tracer.Connected && HaveStatus &&
-            Status.Supported != 0 && Status.Disabled == 0 && !HdrpPasses.Failed;
+        // HDRP's frame goes to the tracer: a mode is on, the native side is bound, can trace, has made its passes (on a thread
+        // of its own while the game starts: until then the game draws its own image) and has not given up.
+        internal static bool WantsFrames => CanCapture && !TextureShare.Incomplete;
+        private static bool CanCapture => !stopped && Settings.CurrentMode != TracingMode.Off && Tracer != null && Tracer.Connected && HaveStatus &&
+            Status.Supported != 0 && Status.Starting == 0 && Status.Disabled == 0 && !HdrpPasses.Failed;
 
         // The denoisers this PC runs (the Denoising row lists only these): DLSS Ray Reconstruction on an NVIDIA GPU with
         // TG Better Upscaling installed, until NGX reports it does not run here; NVIDIA NRD and AMD Ray Regeneration where the native
@@ -61,10 +67,23 @@ namespace TGPathTracing
             SafeConfig.Take(config, PathTracingPlugin.Name);
             stopped = false; nextPoll = nextDiscovery = 0;
             HdrpPasses.Initialize();
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded += SceneUnloaded;
             try { PerformanceOverlay.AddSection("Path Tracing", 20, TracingOverlay.Lines); }
             catch (Exception ex) { Log.LogWarning("No performance overlay section: " + ex.Message); }
             Log.LogInfo("TG Path Tracing " + PathTracingPlugin.Version + " loaded. Graphics API: " + SystemInfo.graphicsDeviceType + ". Mode " + Settings.Mode.Value +
                 " (" + Settings.ModeKey.Value + " turns it on and off, " + Settings.ViewKey.Value + " the debug views; " + Settings.File.ConfigFilePath + ").");
+        }
+
+        // PT-107 (docs/rounds/round-19.md 5): Unity's frame pacing, read once a session, for reading the frames' timing (the
+        // native 10-second line). Read only: a trial that SET maxQueuedFrames while the game ran (3, then back to 2) hung the
+        // game on 2026-10-10 (run 20261010-192506) and came out the same evening.
+        private static bool pacingSaid;
+        private static void SayPacing()
+        {
+            if (pacingSaid) return;
+            pacingSaid = true;
+            Log.LogInfo("Unity's frame pacing: frames queued " + QualitySettings.maxQueuedFrames + ", VSync count " + QualitySettings.vSyncCount +
+                ", target frame rate " + Application.targetFrameRate);
         }
 
         internal static void Tick()
@@ -74,12 +93,63 @@ namespace TGPathTracing
             {
                 float now = Time.unscaledTime;
                 Hotkeys();
+                // PT-98, for measuring (the hidden "Arrival as before"): a change starts the traced scene over, so that one
+                // run of one scene shows the world arrive by the rules of before and by the clock.
+                int rules = Settings.ArrivalAsBefore.Value;
+                if (rules != arrivalRules)
+                {
+                    if (arrivalRules >= 0 && Tracer.Connected)
+                    {
+                        Log.LogInfo("The hidden \"Arrival as before\" is " + rules + " now (" + (rules != 0 ? "by the frame and by the scan, as before" : "by the clock") +
+                            "): the traced scene starts over, for measuring its arrival (PT-98).");
+                        Tracer.ClearScene(); SceneCapture.Reset(); CharacterCapture.Reset();
+                        Arrival.SceneCleared("the hidden \"Arrival as before\" changed and the traced scene started over");
+                        compositedAt = -1f;
+                    }
+                    arrivalRules = rules;
+                }
+                if (sceneResetPending && Tracer.Connected)
+                {
+                    sceneResetPending = false;
+                    Log.LogInfo("Traced scene released after the game unloaded a scene; geometry, textures and histories start over.");
+                    Tracer.ClearScene(); SceneCapture.Reset(); CharacterCapture.Reset();
+                    Arrival.SceneCleared(); // PT-98: the timeline starts over with the next frame that captures
+                    compositedAt = -1f;
+                }
                 WatchRayReconstruction(now);
                 if (now >= nextPoll)
                 {
                     nextPoll = now + 0.25f;
                     if (!Tracer.Connected && now >= nextDiscovery) { nextDiscovery = now + 5f; Tracer.Discover(); }
                     HaveStatus = Tracer.ReadStatus(out Status);
+                    Tracer.ReadDiagnostics(out Diagnostics);
+                    if (Settings.CurrentMode != TracingMode.Off && HaveStatus && Status.Starting != 0)
+                        Notices.Show("tgpt.compiling", "TG Path Tracing", "compiling shaders (" + Diagnostics.PassesDone + " of " + Diagnostics.PassesTotal + ")", 1f);
+                    else Notices.Hide("tgpt.compiling");
+                    // After a load the traced world is built over seconds (meshes registered, built and placed, textures
+                    // opened and baked): until then things are missing from the picture (PT-98; the owner, 2026-10-09: "I
+                    // frequently see stuff pop in over time ... so I'm never sure when I can trust the visuals").
+                    // Arrival counts all of it (its file's head says what "whole" is): the notice says how many things are
+                    // still to come and goes when the world is whole. Said once it has lasted 2 s: a few meshes streaming
+                    // in while the player walks say nothing.
+                    if (HaveStatus && Status.Starting == 0 && Settings.CurrentMode != TracingMode.Off && Arrival.Running && Arrival.Seconds >= BuildingNoticeAfter)
+                        Notices.Show("tgpt.building", "TG Path Tracing", Arrival.NoticeText, 1f);
+                    else Notices.Hide("tgpt.building");
+                    if (Settings.CurrentMode != TracingMode.Off && TextureShare.Incomplete)
+                        Notices.Show("tgpt.textures", "TG Path Tracing", TextureShare.FailureText, 1f);
+                    else Notices.Hide("tgpt.textures");
+                    // A render-thread maintenance event also retires scene memory while tracing is off or paused.
+                    // Its data says whether tracing is OFF (1: the Mode row, or it cannot run this session), not merely
+                    // paused for textures (0): off for five seconds, the native side lets go of what only a traced frame
+                    // needs, over a gigabyte at 4K with DLSS, and the next traced frame makes it again (PT-87,
+                    // docs/agents/memory-1.md; tracer.cpp release_frame_memory).
+                    if (HaveStatus && Status.Starting == 0 && Tracer.RenderEvent != IntPtr.Zero)
+                    {
+                        using (var commands = new UnityEngine.Rendering.CommandBuffer()) {
+                            commands.IssuePluginEventAndData(Tracer.RenderEvent, 7, CanCapture ? IntPtr.Zero : new IntPtr(1));
+                            Graphics.ExecuteCommandBuffer(commands);
+                        }
+                    }
                     ReportSupport();
                     if (HaveStatus && Status.Composited != lastComposited) { lastComposited = Status.Composited; compositedAt = now; }
                     var offered = OfferedDenoisers;
@@ -88,25 +158,23 @@ namespace TGPathTracing
                 PathTracingRow.Tick(now); // catches its own failures
                 ReplacedRows.Tick(now); // the game's rows path tracing replaces are greyed out; catches its own failures
                 bool tracing = WantsFrames;
+                SayPacing(); // PT-107: once a session, read only
                 // HDRP's indirect light goes only while the traced light replaces it on screen: if composites stop,
                 // HDRP's own comes back within a second instead of leaving the scene without bounced light.
                 HdrpPasses.SetIndirectOverride(tracing && Settings.NoIndirectFromHdrp.Value && compositedAt >= 0f && now - compositedAt < 1f);
-                if (!tracing) return;
+                // PT-112, the sky, on trial (the hidden "Sky trial"): what this frame does with HDRP's sky, and its count every 10 s.
+                try { SkyModel.Tick(now); } catch (Exception ex) { Log.LogWarning("Sky trial: " + ex.Message); }
+                // PT-98: the arrival's timeline runs while the scene is captured (a mode is on, the passes are made, a camera).
+                if (!CanCapture) { Arrival.Tick(now, false); return; }
                 var camera = Camera.main;
-                if (camera == null) return;
+                if (camera == null) { Arrival.Tick(now, false); return; }
                 var position = camera.transform.position;
-                // Meshes stay registered while the camera travels: past a budget the traced scene starts over from
-                // what is near the camera now, rather than filling video memory.
-                if (HaveStatus && Status.GeometryBytes + Status.AccelerationBytes > GeometryBudget && now >= nextClear)
-                {
-                    nextClear = now + 30f;
-                    Log.LogInfo("Traced scene over " + (GeometryBudget >> 20) + " MB of geometry; it starts over from what is near the camera.");
-                    Tracer.ClearScene();
-                    SceneCapture.Reset();
-                    CharacterCapture.Reset();
-                }
+                Arrival.Begin(now);
                 SceneCapture.Tick(now, position);
+                WaterCaustics.Tick();
+                RainWetness.Tick(now); // PT-108 on trial (the hidden "Rain wetness"; nothing unless set): the game's weather found
                 SceneLights.Tick(now, position, Settings.Lights.Value, HDCamera.GetOrCreate(camera).frameSettings.IsEnabled(FrameSettingsField.LightLayers));
+                Arrival.Tick(now, true);
                 // HDRP's sky reflection is a CubemapArray, not a render texture; its native texture changes only
                 // when HDRP recreates it (GetNativeTexturePtr waits for the render thread, so it is cached).
                 var sky = HdrpPasses.SkyTexture(HDCamera.GetOrCreate(camera));
@@ -122,6 +190,7 @@ namespace TGPathTracing
                     Log.LogInfo("Path tracing: " + StatusText + " | scene: " + SceneCapture.Summary + " | characters " + CharacterCapture.Summary +
                         " | lights " + SceneLights.Count + (SceneLights.Sun.Valid ? " + sun" : ", no sun") +
                         (SceneLights.PlacedLeftOut > 0 ? ", " + SceneLights.PlacedLeftOut + " placed lights left out" : "") + (SceneLights.LeftOut > 0 ? " (" + SceneLights.LeftOut + " left out: specular-only or on other light layers)" : "") + " | " + HdrpPasses.ExposureText + " | hook: " + HdrpPasses.LastFrame);
+                    SceneCapture.FollowReported(); // the most a frame's placing took, from report to report
                 }
             }
             catch (Exception ex)
@@ -185,6 +254,11 @@ namespace TGPathTracing
                 if (Status.Supported != 0) Log.LogInfo("Path tracing is available on this GPU.");
                 else Log.LogWarning("Path tracing is unavailable: " + Tracer.UnsupportedReason());
             }
+            if (!reportedReady && Status.DeviceReady != 0 && Status.Supported != 0 && Status.Starting == 0)
+            {
+                reportedReady = true;
+                Log.LogInfo("Path tracing's passes are ready, made in " + Status.StartSeconds.ToString("0.0") + " s while the game started.");
+            }
             if (!reportedDisabled && Status.Disabled != 0)
             {
                 reportedDisabled = true;
@@ -200,6 +274,8 @@ namespace TGPathTracing
                 var s = Status;
                 if (s.DeviceReady == 0) return "TG Graphics Bridge has no D3D12 device yet (" + GraphicsBridge.Describe() + ")";
                 if (s.Supported == 0) return "unavailable: " + Tracer.UnsupportedReason();
+                if (s.Starting != 0) return "compiling shaders (" + Diagnostics.PassesDone + " of " + Diagnostics.PassesTotal + ")";
+                if (TextureShare.Incomplete) return TextureShare.FailureText;
                 ulong frames = s.FramesTraced - lastFramesTraced; lastFramesTraced = s.FramesTraced;
                 string denoiser = RayReconstruction.Active ? "DLSS Ray Reconstruction" : (s.Features & Tgpt.FeatureRayRegenerationActive) != 0 ? "AMD Ray Regeneration"
                     : (s.Features & Tgpt.FeatureNrdActive) != 0 ? "NRD" : Settings.CurrentDenoiser == DenoiserChoice.None ? "no denoiser" : "built-in denoiser";
@@ -210,7 +286,7 @@ namespace TGPathTracing
                 return Settings.Mode.Value + " " + s.RenderWidth + "x" + s.RenderHeight + " (" + denoiser + "), GPU " + s.GpuMs.ToString("0.00") + " ms, render thread " + s.FrameMs.ToString("0.00") +
                     " ms | " + raytracing +
                     " | meshes " + s.MeshesReady + " ready, " + s.MeshesQueued + " queued, " + s.MeshesFailed + " failed | " + s.InstancesTraced + " of " + s.Instances +
-                    " instances traced, " + (s.Triangles / 1000) + "k triangles, " + ((s.GeometryBytes + s.AccelerationBytes) >> 20) + " MB | traced " + s.FramesTraced +
+                    " instances traced, " + (s.Triangles / 1000) + "k triangles, " + (Diagnostics.Total >> 20) + " MB | traced " + s.FramesTraced +
                     " (+" + frames + "), failed " + s.FramesFailed + (s.LastError != 0 ? ", last error 0x" + s.LastError.ToString("X8") : "") +
                     (compositedAt >= 0f && Time.unscaledTime - compositedAt < 1f ? " | on screen" : " | not on screen (see the native log)");
             }
@@ -220,6 +296,8 @@ namespace TGPathTracing
         {
             if (stopped) return;
             stopped = true;
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded -= SceneUnloaded;
+            Notices.Hide("tgpt.compiling"); Notices.Hide("tgpt.textures"); Notices.Hide("tgpt.building");
             try { ReplacedRows.Release(); } catch { }
             try { HdrpPasses.SetIndirectOverride(false); } catch { }
             HdrpPasses.Dispose();

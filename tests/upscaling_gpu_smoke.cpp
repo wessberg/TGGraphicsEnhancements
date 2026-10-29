@@ -7,6 +7,7 @@
 // (skipped) without them or without a D3D12 GPU.
 #include "tgb/bridge_c_api.h"
 #include "tgup_api.h"
+#include "../native/neural/include/tgnr_api.h"
 #include <Windows.h>
 #include <psapi.h>
 #include <d3d11_4.h>
@@ -103,10 +104,11 @@ int main(int argc, char** argv) {
     // --installed: the native files as a player's BepInEx folder holds them (BepInEx/<mod>/Native, the bridge in
     // each), beside this exe, so what the extensions find through the bridge's BepInEx root is what they find in
     // the game. Frame generation's Streamline also needs a Unity player (UnityPlayer.dll) beside this exe.
-    bool withFg=false, withPt=false, factoryFirst=false, installed=false;
+    bool withFg=false, withPt=false, withNr=false, factoryFirst=false, installed=false;
     for(int i=2;i<argc;++i) {
         if(std::strcmp(argv[i], "--with-fg")==0) withFg=true;
         if(std::strcmp(argv[i], "--with-pt")==0) withPt=true;
+        if(std::strcmp(argv[i], "--with-nr")==0) withNr=true;
         if(std::strcmp(argv[i], "--factory-first")==0) factoryFirst=true;
         if(std::strcmp(argv[i], "--installed")==0) installed=true;
     }
@@ -118,7 +120,7 @@ int main(int argc, char** argv) {
     if(installed) {
         wchar_t exe[MAX_PATH]{}; GetModuleFileNameW(nullptr, exe, MAX_PATH);
         const fs::path bepinex=fs::path(exe).parent_path()/"smoke-install"/"BepInEx";
-        for(const char* mod:{"TGBetterUpscaling", "TGFrameGeneration", "TGPathTracing"}) {
+        for(const char* mod:{"TGBetterUpscaling", "TGFrameGeneration", "TGPathTracing", "TGNeuralRendering"}) {
             if(!fs::exists(root/mod)) continue;
             std::error_code ec;
             const auto target=bepinex/mod/"Native";
@@ -160,6 +162,7 @@ int main(int argc, char** argv) {
         if(!fs::exists(ptPath)) { std::printf("SKIP: TG Path Tracing's DLL is not staged (%s)\n", ptPath.string().c_str()); return 77; }
         expect(addExtension(ptPath.c_str())==0, "path tracing extension registered");
     }
+    if(withNr) expect(addExtension((native("TGNeuralRendering")/"TGNeuralRendering.Native.dll").c_str())==0, "neural rendering extension registered");
     expect(bootstrap(nullptr)==0, "bridge bootstrap");
     check_bundled_dlss(native("TGBetterUpscaling"));
     WNDCLASSW wc{}; wc.lpfnWndProc=DefWindowProcW; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=L"TGGraphicsBridgeSmoke";
@@ -400,8 +403,34 @@ int main(int argc, char** argv) {
             f.motionScaleX=-float(RW); f.motionScaleY=-float(RH);
             f.cameraNear=0.1f; f.cameraFar=1000.f; f.fovY=1.0f; f.frameTimeMs=16.6f; f.preExposure=1.f;
             f.flags=TGUP_FLAG_DEPTH_INVERTED|(n==0 ? TGUP_FLAG_RESET : 0u);
+            using NrQueue=void*(__cdecl*)(const TGNR_Frame*,uint32_t);
+            using NrRead=int(__cdecl*)(TGNR_Status*);
+            NrQueue queueNr=nullptr; NrRead readNr=nullptr;
+            void(__stdcall* executeNr)(int,void*)=nullptr;
+            TGNR_Frame nr{sizeof(nr),TGNR_ABI,f.sequence,1,f.color,0,0,OW,OH,RW,RH,9,0,0,0,0.1f,1000};
+            // No depth/motion guesses are provided by the camera packet: NR must consume the
+            // actual RR handoff. Wrong-camera mutation must fail this same evaluation check.
+            if(withNr && n<frames-2) {
+                auto module=GetModuleHandleW(L"TGNeuralRendering.Native.dll");
+                queueNr=reinterpret_cast<NrQueue>(GetProcAddress(module,"TGNR_QueueFrame"));
+                auto eventNr=reinterpret_cast<void*(__cdecl*)()>(GetProcAddress(module,"TGNR_GetRenderEvent"));
+                readNr=reinterpret_cast<NrRead>(GetProcAddress(module,"TGNR_ReadStatus"));
+                expect(queueNr && eventNr && readNr,"NR exports beside RR");
+                if(!queueNr || !eventNr || !readNr) return 1;
+                executeNr=reinterpret_cast<void(__stdcall*)(int,void*)>(eventNr());
+                if(std::getenv("TGNR_TEST_WRONG_CAMERA")) nr.color=f.output;
+                auto arm=queueNr(&nr,4); expect(arm!=nullptr,"NR arms the RR camera without substitute guides"); executeNr(4,arm);
+            }
             if(submit(&f)!=0) { expect(false, "submit a Ray Reconstruction request"); break; }
             render(1, reinterpret_cast<void*>(uintptr_t(f.sequence)));
+            if(executeNr) {
+                nr.color=f.output;
+                auto scene=queueNr(&nr,5); expect(scene!=nullptr,"NR accepts denoised scene"); executeNr(5,scene);
+                TGNR_Status ns{sizeof(ns),TGNR_ABI}; readNr(&ns);
+                expect(ns.evaluated==uint64_t(n+1) && ns.failed==0,"NR evaluated from actual RR inputs on their shared device");
+                if(ns.failed) break;
+                if(n==15 || n==frames-3) executeNr(3,nullptr);
+            }
         }
         context->Flush();
         us={sizeof(TGUP_Status), TGUP_ABI}; readUp(&us);
@@ -433,7 +462,10 @@ int main(int argc, char** argv) {
         expect(std::fabs(mean-expected)<0.25*expected, "DLSS Ray Reconstruction keeps the background's brightness");
         expect(rough<0.1*expected, "DLSS Ray Reconstruction removes the per-pixel noise");
         expect(squareCenter>1.5f, "DLSS Ray Reconstruction keeps the moving square where it is this frame");
-    } else std::printf("      DLSS Ray Reconstruction not available here; skipped\n");
+    } else {
+        std::printf("      DLSS Ray Reconstruction not available here; skipped\n");
+        if(withNr) expect(false,"NR/RR coexistence requires actual RR evaluations");
+    }
     // XeSS just below native: the narrowest preset by ratio (Native Anti-Aliasing) refuses the size, so
     // a wider one serves it. That choice is made once, not re-made (with a blocking re-initialization)
     // every frame.

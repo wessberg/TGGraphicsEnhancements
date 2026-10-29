@@ -21,7 +21,7 @@ public:
     uint32_t needs() noexcept override { return tgb::NeedD3D12; }
     bool bootstrap() noexcept override {
         try {
-            log("TG Better Upscaling 1.2.0 extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
+            log("TG Better Upscaling 1.2.3 extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
             install_dlss_dll(root);
             const bool fsr=load_fsr_runtime(root), xess=load_xess_runtime(root);
             if(!fsr && !xess) { log("Neither AMD FSR nor Intel XeSS could be loaded; upscaling stays off"); return false; }
@@ -127,6 +127,12 @@ TGUP_EXPORT int32_t TGUP_CALL TGUP_GetModes(uint32_t backend, TGUP_Mode* modes, 
         for(size_t i=0;i<list.size() && i<capacity;++i) modes[i]=list[i];
         return int32_t(list.size());
     } catch(...) { return -2; }
+}
+TGUP_EXPORT int32_t TGUP_CALL TGUP_GetRrOptimalSettings(uint32_t outputWidth, uint32_t outputHeight, uint32_t mode, uint32_t* renderWidth, uint32_t* renderHeight) {
+    if(!renderWidth || !renderHeight) return -1;
+    *renderWidth=*renderHeight=0;
+    try { return tgup::rr_optimal_settings(outputWidth, outputHeight, mode, *renderWidth, *renderHeight) ? 0 : -2; }
+    catch(...) { return -3; }
 }
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
     // No DisableThreadLibraryCalls: the static C runtime needs thread notifications.

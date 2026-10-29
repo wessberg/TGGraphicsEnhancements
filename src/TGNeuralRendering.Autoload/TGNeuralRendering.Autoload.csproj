@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>TGNeuralRendering.Autoload</AssemblyName></PropertyGroup>
+  <Import Project="..\TGGraphicsBridge.Autoload\Autoload.props" />
+</Project>

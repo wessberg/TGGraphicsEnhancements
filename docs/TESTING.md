@@ -6,6 +6,94 @@ changes simultaneously or infer success from the in-game FPS counter alone.
 
 ## Build boundary
 
+TG Neural Rendering: [build evidence and pending game checks](DLSS5-IMPLEMENTATION.md), plus the
+[A/B/C and placement tuning run](DLSS5-TUNING.md). Its GPU probe
+actually evaluates the supplied signed model; the existing PT offline test does not. `neural_plan.py` creates NR
+scene plans for the same in-game harness. NR acceptance requires real evaluation counts, neutral/Off restoration,
+moving scenes, unchanged HUD, shared FG/RR operation and the owner's appearance verdict. NR deployment/testing is
+authorized while FoA and Starfield are closed; preserve the parallel PT build and respect the shared harness lock.
+Menu acceptance for NR-20/21: Video and FoA order is Neural Rendering, Placement, Strength, Local Tone,
+Advanced, then (Advanced On) Model, Passes, Detail, Automatic Mask, and (mask On) Skin Detail. Toggling Advanced
+only changes visibility; values and model history stay. Confirm Apply/Cancel/Restore Defaults also reach
+hidden controls, and RR still restricts placement with its explanatory tooltip. Both versions compile;
+menu update deployed10-08 10:31; Passes1-4 deployed11:22 and tavern7 takes pass, real-game UI acceptance pending.
+
+Repeated-pass correctness: in a VS x64 shell, run `python tests/neural_multipass_mutations.py
+build/nr/probe/BepInEx build/nr/tgnr_gpu_smoke.exe build/nr/multipass-check` with both games closed and the
+shared harness free. It builds an isolated adapter copy with a test-only raw-output readback export, then
+checks 1-4 passes at Strength0.5/1 against separate single-pass evaluations, exact neutral SDR/HDR, alpha,
+Off, invocation counts and history retention. Three broken chains are rejected. The export is not shipped.
+The oracle must feed exact encoded pixels: decode/encode rounding below1e-6 changes this model's output
+by up to0.012 linear RGB in the fixture; raw input agrees exactly. Native diagnostics record pass count,
+the analyser verifies it against the plan, and existing comparison recipes explicitly set Passes1.
+
+For temporal colour diagnosis, generate a plan with `python tools/harness/neural_plan.py <new-plan.json> --stages`,
+then pass it to `Run-PtHarness.ps1 -Plan <new-plan.json> -Out <new-run> -KeepFrames`. This captures the tavern and
+face close-up at Off, neutral and A/B, both placements, with 48 moving frames and a 96-frame stationary hold.
+`python tools/harness/neural_stages.py <new-run>` matches native records to the exact screen frame and writes
+`nr-stages.md`, JSON curves and plots. Seven 64x36 float grids average every pixel: scene input, encoded model
+input/output, restored scene output, absolute motion, depth and signed motion in model pixels. The same GPU invocation
+also reads HDRP's exposure texture. Model RGB is reported in 0–255 levels; scene RGB remains linear HDR.
+The records include resets, tuning, scales and jitter. Missing exposure, mismatched frame IDs, invalid pixels or
+camera movement during the hold invalidate the evidence. These synchronous readbacks are off in normal play and
+invalidate performance measurements; the harness turns them off and restores settings when it ends.
+
+Use `--replay` instead of `--stages` to compare Model A with ordinary inputs, retained inputs and retained inputs
+with one history reset, at both placements in both scenes. After camera movement ends, the diagnostic retains
+one colour/depth pair and clears its motion texture to zero. This is a controlled diagnostic, never a player mode.
+The analyser requires constant held colour/depth grids, zero motion, the requested source frame and exactly the
+requested reset. Live scene input continues changing; only the model output isolates NR's response to identical
+inputs. Format v2 adds depth and v3 signed motion; the reader accepts all three versions.
+Add `--long-hold` to `--replay` for a four-take tavern plan: Off, 600 held frames with one reset at each
+placement, then Off again. This measures longer settling without treating a short tail as convergence.
+Add `--reset-every-frame` to `--replay` instead for six tavern takes: Off, one reset versus a reset on every
+retained frame at both placements, then Off. This diagnostic separates accumulated history from fresh
+evaluations; it is never a player workaround. The analyser verifies each requested reset and the diagnostic
+mode in the native CSV. Its first game run failed readiness before the comparison completed; no result yet.
+
+Use `--signal` for full-strength A with diagnostic input multipliers 0.25/1/4 at both placements and both
+scenes (48 moving, 128 held frames). The multiplier is inverted on output and is never a player setting.
+Actual per-frame input conditioning must match the plan. The GPU probe compares the encoding to independent
+CPU math and exercises the inverse at nonzero near-neutral strength; omitting the inverse must fail.
+
+Use `--model-history` for A/B/C at both placements with 192 retained frames; add `--auto-mask` to repeat
+with Automatic Mask On and full Skin Detail. `neural_history.py <run>` writes local late-range maps and worst-cell
+curves. `--live-models` compares A/C with normal changing inputs in face/tavern/forest, including Off bookends.
+Stage analysis verifies actual native controls against the plan on every frame, not only requested config values.
+
+Use `--motion-check` and launch with `-KeepFrames` for neutral NR and sharp images at both placements.
+`neural_motion.py <run>` uses OpenCV (opencv-python) to track image features independently, checking forward/backward
+tracking consistency before comparing signed NR vectors in capture pixels. It reports sign/scale alternatives,
+not a universal pass threshold. `tests/neural_motion_direction_test.py` checks known translated images and rejects
+wrong signs/scales. This tests geometry movement; it cannot establish that NR's temporal colour is correct.
+
+`python tests/neural_stages_test.py` checks seventeen cases and rejects sixteen deliberate analyser faults,
+including otherwise-valid frames captured outside gameplay. The runner rechecks readiness before freezing,
+before each take and each captured frame; leaving gameplay fails that scenario and stops its later takes.
+Failures include loading/player/UI-interactivity/camera state. `neural_temporal.py <run> [--scene <key>]`
+requires retained raw screen frames and reports NR-minus-Off colour changes on tracked moving features,
+alongside a repeated Off control. It reuses the independent image tracker; a two-pixel blur limits pixel
+resampling noise in the measurement. These local frame pairs are not persistent object identities and can
+include intentional view-dependent changes. `python tests/neural_temporal_test.py`: three tests, two faults.
+The native probe accepts `--diagnostics <new-output-directory>`; `python tests/neural_stage_probe.py <directory>`
+checks known colours, encoding, orientation, neutral output, signed/scaled motion and same-frame exposure.
+Add `--mutations` to reject four corrupted signed-motion readbacks while preserving the real captures. A deliberately
+inverted readback shader fails the independent CPU reference. Generic RR motion is preserved; the Unity SR
+no-motion-marker correction is checked in the real game against the earlier failing capture:
+`python tests/neural_motion_capture_test.py <before-run> <after-run>`. It requires the two frozen scenes,
+constant exposure and held motion below 0.01 model pixel, and must reject the pre-fix capture. It does not
+claim that correcting motion fixes colour instability or that different camera routes are valid image A/Bs.
+
+At Strength 0, NR must still evaluate for its history but leave the scene pixels untouched. The native GPU
+probe requires bit-identical HDR pixels and verifies that raising strength afterward does not reset history.
+`python tests/neural_neutral_capture_test.py <pre-fix-stage-run> <fixed-neutral-run>` requires exact scene
+input/output grids at both placements in game, and must reject the older conversion round trip.
+
+`python tests/neural_hdr_capture_test.py <old-signal-run> <fixed-signal-run>` rejects NR-17's inverse-peak
+glare and requires the HDR gain bound at all 12 full-strength scene/placement/input-scale combinations.
+It also requires nonzero model and scene effects, actual current-frame evaluation and matching camera routes.
+The bound uses same-frame linear HDR grids, not display screenshots; see round-09 for its derivation.
+
 Build the matching managed target with the actual game/BepInEx assemblies.
 Build-Native.ps1 compiles native C++, links the real Windows/NVIDIA declarations,
 and runs tests including compilation of the exact embedded HLSL. Preserve the
@@ -22,6 +110,37 @@ FSR and XeSS. When repeating such a comparison, check that the deployed native D
 their `artifacts/Native/<mod>/` builds first: a mod manager may have left a symlink to an older
 build in place, which makes a real change look like no change at all. `Test-Setup.ps1` does this
 for every installed mod.
+
+TG Path Tracing's light rules (which light the names leave out stands at a glowing thing and is
+kept, and the size each light is traced at), without the game:
+
+```powershell
+dotnet build tests/LightRules.Tests.csproj -c Release
+& ./tests/bin/Release/net472/LightRules.Tests.exe
+```
+
+Its cloth rules (which of the game's materials are thin cloth: the census of the harness's scenes, PT-49), the same way:
+
+```powershell
+dotnet build tests/ClothRules.Tests.csproj -c Release
+& ./tests/bin/Release/net472/ClothRules.Tests.exe
+```
+
+Its world rules (what of the world is traced: the level of detail the game draws, by each of its renderers' own rule, and
+statically batched renderers in their combined mesh; PT-63, PT-61), the same way:
+
+```powershell
+dotnet build tests/WorldRules.Tests.csproj -c Release
+& ./tests/bin/Release/net472/WorldRules.Tests.exe
+```
+
+Its rules for the things the game moves (what counts as a move, which entities are placed every frame, a thing's identity
+and its previous transform; PT-71 item 4), the same way:
+
+```powershell
+dotnet build tests/MovingRules.Tests.csproj -c Release
+& ./tests/bin/Release/net472/MovingRules.Tests.exe
+```
 
 The Mono Kandra history regression uses the production Harmony hook and the installed
 Harmony runtime, with a stand-in skinning manager (no game launch or GPU):
@@ -148,7 +267,11 @@ Start with both mods installed and every setting as the previous session left it
 2. Video tab: the Upscaling row offers None, STP, DLSS, FSR, XeSS (unavailable ones skipped). STP
    shows the game's render-scale slider; DLSS and XeSS show Quality Mode; FSR shows Quality Mode and
    FSR Sharpness. No FSR Version row, in the Video tab or in FoA Mod Manager. Apply, Undo and Restore
-   Defaults behave as for the game's own entries.
+   Defaults behave as for the game's own entries. On game builds from 2026-10-06 (the game's own FSR 2
+   entry): still one FSR entry, named "FSR 3.1" or "FSR 4"; BepInEx logs `this game build has an FSR
+   entry of its own (FSR 2), which this mod's FSR takes the place of` and `HDRP's upscaler order: ...`.
+   Where AMD's runtime reports no FSR to the mod, the entry keeps the game's name and slider and
+   BepInEx logs `The game sets up its own FSR 2`.
 3. Select FSR and Apply: BepInEx logs `Upscaling with FSR <mode> at N% render scale`, the native log an
    `Upscaling 10s:` line every ten seconds with `fallback=0`, render size the mode's share of the
    output (Performance: half). Compare the image with DLSS in the same mode, standing and during
@@ -184,6 +307,12 @@ Start with both mods installed and every setting as the previous session left it
 
 ## TG Path Tracing (Mono)
 
+In the real game, by an agent: `.\tools\harness\Run-PtHarness.ps1` (`docs/PT-HARNESS.md`). It loads the owner's saves
+by name and compares the game's own picture, the traced one with Ray Reconstruction and with NRD, and the game's again
+after tracing was turned off, frozen and with the world running, with frame rates. It only starts the game when no
+other program uses the GPU. Its analysis has checks of its own: `python tests/harness_analyze_test.py`; so has
+the script that frees its disk space: `powershell -File tests\harness_cleanup_test.ps1`.
+
 Offline first: `ctest --test-dir build/native -R tgpt_gpu_test` must pass and its PNGs in
 `build/native/tgpt-images` look right (`1-path-tracing.png` lights the room's shadowed ceiling and shows the
 box's and the checkered leaf's sun shadows and the warm point light). Its `noise`
@@ -195,8 +324,7 @@ sharp shadows (the floor's error must stay under 6%), `19`/`20` the night, and `
 and bounced light apart, with and without ReSTIR's spatial reuse (`night floor` lines: the mean ratio says
 whether light is lost). Compare them before and after a change to the tracer or the denoiser. The `NRD:` lines
 run four of those cases with NVIDIA NRD (RELAX) on the bounced light and compare its error and flicker with the
-built-in denoiser's (each within half again of it, the bounced light alone within a quarter). The `shadow detail`
-line runs Shadow Detail's shader on a ramp of greys and a color, in place and drawn from a copy. The `panel metallic
+built-in denoiser's (each within half again of it, the bounced light alone within a quarter). The `panel metallic
 on its left half` lines trace a panel whose mask map is metallic on one half against the same panel plain and with
 that half black (one ray a pixel, the same frames, none of the estimator's own changes): the metallic half bounces and
 shows in a mirror floor's reflection as the plain panel's does (a path vertex sends a metal's reflected light on as
@@ -212,13 +340,21 @@ albedo that covers what the glass lets through, roughness 0.03, the distance to 
 reflected in see-through glass` compares a lamp's mirror image on a glass cube with its radiance by the Fresnel term,
 worked out on the CPU (`36-glass-reflects-a-lamp.png`), and `the sun reflected in see-through glass` adds up the sun's
 mirror image on a turned pane (reflected light times each pixel's solid angle) against the sun's illuminance by the
-Fresnel term (`37-glass-reflects-the-sun.png`). The `water` lines hand
-over a flat water plane 30 cm over the floor as HDRP's water system leaves it (depth, stencil bits 8 and 32, normal
-buffer) with an empty transparent SSR texture, and check the filled reflection (`35-water-reflections.png`; one frame
-alone in `36`): a traced-only yellow light panel, the red and the green wall and the sky through the ceiling's hole
-where the mirror sends each pixel, HDRP's own reflection replaced by the traced one (where its SSR had the full weight and half of it), the division by HDRP's reflection
-multiplier and the pre-exposure, the grain accumulated and filtered, sharp edges, a moving camera, and a sunlit cut-out
-card lit through from behind. With `TGPT_ENERGY=1` set, the test also measures the light
+Fresnel term (`37-glass-reflects-the-sun.png`). Water is a surface of the traced scene (PT-71 item
+5) and has a fixture of its own, `tests/water_surface_gpu.inl`: `TGPT_TEST_WATER_SURFACE=1` runs it alone at 128 x 72
+with no denoiser and ends the test (`WATER` lines, `water-*.png`; `TGPT_TEST_WATER_CHECK=<a check's name>` judges that
+one alone). Its optics against physics: a glowing bed through still water (Fresnel over the index squared), no bright
+dots, absorption over each ray's own way, the camera under water, total internal reflection, the same water in a mirror,
+the sky mirrored at a low angle, the waves' normals, a wavy pool's mean, waves in a mirror, the nearer of water and land
+at a sloping shore. And the surface itself, which is triangles in the acceleration structure: what the tracer reports
+under the screen's centre against the wave data along the same ray, near the camera (to 2 mm) and at 30 to 180 m across
+a lake 512 m wide (within what a lattice edge of 1/32 of the distance allows), and the sun over the water's open edge
+onto a dry floor, three pictures of the same pixels: an opaque liquid with the Caustics row on, whose shadow must have
+the wave's outline (a shadow ray meets the same waves); clear water with the row off, which must cast no shadow (the
+row's "off" is the straight light); and clear water with the row on, where the sun arrives bent through the wave: its
+line (`WATER wave shadow, clear water, the row on (NOT JUDGED, no reference)`) is printed and not judged, because
+nothing yet says where that light should land beyond an open edge. `TGPT_TEST_WATER_COST=1` with it:
+the cost run alone at 1280 x 720 (`WATER COST` lines: each stage's time for that lake dry and wet). With `TGPT_ENERGY=1` set, the test also measures the light
 through ReSTIR's reuse against no reuse at all, undenoised and averaged over hundreds of frames (`ENERGY` lines:
 1 means no light lost or gained), for 24 torches and for one light 10 cm from a wall, and saves the averages as
 `energy-*.png`. The `glowing quad` lines test emissive surfaces as lights (the Emissive Lights row) in the dark room
@@ -248,15 +384,24 @@ undenoised image, for the canvas open at the front (`roof`) and with its skirt (
 
 Characters' light has checks of its own. `a hair card in the sun` casts a traced-only card of 4x4 quads whose texture
 covers every other column of texels (every alpha-tile texel half covered) and compares its shadow as hair (strands stop a
-ray by chance, as much as they cover) with the same card cut out by the cutoff: 0.5 of it expected. `thin skin lit from
-behind` draws a quad as skin (transmission through a thick diffusion profile, a thickness in GBuffer2's green) with the
-sun behind it, over a traced 4 mm slab and over a 30 cm block, and compares its direct light with HDRP's transmittance
-formula, its tint with the profile's, and a floor drawn as the same skin, lit from the front, with the light it has without
-transmission. `a table HDRP shades itself` draws a table forward, in the traced scene for camera rays only and shaded by
+ray by chance, as much as they cover) with the same card cut out by the cutoff: 0.5 of it expected. Light through thin
+skin (an ear) is the walk's: `a thin slab of wax (an ear) passes the light a reference random walk gives for its thickness`
+puts 3 mm and 10 mm slabs of a material light walks inside between a lamp and the camera, whose own rays meet them, and
+compares their far side's light with a random walk on the CPU (HDRP's thin-object transmission by its thickness map, and
+its check `thin skin lit from behind`, went with PT-58). `a table HDRP shades itself` draws a table forward, in the traced scene for camera rays only and shaded by
 HDRP as the eyes are, and reads its color against "HDRP's" (the raster's) under a lamp a traced block shadows, without the
 block, with TGPT_OPTION_NO_HDRP_SHADOWS, with the lamp marked TGPT_LIGHT_HDRP_SHADOWS, missing from the traced scene (left
 as HDRP made it), and in the sun with and without the sun's w of 2. `characters' acceleration structures` times 64 posed characters of 8,192 triangles against none, for the record (the
 GPU is shared: its low quantiles say most).
+
+PT-84, the edges check (`tests/pathtracing_edges_checks.inl`; alone with `TGPT_TEST_EDGES_ONLY=1`, some seconds after
+the warm-up): a red bar about a pixel wide and a green card with holes cut out by its texture, in the albedo view with
+the tracer's own camera rays. Sixteen frames, each with another sub-pixel shift; every pixel is compared with what a
+ray through its shifted centre meets, worked out on the CPU from the camera alone. Three times: the camera's matrices
+holding the shift, handed without it (as the game handed them until 2026-10-08: the tracer then puts it in), and with
+the camera moving. It passes when next to no pixel differs from its own frame's shift, and thousands differ from the
+frame before's and from none. It writes `84-edges-*.png`. A build from before PT-84 fails all of it. Evidence and
+what to look for in game: `docs/agents/edges.md`.
 
 Other GPUs and validation (run `build/native/tgpt_gpu_test.exe artifacts/Native <images folder>` directly; two runs
 at once need `TGPT_TEST_STAGE=<another folder name>` on one, since the DLLs are staged beside the exe, and a copy of
@@ -276,13 +421,13 @@ the exe keeps a rebuild from failing while a long run goes):
    is available on this GPU`; `BepInEx/TGPathTracing/Native/TGPathTracing.Native.log` has `Shared D3D12
    device: DirectX Raytracing tier ...` and, on the first gameplay frame, `Path tracing ready` and
    `Render size WxH`. The bridge log registers the extension beside the others.
-2. In gameplay (Path Tracing Full, the default): every 10 s BepInEx logs `Path tracing hook 10s:`
+2. In gameplay (Path Tracing On, the default): every 10 s BepInEx logs `Path tracing hook 10s:`
    with `recorded`, `executed` and `handed to the native side` equal and non-zero, and `Path tracing:`
    with the scene (objects, Drake, terrain, vegetation counts, meshes to register falling to 0) and
    lights; the native log's `Path tracing 10s:` has `composited` close to `frames`, `gpuWaits=0`, the
    GPU time and the render-thread split. Shadowed areas and interiors get coloured bounce light;
    HDRP's baked indirect light is gone (`Replace HDRP indirect light`). An earlier version's config with
-   `Mode = Global Illumination` comes up as Full, and its `Indirect intensity` line is gone.
+   `Mode = Global Illumination` or `Full` comes up as On, and its `Indirect intensity` line is gone.
 3. Debug views (Shift+Insert): Normals and Albedo line up with the scene (not upside down or shifted);
    Coverage colours most buildings, rocks, trees and terrain, dark where only HDRP draws (characters,
    grass); Materials shows textures where the objects are, and metal (armour, pots, weapons, a
@@ -293,11 +438,11 @@ the exe keeps a rebuild from failing while a long run goes):
 4. Sun shadows are traced (trees included), torches and lamps light their surroundings with traced
    shadows, reflections on wet or metallic surfaces come from the traced scene. Insert turns path tracing
    off and on: compare with Off at the same spot for brightness, the same order of magnitude, no black or
-   white surfaces. Water (Water Reflections on): looking down at a lake or river from its bank, it reflects the
-   trees and the bank above and behind you (off screen) instead of the sky, with the game's own colour, foam and
-   fog; F8's `water-reflections-off` shot shows HDRP's own reflections to compare, the 10 s hook line counts
-   `water reflections: recorded`, `handed over` and the native side's `traced` and `applied`, and the native log
-   says `Water reflections: traced ...` once.
+   white surfaces. Water's migration check: `lantern-lake@dots` with None, then `water-day@quick`: reflected shore,
+   bed brightness, continuous wave/rock intersection and moving surface guides. No old water-pass stage or F8 toggle
+   remains; the native log says how much of the water's surface is traced ("The water's surface: N pieces, T
+   triangles"). Read exposure/gain and the scene stage's time. What each run must show and the known gaps:
+   `docs/agents/water-4.md` section 5.
 5. Walk and turn quickly: no smearing of bounce light behind the camera's motion beyond a frame, no
    flicker along silhouettes worse than a few pixels. Fast travel or load a save: the scene rebuilds
    (meshes to register rises, then falls) without errors.
@@ -339,13 +484,15 @@ or those two runs cover frame generation's FSR and XeSS paths only (the test pri
    start` or `NVIDIA NRD failed` means the tracer's own filters took over (the overlay says built-in denoiser; the row
    never offers them). Somewhere dim, NRD's bounced light is calm without blurring the sun's and the lamps' shadows.
 11. The Video settings: a Path Tracing row after the upscaling and frame generation rows, with its options nested
-   under it only while it is on (the row offers Off and Full); FoA Mod Manager
+   under it only while it is on (the row offers Off and On); FoA Mod Manager
    shows exactly the same rows in the same order, and a change on either side shows on the other after the
    settings close. Denoising lists None, NRD, Ray Regeneration (RX 9000 only) and Ray Reconstruction
    (NVIDIA with TG Better Upscaling), and starts on the best of them; Restore Defaults picks it again. Exposure
    (0 automatic) brightens or darkens the traced light by that many stops; Dark Adaptation at 0 % leaves interiors
    at the game's own exposure (dark), at 100 % brightens them to a mid tone, and sunny exteriors stay at the game's
-   exposure either way. An earlier config's hidden `Auto exposure compensation` carries over to Exposure. Shadow
+   exposure either way. The brightening holds back where the picture is already bright: beside a lantern in a dark
+   room the wall keeps its grain and colour (it is not white), the flame and the lamp's glass stay the brightest
+   things, and no ring shows on the wall where the brightening ends. An earlier config's hidden `Auto exposure compensation` carries over to Exposure. Shadow
    Detail at 0 % against 50 % in a room lit by one candle: the unlit side shows texture at 50 % while the candle's
    bright wall stays as it was; in the main hall and outdoors in the sun the two look the same (the BepInEx
    `Path tracing:` line's `shadow detail N%` is the effective strength: near 0 there, up to the row's value in the
@@ -368,7 +515,7 @@ or those two runs cover frame generation's FSR and XeSS paths only (the test pri
    Boost at 1 turns floors and walls into near-mirrors of the room; 0 looks as before.
    Hair's shadow on a face or a neck is soft and lets light through between the strands (no hard, card-shaped edges).
    A character with the sun or a candle behind them: the ears' rims and the nostrils' wings glow red, the cheek in front
-   of the head does not; BepInEx's `HDRP diffusion profiles` line gives `lets through a tint of ...` for the skin profile.
+   of the head does not; BepInEx's `Subsurface material "..."` lines name the skin's materials light walks inside.
    An NPC in a candle-lit corner, a wall or their own head between them and the candle: their hair and eyes are as dark as
    the traced face beside them, Hair Shadows Off lights them again as before; in the open they look the same either way,
    and in dialogue the hair shows no crawling noise. A far NPC (50 to 100 m) in the sun casts a shadow on the ground (the
@@ -382,6 +529,35 @@ or those two runs cover frame generation's FSR and XeSS paths only (the test pri
    first 40 (nits, emissive map, albedo, exposure weight) and `has emission the tracer doesn't read` once per shader
    whose glow it misses; the native log's 10 s line has `emissive: N submeshes, T triangles, S sampled as lights in C
    clusters` (and `over the budget` when some are left out).
+14. Glass (the Caustics row, On): a bottle or flask on a table in the sun or by a lamp puts a bright spot or line in its
+   shadow, which goes with the row off (a plain tinted shadow). An F8 with the crosshair on a bottle says how many times
+   the camera ray crosses it: 2, its caustics are solved; 4 or more (hollow, an inner wall), it keeps the plain tint.
+   The alchemist's jars (see-through glass) are sharp, not blocky; seen against the sky (a window from inside, a bottle
+   on a sill) the glass is there, tinting the sky behind it, with its reflection.
+15. Water (the same row): a lake or pool bed in the sun seen from the shore ripples with the water's caustic pattern,
+   also from under water, and not in the shade of a bridge or a wall, nor at night; the underwater light shafts keep
+   theirs. The underside of a bridge, a hull, the rock over a pool take a faint moving light the water reflects, strong
+   when the sun is low. With the row off neither shows (nor the game's own): the bed is lit by the sun's and the lamps'
+   straight light then, without the pattern. The F8 report's water line lists each
+   surface's caustics settings and `caustics traced:` with up to four slots, their meshes and pattern size; the stage
+   times show the caustics' rays in `caustics` and the water's own surface (its waves as triangles, posed and refitted
+   every frame) in `scene`. The water itself, with the row on or off: its waves move, the far shore mirrors in it at a
+   low angle, the bed shows through near the shore and fades with depth, the waterline follows rock and sand; a water
+   surface past the tracer's four slots still looks like the game's own. With Ray Reconstruction, look for trails behind
+   the moving pattern on a lit bed.
+16. Eyes (traced since round 3): the whites, iris and a darker limbal ring, wet highlights from the room's lights, no
+   black eyes; eyebrows and lashes are opaque at every distance while tracing, as is hair, whose colors (root to end,
+   highlight bands) match the game's from far away too.
+17. Hair up close (round 4): strands and clumps, not flat LEGO bricks; brows are brows and lashes are thin dark lines,
+   not black bars; no black band at the hairline, and the eyes next to the lashes keep their own color. With the sun or a
+   candle on a head of hair, a shiny band runs across it, moving along the hair as the camera or the light moves (the
+   game's own hair highlights); a beard has its own, fainter. BepInEx's `Characters: shader "TG/Character/RealHair"`
+   line ends `its highlights along its strands: tint ...`, and the hold line says `cut where at least 0.5 opaque`.
+   Tracing turned off with Insert: hair, brows and lashes look as the game draws them (its soft layers back).
+18. Starting (round 4): after an update the game shows its menu without a freeze of 15-20 s; the overlay says
+   `starting` for a few seconds, then traces. The native log has `Path tracing passes made in N s` (the D3D12 and
+   D3D11 ones), and `Path tracing ready ... in 0.1 s` (it was the whole wait). If the game ever freezes with a driver
+   reset, the native log's `The GPU stopped` line names the stage that hung.
 
 ## Performance overlay
 
@@ -618,3 +794,52 @@ file a deployment replaced is under BepInEx/<mod>/Backups. No proxy DLL or syste
 overwritten.
 
 Check game-local BepInEx/TGGraphicsBridge/Autoload.log first; confirm the current PID.
+
+PT-71 glass/eyes/forward checks: `TGPT_TEST_GLASS_ONLY=1` runs the 320x180 raw optical
+fixtures and exits. `TGPT_TEST_STOP_AT_FAIL=1` stops a mutant at its first failure.
+The cases measure Unlit emission, eighty real interfaces, Beer-Lambert absorption,
+material IOR, glass guides, a hollow jar behind two panes, its rim, and an iris under
+a refracting cornea directly and through a mirror. No denoiser runs; requesting guides
+only produces the inputs and does not evaluate Ray Reconstruction. Evidence, mutants,
+remaining gaps and the coordinator's three in-game recipes: `docs/agents/glass-eyes.md`.
+
+PT-75 and PT-80, the filters' checks (they need a build with NRD for NRD's part; `docs/agents/filters.md`):
+`TGPT_TEST_NRD_MEAN_ONLY=1` runs `nrdMean` alone (a denoiser's picture converges to the undenoised picture's: four
+scenes, without reflections, the whole picture, the debug views; `TGPT_TEST_NRD_MEAN_BRIEF=1` the whole test's
+shorter form, `TGPT_TEST_NRD_MEAN_SCENE=<part of a name>` one scene, `TGPT_TEST_NRD_MEAN_QUICK=1` its first part,
+`TGPT_TEST_NRD_MEAN_FLAT=1` without normal maps). `TGPT_TEST_MIRROR_FILTERS_ONLY=1` runs `mirrorFilters` alone (a
+mirror's picture keeps its detail and light with NRD, the built-in denoiser and as Ray Reconstruction is handed it,
+with the camera still and moving). Each mean is 64 frames after 200: a scene takes two to five minutes.
+
+PT-85, the lamps' highlights (`docs/agents/glints.md`): `TGPT_TEST_GLINTS_ONLY=1` runs `glints` alone (a glazed ball
+under eight small lamps, no denoiser, ReSTIR's reuse as in the game: at the pixels that mirror a lamp, each pixel's
+largest sample of the Specular layer over its own mean, for five roughnesses and four sets of lamps: eight in the
+cell, forty in the cell, eight on the far list among 208, 128 in the cell). `TGPT_TEST_GLINTS_FRAMES=<N>` frames a
+case (128), `TGPT_TEST_GLINTS_SET=eight|forty|far|crowd` one set, `TGPT_TEST_GLINTS_OPTIONS=<bits>` more options
+for a study (2048: ReSTIR's boiling filters off; its checks then do not run). About three minutes once the passes are
+made; it needs no NRD.
+
+PT-118, the camera's fog in cells (`docs/agents/fogrule2.md`): `TGPT_TEST_FOG_FROXEL_ONLY=1` runs the fog's check alone
+(`tests/pathtracing_fog_froxel_checks.inl`, never part of the whole test): seventeen cases, the mean of 16 frames with
+no denoiser, region by region. Outdoors against what is known exactly (a uniform fog under an unshadowed sun and a
+uniform sky; a lamp 6 m and 60 m ahead in a uniform fog; the game's night fog, which thins with height, under its
+moon alone and under a uniform sky alone, by quadrature); in the room and with the game's two daylight fogs against
+pins (`tests/pathtracing_fog_froxel_pins.inl`: the per-pixel route's numbers from the last build that had both fog
+routes, filled 2026-10-12; a case whose pin is all 0 is printed, not judged). The open cases' ground is black by its base
+colour and still reflects 4 %: its highlight of the sun and of the lamp, dimmed by the fog, is part of the exact
+value (`docs/agents/fog-3.md`: left out, the check's first run read the ground x1.24 to x3.43);
+`TGPT_TEST_FOG_ABSORBER=1` makes it reflect nothing. The night's cases print beside the tracer's numbers what HDRP's
+own volumetric fog gives for the same medium, light and sky, by hand (not judged: PT-37). `TGPT_TEST_FOG_CASE=<n>` one
+case, with its picture; the file's header lists the switches for a closer look (a lamp's distance, a candle, fog
+boxes, no sun, the outdoor places). About ten minutes once the passes are made (the first start of a build makes
+them: seven minutes with nothing else on the card).
+
+PT-133, a frame without a sun (`docs/agents/nosun.md`; the game's interiors and nights have none, and a Shader Model 6.9
+pass returned 1e33 there while every offline scene had a sun): `TGPT_TEST_NOSUN_ONLY=1` runs
+`tests/pathtracing_nosun_checks.inl` alone (a closed room, so the sun lights nothing in it: the picture with the sun's
+code run, with it skipped, skipped again with other random numbers, and skipped as the plugin sends it, each the mean of
+16 frames; with no denoiser, with NRD, in traced fog with seven fog boxes by the old route and by the grid). For any
+mode: `TGPT_TEST_NOSUN=1` (every frame without a sun: `sunColor`'s w 0) or `2` (as the plugin sends it: direction and
+colour 0 too), `TGPT_TEST_TRACE=<file>` (one line of numbers a frame), and in the tracer `TGPT_TEST_SM66=1` (its Shader
+Model 6.6 passes on a card that offers 6.9). Two traces of the same mode, one with `TGPT_TEST_SM66=1`, laid side by
+side: `python tools/agents/nosun_compare.py <6.6 trace> <6.9 trace>` (its own check: `python tests/nosun_compare_test.py`).

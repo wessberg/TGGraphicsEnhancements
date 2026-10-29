@@ -1,3 +1,5 @@
+#include <tgb/dlss_inputs.hpp>
+#include <nvsdk_ngx_defs.h>
 // SPDX-License-Identifier: MIT
 // One upscaling request, where HDRP would run STP, on Unity's render thread:
 //
@@ -327,27 +329,27 @@ Outcome process_inputs(const TGUP_Frame& f) {
                 copy(srv.Get(), *g.target, f.renderWidth, f.renderHeight);
             }
         }
-        // Its optional inputs, when TG Path Tracing wrote them this frame. Trouble with either leaves both out of this
-        // frame, never the frame itself: the hit distance, a single channel, was once read through the color view,
-        // which has none, and every frame was refused until Ray Reconstruction turned itself off.
-        bool extras=rr && f.specularHitDistance && f.colorBeforeTransparency;
-        if(extras) {
-            try {
-                const struct { uint64_t source; tgb::SharedTexture* target; DXGI_FORMAT format; tgb::ReadAs as; } optional[]={
-                    {f.specularHitDistance, &st.guideHitDistance, DXGI_FORMAT_R16_FLOAT, tgb::ReadAs::Depth}, // one float channel
-                    {f.colorBeforeTransparency, &st.guideBeforeTransparency, DXGI_FORMAT_R16G16B16A16_FLOAT, tgb::ReadAs::Color}};
-                for(const auto& g:optional) {
-                    auto* resource=reinterpret_cast<ID3D11Resource*>(uintptr_t(g.source));
-                    if(!on_game_device(resource)) { extras=false; break; }
-                    D3D11_TEXTURE2D_DESC d{};
-                    auto srv=tgb::typed_srv(st.d11.Get(), resource, g.as, &d);
-                    if(!srv || d.Width<f.renderWidth || d.Height<f.renderHeight) { extras=false; break; }
-                    ensure_shared(*g.target, f.renderWidth, f.renderHeight, g.format);
-                    copy(srv.Get(), *g.target, f.renderWidth, f.renderHeight);
+        // Reflection distance is mandatory without specular motion. Copy it independently of the optional snapshot.
+        bool transparency=false;
+        if(rr) {
+            auto copyGuide=[&](uint64_t source, tgb::SharedTexture& target, DXGI_FORMAT format, tgb::ReadAs as) {
+                auto* resource=reinterpret_cast<ID3D11Resource*>(uintptr_t(source));
+                if(!on_game_device(resource)) throw DxError(E_INVALIDARG, "a Ray Reconstruction guide is missing or on another device");
+                D3D11_TEXTURE2D_DESC d{};
+                auto srv=tgb::typed_srv(st.d11.Get(), resource, as, &d);
+                if(!srv || d.Width<f.renderWidth || d.Height<f.renderHeight)
+                    throw DxError(E_INVALIDARG, "a Ray Reconstruction guide is smaller than the render size");
+                ensure_shared(target, f.renderWidth, f.renderHeight, format);
+                copy(srv.Get(), target, f.renderWidth, f.renderHeight);
+            };
+            copyGuide(f.specularHitDistance, st.guideHitDistance, DXGI_FORMAT_R16_FLOAT, tgb::ReadAs::Depth);
+            if(f.colorBeforeTransparency) {
+                try {
+                    copyGuide(f.colorBeforeTransparency, st.guideBeforeTransparency, DXGI_FORMAT_R16G16B16A16_FLOAT, tgb::ReadAs::Color);
+                    transparency=true;
+                } catch(const std::exception& e) {
+                    log_throttled(std::string("Ray Reconstruction's optional transparency guide is left out: ")+e.what());
                 }
-            } catch(const std::exception& e) {
-                extras=false;
-                log_throttled(std::string("Ray Reconstruction's optional inputs from TG Path Tracing are left out: ")+e.what());
             }
         }
         // D3D11 -> D3D12. From here on the queue signals whatever happens, so the game's context is
@@ -363,7 +365,8 @@ Outcome process_inputs(const TGUP_Frame& f) {
             check(st.lists[index]->Reset(st.allocators[index].Get(), nullptr), "Reset upscaler list");
             Inputs in; in.color=st.color.d12.Get(); in.depth=st.depth.d12.Get(); in.motion=st.motion.d12.Get(); in.output=st.output.d12.Get();
             if(rr) { in.diffuseAlbedo=st.guideDiffuse.d12.Get(); in.specularAlbedo=st.guideSpecular.d12.Get(); in.normalRoughness=st.guideNormals.d12.Get(); }
-            if(extras) { in.specularHitDistance=st.guideHitDistance.d12.Get(); in.colorBeforeTransparency=st.guideBeforeTransparency.d12.Get(); }
+            if(rr) in.specularHitDistance=st.guideHitDistance.d12.Get();
+            if(transparency) in.colorBeforeTransparency=st.guideBeforeTransparency.d12.Get();
             in.frame=&f; in.reset=(f.flags&TGUP_FLAG_RESET) || switched;
             const bool ok=backend->record(st.lists[index].Get(), in, error);
             check(st.lists[index]->Close(), "Close upscaler list");
@@ -409,10 +412,10 @@ Outcome process_inputs(const TGUP_Frame& f) {
 // Event 2 (or the end of event 1 when the destination came with the request): the upscaled image
 // into HDRP's destination, or the bilinear enlargement of the shared color copy. Never leaves the
 // destination unwritten, since post-processing would otherwise read last frame's pixels.
-void write_output(const TGUP_Frame& f, const Outcome& outcome) {
+bool write_output(const TGUP_Frame& f, const Outcome& outcome) {
     auto* outputRes=reinterpret_cast<ID3D11Resource*>(uintptr_t(f.output));
-    if(!outputRes || !st.d11) { log_throttled("Upscaling has no destination for this frame"); return; }
-    if(!on_game_device(outputRes)) { log_throttled("HDRP's upscaling destination is not on the game's device"); return; }
+    if(!outputRes || !st.d11) { log_throttled("Upscaling has no destination for this frame"); return false; }
+    if(!on_game_device(outputRes)) { log_throttled("HDRP's upscaling destination is not on the game's device"); return false; }
     D3D11_TEXTURE2D_DESC outputDesc{};
     {
         ComPtr<ID3D11Texture2D> texture; check(outputRes->QueryInterface(IID_PPV_ARGS(&texture)), "Output is not a 2D texture");
@@ -437,6 +440,7 @@ void write_output(const TGUP_Frame& f, const Outcome& outcome) {
         std::lock_guard<std::mutex> lock(st.mutex); ++st.status.framesFallback;
     }
     summarise(f);
+    return true;
 }
 template<class Fn> void guarded(Fn&& fn) {
     tgb::InternalScope internal(&host());
@@ -480,7 +484,23 @@ void render_event_body(int eventId, void* data) {
             slot.occupied=false;
         }
     }
+    tgb::DlssInputs observed;
+    const bool observeRr=frame.backend==TGUP_BACKEND_RAY_RECONSTRUCTION && frame.output!=0;
+    if(observeRr) {
+        observed.source=tgb::DlssSource::RayReconstruction; observed.feature=&frame; observed.context=host().game_context();
+        observed.color=reinterpret_cast<ID3D11Resource*>(frame.color); observed.depth=reinterpret_cast<ID3D11Resource*>(frame.depth);
+        observed.motion=reinterpret_cast<ID3D11Resource*>(frame.motion); observed.output=reinterpret_cast<ID3D11Resource*>(frame.output);
+        observed.colorRect=observed.depthRect=observed.motionRect={0,0,frame.renderWidth,frame.renderHeight};
+        observed.outputRect={0,0,frame.outputWidth,frame.outputHeight};
+        observed.flags=NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_IsHDR |
+            ((frame.flags&TGUP_FLAG_DEPTH_INVERTED)?NVSDK_NGX_DLSS_Feature_Flags_DepthInverted:0);
+        observed.reset=(frame.flags&TGUP_FLAG_RESET)!=0;
+        observed.motionScaleX=frame.motionScaleX; observed.motionScaleY=frame.motionScaleY;
+        observed.jitterX=-frame.jitterX; observed.jitterY=-frame.jitterY;
+        observed.valid=tgb::valid_dlss_inputs(observed);
+    }
     if(eventId==1) {
+        if(observeRr) tgb::publish_dlss(tgb::DlssStage::Before,observed);
         guarded([&]{ outcome=process_inputs(frame); });
         const bool single=frame.output!=0; // the destination came with the request
         {
@@ -491,7 +511,9 @@ void render_event_body(int eventId, void* data) {
                 if(single) slot.occupied=false;
             }
         }
-        if(single) guarded([&]{ write_output(frame, outcome); });
+        bool written=false;
+        if(single) guarded([&]{ written=write_output(frame, outcome); });
+        if(observeRr) { observed.success=outcome.upscaled && written; tgb::publish_dlss(tgb::DlssStage::After,observed); }
     } else guarded([&]{ write_output(frame, outcome); });
 }
 // Unity's render thread calls this through IssuePluginEventAndData: nothing may leave it. A frame that

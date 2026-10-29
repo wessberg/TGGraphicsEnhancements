@@ -49,7 +49,8 @@ namespace TGBetterUpscaling
             }
             var caps = s.Capabilities;
             sb.AppendLine("Capabilities: " + (caps == null ? "not reported yet" :
-                "STP " + caps.Stp + ", DLSS " + caps.Dlss + ", FSR " + caps.Fsr + ", XeSS " + caps.Xess + ", FSR versions offered " + string.Join(", ", caps.FsrVersions)));
+                "STP " + caps.Stp + ", DLSS " + caps.Dlss + ", FSR " + caps.Fsr + ", XeSS " + caps.Xess + ", FSR versions offered " + string.Join(", ", caps.FsrVersions) +
+                ", the game's own FSR 2 " + (caps.GameFsr != null ? "offered (\"" + caps.GameFsr + "\")" : "not offered")));
             sb.AppendLine("Native: " + Session.Upscaler.Detail);
             sb.AppendLine("Status: " + Session.StatusText);
             sb.AppendLine("STP host: " + StpHost.Describe());

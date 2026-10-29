@@ -1,0 +1,33 @@
+    // The caustics (pt_caustics.hlsl): the counters emptied, then the light traced off and through every slot's water from its
+    // grid (a group a tile of 15 x 15 cells, per level and slot) into beams, the room past this frame's beams made inactive, and
+    // the acceleration structure of their boxes built (its one instance's top level too), for every ray that meets a surface to
+    // ask what light the water sends there (caustic_irradiance).
+    if(k.caustics[0]!=kInvalid) {
+        dispatch(list, st.causticPass.Get(), {0u}, b, 1, 1);
+        const uint32_t tiles=(kCausticGrid+14)/15, levels=uint32_t(k.causticGrid[2]);
+        uint32_t values[8]; std::fill(std::begin(values), std::end(values), kInvalid); values[0]=1u; values[1]=st.causticBoxesUav;
+        list->SetPipelineState(st.causticPass.Get());
+        list->SetComputeRoot32BitConstants(1, 8, values, 0);
+        list->Dispatch(tiles, tiles, levels*TGPT_MAX_WATER);
+        b.uav(nullptr); b.flush(list);
+        dispatch(list, st.causticPass.Get(), {2u, st.causticBoxesUav}, b, (st.causticBuilt+255)/256, 1);
+        b.transition(st.causticBoxes, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); b.flush(list);
+        {
+            const D3D12_RAYTRACING_GEOMETRY_DESC geometry=caustic_geometry(st.causticBuilt);
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{}; build.Inputs=caustic_inputs(&geometry);
+            build.DestAccelerationStructureData=st.causticBlas.va(); build.ScratchAccelerationStructureData=st.causticBlasScratch.va();
+            list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+            b.uav(st.causticBlas.resource.Get()); b.flush(list);
+            // The top level's one instance (the bottom level as it is), in this frame's ring.
+            D3D12_RAYTRACING_INSTANCE_DESC instance{}; instance.Transform[0][0]=instance.Transform[1][1]=instance.Transform[2][2]=1.f;
+            instance.InstanceMask=0xFF; instance.AccelerationStructure=st.causticBlas.va();
+            void* mapped=nullptr; D3D12_GPU_VIRTUAL_ADDRESS at=0;
+            if(!st.rings[index].allocate(sizeof(instance), 16, &mapped, &at)) throw DxError(E_OUTOFMEMORY, "The caustics' instance found no room in the frame's ring");
+            std::memcpy(mapped, &instance, sizeof(instance));
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC top{}; top.Inputs.Type=D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+            top.Inputs.NumDescs=1; top.Inputs.DescsLayout=D3D12_ELEMENTS_LAYOUT_ARRAY; top.Inputs.InstanceDescs=at;
+            top.DestAccelerationStructureData=st.causticTlas.va(); top.ScratchAccelerationStructureData=st.causticTlasScratch.va();
+            list->BuildRaytracingAccelerationStructure(&top, 0, nullptr);
+            b.uav(st.causticTlas.resource.Get());
+        }
+        b.transition(st.causticBoxes, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); b.flush(list);

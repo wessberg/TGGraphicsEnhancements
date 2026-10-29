@@ -69,12 +69,12 @@ namespace TGGraphicsBridge
                 var module = GetModuleHandleW(NativeName);
                 if (module == IntPtr.Zero)
                 {
-                    Detail = NativeName + " is not loaded. Check that BepInEx/patchers/TGFrameGeneration.Autoload.dll or TGBetterUpscaling.Autoload.dll " +
+                    Detail = NativeName + " is not loaded. Check that your mod's .Autoload.dll in BepInEx/patchers " +
                         "exists and read BepInEx/TGGraphicsBridge/Autoload.log; start the game normally through Steam.";
                     return;
                 }
                 uint abi = Bind<GetAbi>(module, "TGGraphicsBridge_GetAbiVersion")();
-                if (abi != Abi) { Detail = "Native ABI 0x" + abi.ToString("X8") + " does not match this plugin's 0x" + Abi.ToString("X8") + ": reinstall TG Frame Generation and TG Better Upscaling from the same release."; return; }
+                if (abi != Abi) { Detail = "Native ABI 0x" + abi.ToString("X8") + " does not match this plugin's 0x" + Abi.ToString("X8") + ": reinstall the installed TG graphics mods from the same release."; return; }
                 name = Bind<GetName>(module, "TGGraphicsBridge_GetExtensionName");
                 state = Bind<GetState>(module, "TGGraphicsBridge_GetExtensionState");
                 read = Bind<Read>(module, "TGGraphicsBridge_ReadStatus");

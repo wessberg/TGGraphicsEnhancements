@@ -48,6 +48,12 @@ fetched beside it, see docs/SOURCES.md). The package places that license next to
 MIT license, whose notices go there too as `Native/Notices/LICENSE-MathLib.txt` and `LICENSE-ShaderMake.txt` (a
 build without NRD has neither). CMakeLists.txt installs all three with the DLL.
 
+meshoptimizer (github.com/zeux/meshoptimizer, release v1.3, MIT license): a build with CMake's
+`TGPT_MEGA_GEOMETRY` ON (TG Path Tracing's RTX Mega Geometry trial, PT-109) fetches it with FetchContent and links its
+clusterizer into `TGPathTracing.Native.dll`; CMakeLists.txt then installs its notice beside the DLL as
+`Native/Notices/LICENSE-meshoptimizer.md`. No meshoptimizer source is in this repository, and a build with
+`TGPT_MEGA_GEOMETRY` OFF holds none of it.
+
 AMD Anti-Lag 2 SDK v2.0.0a is a header compiled into TGFG.Native.dll under the MIT license;
 include its notice with any distributed binary. MinHook is linked into TGGraphicsBridge.Native.dll.
 

@@ -14,6 +14,8 @@ namespace TGBetterUpscaling
             var upscaler = UpscalerRow.Current; // a troubleshooting step's while one runs
             var mode = settings.Mode(upscaler);
             string modeText = mode != null ? mode.Name + " (" + mode.Scale.ToString("0.#") + "%)" : "at the game's " + GameScale() + " render scale";
+            // The game's own FSR 2 upscales where AMD's runtime reported no FSR to this mod (game builds from October 2026).
+            bool gameFsr = upscaler == UpscalerSetting.FSR && settings.Capabilities != null && !settings.Capabilities.Fsr && settings.Capabilities.GameFsr != null;
             switch (upscaler)
             {
                 case UpscalerSetting.None:
@@ -38,6 +40,9 @@ namespace TGBetterUpscaling
                         : "DLSS DLL not loaded yet");
                     break;
                 }
+                case UpscalerSetting.FSR when gameFsr:
+                    lines.Add(settings.Capabilities.GameFsr + " (the game's own FSR 2) at " + GameScale() + " render scale");
+                    break;
                 case UpscalerSetting.FSR:
                     lines.Add("FSR " + (Session.HaveStatus ? Session.ActiveFsrVersion() : "?") + " " + modeText + " · sharpness " + (settings.Sharpness * 100f).ToString("0") + "%");
                     break;
@@ -46,7 +51,7 @@ namespace TGBetterUpscaling
                         (Session.HaveStatus && Session.Status.XessPreset != 0 ? " · runs " + Session.XessPreset(Session.Status.XessPreset) : ""));
                     break;
             }
-            if ((upscaler == UpscalerSetting.FSR || upscaler == UpscalerSetting.XeSS || StpHost.RayReconstruction) && Session.HaveStatus && Session.Status.OutputWidth > 0)
+            if (((upscaler == UpscalerSetting.FSR && !gameFsr) || upscaler == UpscalerSetting.XeSS || StpHost.RayReconstruction) && Session.HaveStatus && Session.Status.OutputWidth > 0)
             {
                 var s = Session.Status;
                 lines.Add("Upscales " + s.RenderWidth + "x" + s.RenderHeight + " → " + s.OutputWidth + "x" + s.OutputHeight +

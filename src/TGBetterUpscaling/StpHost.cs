@@ -27,6 +27,7 @@ using Awaken.TG.Main.Settings.Controllers;
 using Awaken.TG.Main.Settings.Graphics;
 using HarmonyLib;
 using TGGraphicsBridge;
+using TGGraphicsBridge.Internal;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
@@ -67,6 +68,9 @@ namespace TGBetterUpscaling
         // DLSS hosted as Ray Reconstruction (Hosting is DLSS), at NGX's quality level rrMode.
         private static bool hostingRr;
         private static uint rrMode;
+        private static Camera rrCamera;
+        private static bool rrSizingCamera, rrSizingReady;
+        private static uint rrOutputWidth, rrOutputHeight, rrRenderWidth, rrRenderHeight, rrSizeMode;
         internal static bool RayReconstruction => !failed && hostingRr && Hosting == UpscalerSetting.DLSS;
         internal static bool Failed => failed;
         private static float hostScale = 100f;
@@ -93,9 +97,6 @@ namespace TGBetterUpscaling
         private static readonly FieldInfo RenderDelta = AccessTools.Field(typeof(HDCamera), "currentRenderDeltaTime");
         private static readonly FieldInfo ResetHistory = AccessTools.Field(typeof(HDCamera), "resetPostProcessingHistory");
         private static readonly PropertyInfo FirstFrame = AccessTools.Property(typeof(HDCamera), "isFirstFrame");
-        private static readonly FieldInfo CustomColor = AccessTools.Field(typeof(HDRenderPipeline), "m_CustomPassColorBuffer");
-        private static readonly FieldInfo CustomDepth = AccessTools.Field(typeof(HDRenderPipeline), "m_CustomPassDepthBuffer");
-        private static readonly MethodInfo ExecuteInternal = AccessTools.Method(typeof(CustomPass), "ExecuteInternal");
         private static readonly Func<HDRenderPipeline, HDCamera, RenderGraph, string, TextureHandle> OutputHandle =
             AccessTools.Method(typeof(HDRenderPipeline), "GetPostprocessUpsampledOutputHandle") is MethodInfo m
                 ? (Func<HDRenderPipeline, HDCamera, RenderGraph, string, TextureHandle>)Delegate.CreateDelegate(typeof(Func<HDRenderPipeline, HDCamera, RenderGraph, string, TextureHandle>), m)
@@ -108,14 +109,8 @@ namespace TGBetterUpscaling
         private static bool HistoryReset(HDCamera hd) =>
             (ResetHistory != null && (bool)ResetHistory.GetValue(hd)) || (FirstFrame != null && (bool)FirstFrame.GetValue(hd, null));
         private static void ResetStpHistory(HDCamera hd) => ResetHistory?.SetValue(hd, true);
-        private static void Record(UpscalePass customPass, HDRenderPipeline pipeline, RenderGraph graph, HDCamera hd, CustomPass.RenderTargets targets)
-        {
-            targets.customColorBuffer = CustomColor?.GetValue(pipeline) as Lazy<RTHandle>;
-            targets.customDepthBuffer = CustomDepth?.GetValue(pipeline) as Lazy<RTHandle>;
-            ExecuteInternal.Invoke(customPass, new object[] { graph, hd, default(CullingResults), default(CullingResults), targets, volume });
-        }
         private static void SetScaler() => DynamicResolutionHandler.SetDynamicResScaler(scaler ?? (scaler = () => hostScale), DynamicResScalePolicyType.ReturnsPercentage);
-        private static bool Ready => CameraField != null && ExecuteInternal != null && OutputHandle != null && CustomColor != null && CustomDepth != null;
+        private static bool Ready => CameraField != null && OutputHandle != null && CustomPassRecorder.Ready;
         // HDRP's exposure members are internal here; the IL2CPP interop exposes them.
         private static readonly Func<HDRenderPipeline, HDCamera, RTHandle> ExposureTexture =
             AccessTools.Method(typeof(HDRenderPipeline), "GetExposureTexture", new[] { typeof(HDCamera) }) is MethodInfo exposureTexture
@@ -143,37 +138,9 @@ namespace TGBetterUpscaling
         private static void ResetStpHistory(HDCamera hd) => hd.resetPostProcessingHistory = true;
         private static TextureHandle OutputHandle(HDRenderPipeline pipeline, HDCamera hd, RenderGraph graph, string name) =>
             pipeline.GetPostprocessUpsampledOutputHandle(hd, graph, name);
-        // Not the interop's CustomPass.ExecuteInternal: for its `in RenderTargets` it hands IL2CPP the boxed
-        // struct itself, where IL2CPP expects a pointer to the struct's data. HDRP then read the object's
-        // header as the first targets, the render graph failed every frame without running the pass and
-        // leaked that frame's textures, and the game ran the system out of memory within minutes. The same
-        // native method, called with the unboxed data.
-        private static readonly IntPtr ExecuteInternalMethod = NativeMethod(typeof(CustomPass), "NativeMethodInfoPtr_ExecuteInternal_");
-        private static IntPtr NativeMethod(Type type, string prefix)
-        {
-            foreach (var field in type.GetFields(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
-                if (field.Name.StartsWith(prefix, StringComparison.Ordinal) && field.FieldType == typeof(IntPtr)) return (IntPtr)field.GetValue(null);
-            return IntPtr.Zero;
-        }
-        private static unsafe void Record(UpscalePass customPass, HDRenderPipeline pipeline, RenderGraph graph, HDCamera hd, CustomPass.RenderTargets targets)
-        {
-            targets.customColorBuffer = pipeline.m_CustomPassColorBuffer;
-            targets.customDepthBuffer = pipeline.m_CustomPassDepthBuffer;
-            var culling = default(CullingResults);
-            void** args = stackalloc void*[6];
-            args[0] = (void*)IL2CPP.Il2CppObjectBaseToPtr(graph);
-            args[1] = (void*)IL2CPP.Il2CppObjectBaseToPtr(hd);
-            args[2] = &culling;
-            args[3] = &culling;
-            args[4] = (void*)IL2CPP.il2cpp_object_unbox(IL2CPP.Il2CppObjectBaseToPtrNotNull(targets));
-            args[5] = (void*)IL2CPP.Il2CppObjectBaseToPtr(volume);
-            IntPtr exception = IntPtr.Zero;
-            IL2CPP.il2cpp_runtime_invoke(ExecuteInternalMethod, IL2CPP.Il2CppObjectBaseToPtrNotNull(customPass), args, ref exception);
-            Il2CppInterop.Runtime.Il2CppException.RaiseExceptionIfNecessary(exception);
-        }
         private static void SetScaler() => DynamicResolutionHandler.SetDynamicResScaler(
             scaler ?? (scaler = DelegateSupport.ConvertDelegate<PerformDynamicRes>(new Func<float>(() => hostScale))), DynamicResScalePolicyType.ReturnsPercentage);
-        private static bool Ready => ExecuteInternalMethod != IntPtr.Zero;
+        private static bool Ready => CustomPassRecorder.Ready;
         private static float GpuExposure(HDRenderPipeline pipeline, HDCamera hd)
         {
             var texture = pipeline.GetExposureTexture(hd);
@@ -212,6 +179,18 @@ namespace TGBetterUpscaling
                         throw new MissingMethodException("UpScalingController.OnSettingChanged or HDRenderPipeline.DoStpPasses");
                     candidate.Patch(controllerMethod, prefix: new HarmonyMethod(typeof(StpHost), nameof(BeforeSettingChanged)));
                     candidate.Patch(stp, prefix: new HarmonyMethod(typeof(StpHost), nameof(BeforeStp)));
+#if !BEPINEX_IL2CPP
+                    // TG Path Tracing is Mono-only. A missing RR sizing hook must not disable FSR/XeSS hosting.
+                    try
+                    {
+                        candidate.Patch(AccessTools.Method(typeof(DynamicResolutionHandler), "UpdateAndUseCamera"),
+                            prefix: new HarmonyMethod(typeof(StpHost), nameof(BeforeResolutionCamera)));
+                        candidate.Patch(AccessTools.Method(typeof(DynamicResolutionHandler), "ApplyScalesOnSize", new[] { typeof(Vector2Int), typeof(Vector2) }),
+                            postfix: new HarmonyMethod(typeof(StpHost), nameof(AfterResolutionSize)));
+                        rrSizingReady = true;
+                    }
+                    catch (Exception ex) { Session.Log.LogWarning("Ray Reconstruction sizing could not be hooked: " + ex.Message); }
+#endif
                     harmony = candidate;
                 }
                 catch { candidate.UnpatchSelf(); throw; }
@@ -244,9 +223,22 @@ namespace TGBetterUpscaling
                 string where = point == DynamicResolutionHandler.UpsamplerScheduleType.BeforePost ? "before post-processing"
                     : point == DynamicResolutionHandler.UpsamplerScheduleType.AfterDepthOfField ? "after depth of field, before the rest of post-processing"
                     : "after post-processing";
-                return "HDRP runs STP, and FSR or XeSS in its place, " + where + " (" + point + "); film grain comes after it.";
+                return "HDRP runs STP, and FSR or XeSS in its place, " + where + " (" + point + "); film grain comes after it. " + UpscalerOrder(asset);
             }
             catch (Exception ex) { return "HDRP's STP injection point is unknown (" + ex.GetType().Name + ")."; }
+        }
+        // The order in which HDRP tries its upscalers for a camera, as the game's HDRP asset lists them: the first one
+        // the camera allows runs. Game builds from October 2026 have HDRP's own FSR 2 in it.
+        private static string UpscalerOrder(HDRenderPipelineAsset asset)
+        {
+            try
+            {
+                var order = asset.currentPlatformRenderPipelineSettings.dynamicResolutionSettings.advancedUpscalersByPriority;
+                string names = "";
+                if (order != null) for (int i = 0; i < order.Count; i++) names += (i > 0 ? ", " : "") + order[i];
+                return "HDRP's upscaler order: " + (names.Length > 0 ? names : "none") + ".";
+            }
+            catch (Exception ex) { return "HDRP's upscaler order is unknown (" + ex.GetType().Name + ")."; }
         }
         // The game's graphics presets set the render-scale slider; the quality modes follow them. Hooked only
         // once the game has created its Upscaling setting: patching compiles UpScaling.SetValueForPreset,
@@ -288,19 +280,31 @@ namespace TGBetterUpscaling
                     Session.HaveStatus && Session.Status.Usable(NativeFlags.BackendRayReconstruction) && ConfigureRayReconstruction(__instance, rrDlss))
                     return false;
                 hostingRr = false;
-                if (index == (int)UpscalerSetting.DLSS && UpScaling.IsDLSSAvailable && Session.Settings.Mode(UpscalerSetting.DLSS) is QualityMode dlss &&
+                // With the row left as the game has it (UpscalerRow.Failed), the quality modes have no rows: the game
+                // sets DLSS up itself, at its own slider.
+                if (index == (int)UpscalerSetting.DLSS && UpScaling.IsDLSSAvailable && !UpscalerRow.Failed && Session.Settings.Mode(UpscalerSetting.DLSS) is QualityMode dlss &&
                     ConfigureDlss(__instance, dlss))
                 {
                     Hosting = UpscalerSetting.None;
                     SetMipBias(CameraOf(__instance), UpscalerSetting.None);
                     return false;
                 }
+                // FSR is this mod's where AMD's runtime reported it. Otherwise index 3 is the game's own FSR 2 (game
+                // builds from October 2026), which the game's controller sets up itself; so it is until the runtimes
+                // have reported, and with the row left as the game has it. XeSS is always this mod's.
                 // After a failure FSR and XeSS no longer take STP's pass over (Active is false), but FSR or XeSS stays
-                // configured below, so HDRP's own STP runs at its render scale. Handed to the game instead, an FSR or
-                // XeSS index would switch upscaling off altogether: the game's controller knows no such type.
-                if ((index != UpscalerRow.FsrIndex && index != UpscalerRow.XessIndex) || !UpScaling.IsSTPAvailable)
+                // configured below, so HDRP's own STP runs at its render scale. Handed to the game instead, a XeSS
+                // index would switch upscaling off altogether: the game's controller knows no such type.
+                bool hosted = !UpscalerRow.Failed && (index == UpscalerRow.XessIndex || (index == UpscalerRow.FsrIndex && Session.Settings.Capabilities?.Fsr == true));
+                if (!hosted || !UpScaling.IsSTPAvailable)
                 {
-                    Hosting = UpscalerSetting.None; configured = "";
+                    Hosting = UpscalerSetting.None;
+                    var reported = Session.Settings.Capabilities;
+                    string game = index == UpscalerRow.FsrIndex && (reported == null || reported.GameFsr != null) ? "game FSR" : "";
+                    if (game.Length > 0 && game != configured)
+                        Session.Log.LogInfo("The game sets up its own FSR 2, at its own render scale: " + (reported == null ? "the runtimes have not reported to this mod yet."
+                            : UpscalerRow.Failed ? "the Upscaling row is left as the game has it." : "AMD's runtime reported no FSR to this mod."));
+                    configured = game;
                     SetMipBias(CameraOf(__instance), UpscalerSetting.None);
                     return true;
                 }
@@ -326,6 +330,7 @@ namespace TGBetterUpscaling
         {
             var camera = CameraOf(owner);
             if (camera == null) return false;
+            camera.allowFidelityFX2SuperResolution = false;
             camera.deepLearningSuperSamplingQuality = (uint)mode.Id;
             camera.allowDynamicResolution = true;
             camera.allowDeepLearningSuperSampling = true;
@@ -346,12 +351,17 @@ namespace TGBetterUpscaling
         // biases texture sampling for the lower render resolution wherever STP runs, as NVIDIA asks for DLSS.
         private static bool ConfigureRayReconstruction(UpScalingController owner, QualityMode mode)
         {
+            if (!rrSizingReady) return false;
             var camera = CameraOf(owner);
             if (camera == null) return false;
+            rrCamera = camera.GetComponent<Camera>();
+            uint width = (uint)Mathf.Max(1, rrCamera.pixelWidth), height = (uint)Mathf.Max(1, rrCamera.pixelHeight);
+            if (!RrSize(width, height, (uint)mode.Id)) return false;
             camera.allowDynamicResolution = true;
             camera.allowDeepLearningSuperSampling = false;
             camera.deepLearningSuperSamplingUseCustomQualitySettings = false;
-            hostScale = Mathf.Clamp(QualityModes.RenderScale(mode), 10f, 100f);
+            camera.allowFidelityFX2SuperResolution = false;
+            hostScale = 100f * rrRenderWidth / rrOutputWidth;
             SetScaler();
             DynamicResolutionHandler.SetActiveDynamicScalerSlot(DynamicResScalerSlot.User);
             SetMipBias(camera, UpscalerSetting.None);
@@ -363,7 +373,29 @@ namespace TGBetterUpscaling
             Hosting = UpscalerSetting.DLSS; hostingRr = true; rrMode = (uint)mode.Id;
             return true;
         }
-        // The camera as the game's controller sets it up for STP, for FSR or XeSS in STP's place.
+        private static bool RrSize(uint width, uint height, uint mode)
+        {
+            if (rrOutputWidth == width && rrOutputHeight == height && rrSizeMode == mode && rrRenderWidth != 0) return true;
+            rrRenderWidth = rrRenderHeight = 0;
+            if (!Session.Upscaler.RrOptimalSettings(width, height, mode, out rrRenderWidth, out rrRenderHeight)) return false;
+            rrOutputWidth = width; rrOutputHeight = height; rrSizeMode = mode;
+            return true;
+        }
+        private static void BeforeResolutionCamera(Camera __0) => rrSizingCamera = __0 != null && __0 == rrCamera;
+        // HDRP normally rounds software scaling up to even pixels. RR does not support dynamic resolution: use its
+        // exact two-dimensional answer before HDCamera sizes its targets, depth, motion, jitter and screen constants.
+        // GetScaledSize still updates HDRP's cached size; other cameras and reduced-size auxiliary targets keep theirs.
+        private static void AfterResolutionSize(DynamicResolutionHandler __instance, Vector2Int size, ref Vector2Int __result)
+        {
+            if (!RayReconstruction || !rrSizingCamera || size != __instance.finalViewport || size.x <= 0 || size.y <= 0) return;
+            if (!RrSize((uint)size.x, (uint)size.y, rrMode)) return;
+            hostScale = 100f * rrRenderWidth / rrOutputWidth;
+            __result = new Vector2Int((int)rrRenderWidth, (int)rrRenderHeight);
+        }
+        // The camera as the game's controller sets it up for STP, for FSR or XeSS in STP's place. HDRP runs one
+        // upscaler for a camera, the first in its asset's list that the camera allows: the game's own FSR 2 (game
+        // builds from October 2026) is switched off here as the game switches it off for STP, or it could run in
+        // STP's place, and this mod's pass would never be asked for.
         private static bool Configure(UpScalingController owner, UpscalerSetting upscaler, float scale, QualityMode mode)
         {
             var camera = CameraOf(owner);
@@ -371,6 +403,7 @@ namespace TGBetterUpscaling
             camera.allowDynamicResolution = true;
             camera.allowDeepLearningSuperSampling = false;
             camera.deepLearningSuperSamplingUseCustomQualitySettings = false;
+            camera.allowFidelityFX2SuperResolution = false;
             hostingRr = false;
             hostScale = Mathf.Clamp(scale, 10f, 100f);
             SetScaler();
@@ -475,6 +508,12 @@ namespace TGBetterUpscaling
                 var viewport = Viewport(hdCamera);
                 uint outputWidth = (uint)Mathf.RoundToInt(viewport.width), outputHeight = (uint)Mathf.RoundToInt(viewport.height);
                 uint renderWidth = (uint)Mathf.Max(0, hdCamera.actualWidth), renderHeight = (uint)Mathf.Max(0, hdCamera.actualHeight);
+                if (rr && (!RrSize(outputWidth, outputHeight, rrMode) || renderWidth != rrRenderWidth || renderHeight != rrRenderHeight))
+                {
+                    LastFrame = "Ray Reconstruction skipped: HDRP's render dimensions do not match NGX's RR optimal settings";
+                    ++keptSize;
+                    return StpRuns(hdCamera);
+                }
                 float near = Near(hdCamera), far = Far(hdCamera), fov = camera.fieldOfView * Mathf.Deg2Rad;
                 var jitter = hdCamera.taaJitter;
                 if (renderWidth == 0 || renderHeight == 0 || renderWidth > outputWidth || renderHeight > outputHeight || outputWidth > 16384 || outputHeight > 16384 ||
@@ -521,7 +560,7 @@ namespace TGBetterUpscaling
                 };
                 pendingSource = inputColor;
                 armed = true;
-                Record(pass, __instance, renderGraph, hdCamera, targets);
+                CustomPassRecorder.Record(pass, volume, __instance, renderGraph, hdCamera, targets);
                 ++recorded;
                 __result = output;
                 return false;
@@ -587,7 +626,9 @@ namespace TGBetterUpscaling
                     Fallback(ctx, source, "TG Path Tracing wrote no Ray Reconstruction guides this frame"); return;
                 }
                 if (rr && !PathTracingLink.TryExtraGuides(frame.RenderWidth, frame.RenderHeight, out frame.SpecularHitDistance, out frame.ColorBeforeTransparency))
-                    frame.SpecularHitDistance = frame.ColorBeforeTransparency = 0;
+                {
+                    Fallback(ctx, source, "TG Path Tracing wrote no reflection distance for Ray Reconstruction this frame"); return;
+                }
                 int result = Session.Upscaler.SubmitFrame(ref frame);
                 if (result != 0) { Fallback(ctx, source, "the native side refused the frame (" + result + ")"); return; }
                 // One event: the request carries its destination, so the native side upscales and writes it.
@@ -624,6 +665,7 @@ namespace TGBetterUpscaling
             ", managed fallbacks " + Fallbacks + " | last: " + LastFrame;
         internal static void Dispose()
         {
+            rrSizingReady = rrSizingCamera = false;
             var installed = harmony;
             harmony = null;
             try { installed?.UnpatchSelf(); } catch (Exception ex) { Session.Log?.LogWarning("Upscaling unpatch failed: " + ex.Message); }

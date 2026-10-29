@@ -13,6 +13,7 @@
 // render thread's command list and re-created when the render or output size, the quality mode or the
 // creation flags change.
 #include "runtime.hpp"
+#include <tgb/ngx_session.hpp>
 #pragma warning(push, 0)
 #include <nvsdk_ngx_helpers.h>
 #include <nvsdk_ngx_helpers_dlssd_d3d.h>
@@ -60,6 +61,7 @@ class RayReconstructionBackend final : public Backend {
 public:
     explicit RayReconstructionBackend(ID3D12Device* device) : device_(device) {}
     ~RayReconstructionBackend() override {
+        tgb::NgxScope session;
         if(feature_) NVSDK_NGX_D3D12_ReleaseFeature(feature_);
         if(params_) NVSDK_NGX_D3D12_DestroyParameters(params_);
     }
@@ -70,6 +72,7 @@ public:
     }
     // The feature itself is created on the next command list (NGX records its creation there).
     bool prepare(const TGUP_Frame& f, std::string& error) override {
+        tgb::NgxScope session;
         if(feature_) { NVSDK_NGX_D3D12_ReleaseFeature(feature_); feature_=nullptr; }
         if(!params_ && NVSDK_NGX_FAILED(NVSDK_NGX_D3D12_AllocateParameters(&params_))) { params_=nullptr; error="NGX parameters could not be allocated"; return false; }
         width_=f.renderWidth; height_=f.renderHeight; outWidth_=f.outputWidth; outHeight_=f.outputHeight;
@@ -79,18 +82,21 @@ public:
     // A feature whose creation was recorded into a list that never ran was never initialized on the GPU: it is
     // created again. The next frame also starts the temporal history afresh (a DLSS mod may veto evaluations).
     void discarded() override {
+        tgb::NgxScope session;
         if(createdInList_ && feature_) { NVSDK_NGX_D3D12_ReleaseFeature(feature_); feature_=nullptr; }
         createdInList_=false; resetNext_=true;
     }
     bool record(ID3D12GraphicsCommandList* list, const Inputs& in, std::string& error) override {
         createdInList_=false;
-        if(!in.diffuseAlbedo || !in.specularAlbedo || !in.normalRoughness) { error="Ray Reconstruction has no guides for this frame"; return false; }
+        if(!in.diffuseAlbedo || !in.specularAlbedo || !in.normalRoughness || !in.specularHitDistance) {
+            error="Ray Reconstruction has no material or reflection-distance guides for this frame"; return false;
+        }
         // NGX reads its inputs as shader resources and writes its output as unordered access; the shared
         // textures rest in COMMON between the two APIs and go back there.
         ID3D12Resource* reads[8]={in.color, in.depth, in.motion, in.diffuseAlbedo, in.specularAlbedo, in.normalRoughness, nullptr, nullptr};
         int readCount=6;
-        const bool extras=in.specularHitDistance && in.colorBeforeTransparency;
-        if(extras) { reads[readCount++]=in.specularHitDistance; reads[readCount++]=in.colorBeforeTransparency; }
+        reads[readCount++]=in.specularHitDistance;
+        if(in.colorBeforeTransparency && !transparencyRefused_) reads[readCount++]=in.colorBeforeTransparency;
         D3D12_RESOURCE_BARRIER barriers[9]{};
         auto transition=[](D3D12_RESOURCE_BARRIER& b, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
             b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource=r; b.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
@@ -112,6 +118,7 @@ private:
             ((f.flags&TGUP_FLAG_DEPTH_INVERTED) ? NVSDK_NGX_DLSS_Feature_Flags_DepthInverted : 0u);
     }
     bool evaluate(ID3D12GraphicsCommandList* list, const Inputs& in, std::string& error) {
+        tgb::NgxScope session;
         const auto& f=*in.frame;
         bool reset=in.reset || resetNext_;
         if(!feature_) {
@@ -122,26 +129,29 @@ private:
             create.InWidth=width_; create.InHeight=height_; create.InTargetWidth=outWidth_; create.InTargetHeight=outHeight_;
             create.InPerfQualityValue=NVSDK_NGX_PerfQuality_Value(quality_);
             create.InFeatureCreateFlags=int(flags_);
-            // Preset F, the SDK's newest model ("Default model RR2", 310.9), in every quality mode, rather than whatever
-            // NGX's default is after an update. A nvngx_dlssd.dll without it uses its own default.
+            // NVIDIA's Default preset in every quality mode, as its guide recommends ("we recommend games stick to ..._Default
+            // for all modes", DLSS-RR Integration Guide 3.13). In SDK 310.9.1 Default is preset F (the guide's tables give
+            // memory and speed for "Presets Default, F" together). The owner, 2026-10-11: "Use NVIDIA's Default, if that is
+            // currently preset F. If it's not, use preset F." Until then F was pinned. A newer nvngx_dlssd.dll whose Default
+            // is no longer F must be looked at again (PT-127).
             for(const char* mode:{NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality,
                                   NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance,
                                   NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality})
-                params_->Set(mode, unsigned(NVSDK_NGX_RayReconstruction_Hint_Render_Preset_F));
+                params_->Set(mode, unsigned(NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default));
             const NVSDK_NGX_Result r=NGX_D3D12_CREATE_DLSSD_EXT(list, 1, 1, &feature_, params_, &create);
             if(NVSDK_NGX_FAILED(r) || !feature_) { feature_=nullptr; error="Ray Reconstruction feature creation failed: "+result_text(r); return false; }
             reset=true; createdInList_=true;
             log("DLSS Ray Reconstruction created: render "+std::to_string(width_)+"x"+std::to_string(height_)+" -> "+
-                std::to_string(outWidth_)+"x"+std::to_string(outHeight_)+", NGX quality "+std::to_string(quality_)+", preset F; nvngx_dlssd.dll loaded from "+dlssd_modules());
+                std::to_string(outWidth_)+"x"+std::to_string(outHeight_)+", NGX quality "+std::to_string(quality_)+", NVIDIA's Default preset (F in SDK 310.9.1); nvngx_dlssd.dll loaded from "+dlssd_modules());
         }
         NVSDK_NGX_D3D12_DLSSD_Eval_Params eval{};
         eval.pInDiffuseAlbedo=in.diffuseAlbedo; eval.pInSpecularAlbedo=in.specularAlbedo;
         eval.pInNormals=in.normalRoughness; eval.pInRoughness=in.normalRoughness; // roughness packed in the normals' alpha
-        // TG Path Tracing's optional inputs: the traced reflections' hit distance (for reflections under motion), and the
-        // color before transparency with the color as it is after (for particles and glass, which carry no traced light).
-        const bool extras=in.specularHitDistance && in.colorBeforeTransparency && !extrasRefused_;
-        if(extras) {
-            eval.pInSpecularHitDistance=in.specularHitDistance;
+        // RR guide 3.4.8/9: without specular motion, reflection distance is required. Only the transparency snapshot
+        // (3.4.11) is optional, and refusing it must not discard reflection geometry.
+        eval.pInSpecularHitDistance=in.specularHitDistance;
+        const bool transparency=in.colorBeforeTransparency && !transparencyRefused_;
+        if(transparency) {
             eval.pInColorBeforeTransparency=in.colorBeforeTransparency; eval.pInColorAfterTransparency=in.color;
         }
         eval.pInColor=in.color; eval.pInOutput=in.output; eval.pInDepth=in.depth; eval.pInMotionVectors=in.motion;
@@ -159,11 +169,11 @@ private:
         std::memcpy(worldToView_, f.worldToView, sizeof(worldToView_)); std::memcpy(viewToClip_, f.viewToClip, sizeof(viewToClip_));
         eval.pInWorldToViewMatrix=worldToView_; eval.pInViewToClipMatrix=viewToClip_;
         NVSDK_NGX_Result r=NGX_D3D12_EVALUATE_DLSSD_EXT(list, feature_, params_, &eval);
-        if(NVSDK_NGX_FAILED(r) && extras) {
-            // The optional inputs are the one thing that can be dropped: without them for the rest of the session.
-            extrasRefused_=true;
-            log("DLSS Ray Reconstruction refused TG Path Tracing's optional inputs ("+result_text(r)+"); it runs without them");
-            eval.pInSpecularHitDistance=nullptr; eval.pInColorBeforeTransparency=nullptr; eval.pInColorAfterTransparency=nullptr;
+        if(NVSDK_NGX_FAILED(r) && transparency) {
+            transparencyRefused_=true;
+            log("DLSS Ray Reconstruction evaluation failed with the optional transparency guide ("+result_text(r)+"); retrying without that guide, keeping reflection distance");
+            eval.pInColorBeforeTransparency=nullptr; eval.pInColorAfterTransparency=nullptr;
+            eval.InReset=1;
             r=NGX_D3D12_EVALUATE_DLSSD_EXT(list, feature_, params_, &eval);
         }
         if(NVSDK_NGX_FAILED(r)) { error="Ray Reconstruction evaluation failed: "+result_text(r); return false; }
@@ -183,7 +193,7 @@ private:
         return list.empty() ? "(none yet)" : list;
     }
     bool createdInList_=false, resetNext_=false;
-    bool extrasRefused_=false; // NGX failed an evaluation with the optional inputs: they stay out
+    bool transparencyRefused_=false; // only the optional transparency snapshot may stay out
     ComPtr<ID3D12Device> device_;
     NVSDK_NGX_Parameter* params_=nullptr;
     NVSDK_NGX_Handle* feature_=nullptr;
@@ -194,15 +204,18 @@ private:
 
 // Once per shared D3D12 device: NGX, and whether this GPU and driver run Ray Reconstruction.
 bool rr_probe(ID3D12Device* device) {
+    tgb::NgxScope session;
     std::lock_guard<std::mutex> lock(ngx.mutex);
     if(!device) return false;
     if(ngx.probed && tgb::same_object(ngx.device.Get(), device)) return ngx.available;
-    if(ngx.initialized) { NVSDK_NGX_D3D12_Shutdown1(ngx.device.Get()); ngx.initialized=false; }
+    // The bridge device and its NGX session live for the process; another mod may own features.
+    if(ngx.initialized) { ngx.reason="The shared NGX device changed; restart the game."; return false; }
     ngx.device=device; ngx.probed=true; ngx.available=false; ngx.reason.clear();
     const std::wstring folder=native_root()+L"\\DLSS";
-    const wchar_t* paths[]={folder.c_str()};
+    const auto nrFolder=tgb::neural_runtime_folder(host());
+    const wchar_t* paths[]={folder.c_str(), nrFolder.c_str()};
     NVSDK_NGX_FeatureCommonInfo info{};
-    info.PathListInfo.Path=paths; info.PathListInfo.Length=1;
+    info.PathListInfo.Path=paths; info.PathListInfo.Length=nrFolder.empty() ? 1u : 2u;
     info.LoggingInfo.LoggingCallback=ngx_log;
     info.LoggingInfo.MinimumLoggingLevel=NVSDK_NGX_LOGGING_LEVEL_ON;
     info.LoggingInfo.DisableOtherLoggingSinks=true;
@@ -229,6 +242,22 @@ bool rr_probe(ID3D12Device* device) {
     return ngx.available;
 }
 bool rr_available() { std::lock_guard<std::mutex> lock(ngx.mutex); return ngx.available; }
+bool rr_optimal_settings(uint32_t outputWidth, uint32_t outputHeight, uint32_t mode, uint32_t& width, uint32_t& height) {
+    width=height=0;
+    if(!outputWidth || !outputHeight || mode>5) return false;
+    tgb::NgxScope session;
+    std::lock_guard<std::mutex> lock(ngx.mutex);
+    if(!ngx.available) return false;
+    NVSDK_NGX_Parameter* caps=nullptr;
+    if(NVSDK_NGX_FAILED(NVSDK_NGX_D3D12_GetCapabilityParameters(&caps)) || !caps) return false;
+    unsigned int w=0, h=0, maxW=0, maxH=0, minW=0, minH=0;
+    float unusedSharpness=0.f; // RR guide 5.5: ignore this output
+    const auto result=NGX_DLSSD_GET_OPTIMAL_SETTINGS(caps, outputWidth, outputHeight, NVSDK_NGX_PerfQuality_Value(mode),
+        &w, &h, &maxW, &maxH, &minW, &minH, &unusedSharpness);
+    NVSDK_NGX_D3D12_DestroyParameters(caps);
+    if(NVSDK_NGX_FAILED(result) || !w || !h || w>outputWidth || h>outputHeight) return false;
+    width=w; height=h; return true;
+}
 std::string rr_unavailable_reason() { std::lock_guard<std::mutex> lock(ngx.mutex); return ngx.reason; }
 std::unique_ptr<Backend> create_rr_backend(ID3D12Device* device) { return std::make_unique<RayReconstructionBackend>(device); }
 } // namespace tgup

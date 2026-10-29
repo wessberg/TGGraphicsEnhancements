@@ -6,6 +6,7 @@
 #include <ffx_denoiser.h>
 #include <cstring>
 #include <filesystem>
+#include <chrono>
 
 namespace tgpt {
 namespace {
@@ -80,32 +81,62 @@ bool rrg_probe(ID3D12Device* device, uint32_t vendor) {
 bool rrg_available() { return rt.available; }
 
 void RayRegeneration::destroy() {
+    // A context still being created has never been submitted to the GPU. Join before releasing its device.
+    if(pending_.valid()) {
+        auto created=pending_.get();
+        if(created.context && rt.destroy) { ffxContext c=created.context; rt.destroy(&c, nullptr); }
+    }
     if(context_ && rt.destroy) { ffxContext c=context_; rt.destroy(&c, nullptr); }
-    context_=nullptr; width_=height_=0;
+    context_=nullptr; width_=height_=0; havePrevious_=false;
 }
 
 bool RayRegeneration::ensure(ID3D12Device* device, uint32_t width, uint32_t height, std::string& error) {
     if(!needs_context(width, height)) return true;
-    destroy();
+    error.clear();
+    if(pending_.valid()) {
+        if(pending_.wait_for(std::chrono::seconds(0))!=std::future_status::ready) return false;
+        auto created=pending_.get();
+        if(!created.context) { error=created.error; return false; }
+        if(created.width==width && created.height==height) {
+            context_=created.context; width_=width; height_=height; havePrevious_=false;
+            log("AMD Ray Regeneration context ready for "+std::to_string(width)+"x"+std::to_string(height));
+            return true;
+        }
+        ffxContext c=created.context; rt.destroy(&c, nullptr); // resized while creating; never dispatched
+    }
+    destroy(); // caller has waited for GPU work using the old live context
     if(!rt.available) { error="not available"; return false; }
+    // AMD guide 2.4: context creation compiles pipelines/allocates memory; keep it off the rendering thread.
+    ComPtr<ID3D12Device> retainedDevice=device;
+    pending_=std::async(std::launch::async, [retainedDevice, width, height]() -> Created {
+    Created result; result.width=width; result.height=height;
     // The bounced light, the direct light and the reflections.
     ffxCreateContextDescDenoiser create{}; create.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_DENOISER;
     create.version=FFX_DENOISER_VERSION;
     create.maxRenderSize={width, height};
     create.signalFlags=FFX_DENOISER_SIGNAL_INDIRECT_DIFFUSE|FFX_DENOISER_SIGNAL_DIRECT_DIFFUSE|FFX_DENOISER_SIGNAL_INDIRECT_SPECULAR;
     create.checkerboardSignalFlags=FFX_DENOISER_SIGNAL_NONE;
-    ffxCreateBackendDX12Desc backend{}; backend.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12; backend.device=device;
+    // Hidden integration switch, read when each context is created. Zero/default adds no vendor diagnostics cost.
+    char debug[8]{};
+    if(GetEnvironmentVariableA("TGPT_RRG_DEBUG", debug, sizeof(debug))>0 && debug[0]=='1')
+        create.flags=FFX_DENOISER_ENABLE_DEBUGGING|FFX_DENOISER_ENABLE_VALIDATION;
+    ffxCreateBackendDX12Desc backend{}; backend.header.type=FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12; backend.device=retainedDevice.Get();
     create.header.pNext=&backend.header;
     ffxContext context=nullptr;
-    const auto result=rt.create(&context, &create.header, nullptr);
-    if(result!=FFX_API_RETURN_OK || !context) { error="ffxCreateContext(denoiser) returned "+std::to_string(result); return false; }
-    context_=context; width_=width; height_=height;
-    log("AMD Ray Regeneration context for "+std::to_string(width)+"x"+std::to_string(height)+": bounced light, direct light and reflections");
-    return true;
+    const auto code=rt.create(&context, &create.header, nullptr);
+    if(code!=FFX_API_RETURN_OK || !context) {
+        if(context) rt.destroy(&context, nullptr);
+        result.error="ffxCreateContext(denoiser) returned "+std::to_string(code);
+    } else result.context=context;
+    return result;
+    });
+    return false;
 }
 
 bool RayRegeneration::dispatch(ID3D12GraphicsCommandList* list, const RrgFrame& f, std::string& error) {
     if(!context_) { error="no context"; return false; }
+    const bool reset=f.reset || !havePrevious_ || f.frameIndex!=lastDispatch_+1u;
+    havePrevious_=false; // any failed dispatch invalidates history
     ffxDispatchDescDenoiser d{}; d.header.type=FFX_API_DISPATCH_DESC_TYPE_DENOISER;
     d.commandList=list;
     d.linearDepth=resource(f.linearDepth); d.motionVectors=resource(f.motion); d.normals=resource(f.normals);
@@ -118,7 +149,7 @@ bool RayRegeneration::dispatch(ID3D12GraphicsCommandList* list, const RrgFrame& 
     d.linearDepthBounds={0.f, 1e5f};      // the sky's texels carry a depth beyond it and pass through
     d.renderSize={f.width, f.height};
     d.frameIndex=f.frameIndex;
-    d.flags=f.reset ? FFX_DENOISER_DISPATCH_RESET : 0u; // albedos sqrt-encoded, as the SDK assumes by default
+    d.flags=reset ? FFX_DENOISER_DISPATCH_RESET : 0u; // albedos sqrt-encoded, as the SDK assumes by default
     ffxDispatchDescDenoiserIndirectDiffuse gi{}; gi.header.type=FFX_API_DISPATCH_DESC_TYPE_DENOISER_INDIRECT_DIFFUSE;
     gi.signal.input=resource(f.indirectDiffuse); gi.signal.output=gi.signal.input;
     d.header.pNext=&gi.header;
@@ -130,6 +161,7 @@ bool RayRegeneration::dispatch(ID3D12GraphicsCommandList* list, const RrgFrame& 
     ffxContext c=context_;
     const auto result=rt.dispatch(&c, &d.header);
     if(result!=FFX_API_RETURN_OK) { error="ffxDispatch(denoiser) returned "+std::to_string(result); return false; }
+    lastDispatch_=f.frameIndex; havePrevious_=true;
     return true;
 }
 } // namespace tgpt

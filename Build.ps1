@@ -6,7 +6,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
-    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling','TGPathTracing')][string]$Mod = 'All',
+    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling','TGPathTracing','TGNeuralRendering')][string]$Mod = 'All',
     [string]$GameDirMono = '',
     [string]$GameDirIl2Cpp = '',
     [ValidateSet('Release','Debug')][string]$Configuration = 'Release',
@@ -27,8 +27,10 @@ $version = Get-TgVersion
 # Each mod's project references the bridge's library and builds its own copy of the bridge's preloader:
 # building the two builds all five assemblies. Every staged build carries both mods.
 $projects = [ordered]@{ TGFrameGeneration='src\TGFrameGeneration\TGFrameGeneration.csproj'; TGBetterUpscaling='src\TGBetterUpscaling\TGBetterUpscaling.csproj'
-                       TGPathTracing='src\TGPathTracing\TGPathTracing.csproj' }
+                       TGPathTracing='src\TGPathTracing\TGPathTracing.csproj'; TGNeuralRendering='src\TGNeuralRendering\TGNeuralRendering.csproj' }
 $outputs = @{
+    'TGNeuralRendering.Autoload' = 'src\TGNeuralRendering.Autoload\bin\{0}\{1}\TGNeuralRendering.Autoload.dll'
+    'TGNeuralRendering'          = 'src\TGNeuralRendering\bin\{0}\{1}\TGNeuralRendering.dll'
     'TGGraphicsBridge'           = 'src\TGGraphicsBridge\bin\{0}\{1}\TGGraphicsBridge.dll'
     'TGFrameGeneration.Autoload' = 'src\TGFrameGeneration.Autoload\bin\{0}\{1}\TGFrameGeneration.Autoload.dll'
     'TGBetterUpscaling.Autoload' = 'src\TGBetterUpscaling.Autoload\bin\{0}\{1}\TGBetterUpscaling.Autoload.dll'

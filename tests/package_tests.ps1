@@ -81,6 +81,12 @@ try {
     Assert-Throws { Get-TgOwnedPath 'TGBetterUpscaling' $game 'nvngx_dlss.dll' } "TG Better Upscaling was allowed to write the game's nvngx_dlss.dll."
     Assert-True (@(Get-TgRequiredPaths 'TGFrameGeneration') -contains 'BepInEx/TGFrameGeneration/Native/FidelityFX/amd_fidelityfx_framegeneration_dx12.dll') 'FSR frame generation not packaged.'
     Assert-True (@(Get-TgRequiredPaths 'TGFrameGeneration') -notcontains 'BepInEx/patchers/TGFG.Autoload.dll') '0.5.0 preloader is still packaged.'
+    # The optional community backend is ours. The proprietary model remains player-supplied.
+    Assert-True (@(Get-TgRequiredPaths 'TGNeuralRendering') -contains 'BepInEx/TGNeuralRendering/Native/TGNeuralRendering.nvngx.dll') 'NR community adapter is missing.'
+    Assert-Throws { Get-TgOwnedPath 'TGNeuralRendering' $game 'BepInEx/TGNeuralRendering/Native/DLSS/nvngx_dlssnr.dll' } 'Player-supplied NR model was accepted as package payload.'
+    $nrManifest=Get-Content -LiteralPath (Join-Path $stages['TGNeuralRendering'] (Get-TgPackageManifestName 'TGNeuralRendering')) -Raw | ConvertFrom-Json
+    $nrManifest.files=@($nrManifest.files | Where-Object { $_.path -notlike '*/TGNeuralRendering.nvngx.dll' })
+    Assert-Throws { Test-TgPayload 'TGNeuralRendering' $nrManifest $stages['TGNeuralRendering'] 'Mono' } 'NR payload missing its adapter was accepted.'
     # Zip entries use forward slashes; the Nexus downloads have fixed names per mod and game version.
     $stage=$stages['TGBetterUpscaling']
     $zip=Join-Path $temp 'forward-slashes.zip'
@@ -191,5 +197,9 @@ try {
     Write-Host "$tests mocked filesystem package checks passed. Not a binary, signature, Windows startup, or GPU test."
 } finally {
     # This is our unique test directory, never a user-supplied game path.
+    $resolvedTemp=[IO.Path]::GetFullPath($temp)
+    $expectedParent=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
+    if(-not $resolvedTemp.StartsWith($expectedParent,[StringComparison]::OrdinalIgnoreCase) -or
+       (Split-Path -Leaf $resolvedTemp) -notmatch '^tg-package-tests-[0-9a-f]{32}$') { throw 'Invalid fixture cleanup path.' }
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

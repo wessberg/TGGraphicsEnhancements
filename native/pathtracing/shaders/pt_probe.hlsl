@@ -7,6 +7,34 @@
 // is the sky's light, and counting the lamps' light the paths found too made it rise in a lit room as if the sky were
 // there. The rays start 30 cm out, past the player's own head.
 #include "pt_common.hlsli"
+
+// How many times a ray crosses the first glass object along it (the crosshair's, for the F8 report, whether or not camera
+// rays stop at it: clear glass lets them through by chance): 2 for a closed object, whose caustics caustic_through
+// solves; 4 for a hollow one with an inner wall, or more, which a shadow ray crosses tinted along straight lines instead.
+// Each crossing the nearest past the last, as glass_walk finds them (a query may report a triangle twice); up to 12.
+uint glass_crossings(float3 origin, float3 dir) {
+    StructuredBuffer<InstanceRecord> instances = ResourceDescriptorHeap[g.scene0.x];
+    StructuredBuffer<MaterialRecord> materials = ResourceDescriptorHeap[g.scene0.w];
+    StructuredBuffer<uint> materialIndices = ResourceDescriptorHeap[g.scene1.x];
+    uint n = 0u, instanceId = 0xFFFFFFFFu;
+    float t0 = 0.0;
+    for (uint i = 0u; i < 12u; ++i) {
+        RayDesc ray; ray.Origin = origin; ray.Direction = dir; ray.TMin = t0; ray.TMax = g.params.y;
+        PT_RAYQUERY(RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_NON_OPAQUE) q;
+        q.TraceRayInline(g_scene, RAY_FLAG_NONE, MASK_ALL, ray);
+        while (q.Proceed()) {
+            if (instanceId != 0xFFFFFFFFu && q.CandidateInstanceID() != instanceId) continue;
+            const InstanceRecord inst = instances[q.CandidateInstanceID()];
+            if ((materials[materialIndices[inst.materialBase + q.CandidateGeometryIndex()]].flags & MATERIAL_GLASS) != 0) q.CommitNonOpaqueTriangleHit();
+        }
+        if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) break;
+        instanceId = q.CommittedInstanceID(); // the first glass met: the rest of the count is its own
+        ++n;
+        const float t = q.CommittedRayT();
+        t0 = t + max(1e-4, t * 1e-5);
+    }
+    return n;
+}
 #include "pt_restir.hlsli"
 
 groupshared float3 s_traced[64];
@@ -23,7 +51,7 @@ void main(uint t : SV_GroupIndex) {
         const float r = sqrt(saturate(1.0 - z * z));
         const float phi = float(i) * 2.39996323 + turn;
         const float3 dir = float3(r * cos(phi), z, r * sin(phi));
-        const float3 open = clamp_radiance(sky_radiance(dir), LIMIT_INDIRECT);
+        const float3 open = finite_radiance(sky_radiance(dir));
         Hit hit;
         if (!trace_closest(g.cameraPos.xyz, dir, 0.3, g.params.y, hit)) seen += open;
         sky += open;
@@ -45,12 +73,14 @@ void main(uint t : SV_GroupIndex) {
         const bool found = trace_closest(g.cameraPos.xyz, dir, 0.0, g.params.y, pick);
         g_cameraRays = false;
         // With the surface there as HDRP drew it and as the tracer prepared it (pt_prepare): 1 found, 2 glass seen through,
-        // 4 a GBuffer surface, 8 drawn forward; HDRP's roughness from bit 8 and the tracer's from bit 16 (0 to 255 each).
+        // 4 a GBuffer surface, 8 drawn forward; HDRP's roughness from bit 8 and the tracer's from bit 16 (0 to 255 each);
+        // from bit 24, how many times the camera ray crosses the first glass object along it (glass_crossings).
         Texture2D<float4> nb = ResourceDescriptorHeap[g.inputs0.y];
         const uint2 middle = g.size.xy / 2u;
         const Surface here = load_surface(middle, g.surface.x, g.surface.z, g.material.x);
+        const uint crossings = glass_crossings(g.cameraPos.xyz, dir);
         const uint bits = (found ? 1u : 0u) | (here.glass ? 2u : 0u) | (here.valid && here.deferred && !here.forward ? 4u : 0u) | (here.forward ? 8u : 0u) |
-            (uint(saturate(nb.Load(int3(middle, 0)).a) * 255.0 + 0.5) << 8) | (uint(saturate(here.roughness) * 255.0 + 0.5) << 16);
+            (uint(saturate(nb.Load(int3(middle, 0)).a) * 255.0 + 0.5) << 8) | (uint(saturate(here.roughness) * 255.0 + 0.5) << 16) | (min(crossings, 15u) << 24);
         probe[2] = found ? float4(asfloat(pick.instance), asfloat(pick.material), length(pick.position - g.cameraPos.xyz), asfloat(bits)) : float4(0.0, 0.0, 0.0, asfloat(bits));
     }
 }

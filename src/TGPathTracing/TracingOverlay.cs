@@ -15,10 +15,11 @@ namespace TGPathTracing
             var s = Session.Status;
             if (s.Supported == 0) { lines.Add("Unavailable: " + Session.Tracer.UnsupportedReason()); return lines; }
             if (HdrpPasses.Failed) { lines.Add("Off after an error: " + HdrpPasses.Detail); return lines; }
+            if (s.Starting != 0) { lines.Add(settings.Mode.Value + ": compiling shaders (" + Session.Diagnostics.PassesDone + " of " + Session.Diagnostics.PassesTotal + ")"); return lines; }
             lines.Add(settings.Mode.Value + (settings.CurrentView != DebugView.None ? " · view " + settings.View.Value : "") + " · " + s.RenderWidth + "x" + s.RenderHeight +
                 " · GPU " + s.GpuMs.ToString("0.0") + " ms");
             lines.Add(s.InstancesTraced + " objects, " + (s.Triangles / 1000) + "k triangles, " + SceneLights.Count + " lights" + (SceneLights.Sun.Valid ? " + sun" : "") +
-                (s.MeshesQueued > 0 ? " · " + s.MeshesQueued + " meshes loading" : ""));
+                (Arrival.Running ? " · " + Arrival.NoticeText : "")); // PT-98: everything still to come, not the native queue alone
             return lines;
         }
     }

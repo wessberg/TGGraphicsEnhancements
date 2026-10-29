@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\Build.Local.props" Condition="Exists('..\..\Build.Local.props')" />
+  <Import Project="..\Game.References.props" />
+  <PropertyGroup>
+    <AssemblyName>TGNeuralRendering</AssemblyName>
+    <RootNamespace>TGNeuralRendering</RootNamespace>
+    <Version>1.2.3</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\CustomPassRecorder.cs" Link="Shared\CustomPassRecorder.cs" />
+    <ProjectReference Include="..\TGGraphicsBridge\TGGraphicsBridge.csproj" Private="false" />
+    <ProjectReference Include="..\TGNeuralRendering.Autoload\TGNeuralRendering.Autoload.csproj" ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+</Project>

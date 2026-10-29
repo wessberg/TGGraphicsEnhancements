@@ -4,6 +4,8 @@
 // or newer only; elsewhere the probe says so and the built-in denoiser serves.
 #pragma once
 #include "runtime.hpp"
+#include <future>
+#include <chrono>
 
 namespace tgpt {
 // Loads the runtime and asks it whether this device runs the denoiser (AMD GPUs only); logs either way.
@@ -26,11 +28,19 @@ public:
     // Whether a frame of this size needs a new context: the caller then makes sure the GPU is done with the
     // old one's frames before ensure() replaces it.
     bool needs_context(uint32_t width, uint32_t height) const { return !context_ || width!=width_ || height!=height_; }
+    bool has_context() const { return context_!=nullptr; } // PT-87: there is something for destroy() to let go
+    bool is_starting() const { return pending_.valid(); }
+    bool is_creating() const { return pending_.valid() && pending_.wait_for(std::chrono::seconds(0))!=std::future_status::ready; }
+    // Non-blocking: false with an empty error means context creation is still running on its own CPU thread.
     bool ensure(ID3D12Device* device, uint32_t width, uint32_t height, std::string& error);
     bool dispatch(ID3D12GraphicsCommandList* list, const RrgFrame& f, std::string& error);
     void destroy();
 private:
     void* context_=nullptr;
     uint32_t width_=0, height_=0;
+    struct Created { void* context=nullptr; uint32_t width=0, height=0; std::string error; };
+    std::future<Created> pending_;
+    bool havePrevious_=false;
+    uint32_t lastDispatch_=0;
 };
 } // namespace tgpt

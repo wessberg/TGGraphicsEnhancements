@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "sl_runtime.hpp"
+#include <tgb/ngx_session.hpp>
 #include "fg_backends.hpp"
 #include <fstream>
 #include <filesystem>
@@ -207,6 +208,8 @@ bool load_runtime() {
         log("TG Better Upscaling and TG Path Tracing are installed: NGX on this device also looks in "+
             std::filesystem::path(s.rayReconstructionDir).u8string()+" for DLSS Ray Reconstruction");
     }
+    s.neuralRenderingDir=tgb::neural_runtime_folder(host());
+    if(!s.neuralRenderingDir.empty()) s.pluginPaths[pluginPathCount++]=s.neuralRenderingDir.c_str();
     sl::Preferences pref{};
     pref.pathsToPlugins=s.pluginPaths.data(); pref.numPathsToPlugins=pluginPathCount;
     pref.pathToLogsAndData=s.root.c_str(); pref.logMessageCallback=sl_log;

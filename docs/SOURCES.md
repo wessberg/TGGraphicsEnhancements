@@ -1,5 +1,15 @@
 # Primary references
 
+TG Neural Rendering (2026-10-07): public DLSS 310.9.1 NGX API, supplied signed NR 310.8.0.0 profile, hashes and
+measured calls in [DLSS5-IMPLEMENTATION.md](DLSS5-IMPLEMENTATION.md). NVIDIA's
+[sample NR integration](https://github.com/nvpro-samples/vk_gltf_renderer/blob/master/src/dlss.cpp) documents the
+tone-mapped display input, SR/RR guides, reset and tuning concepts; its newer helper is not the build dependency.
+Unity's HDRP 17 [CustomPass](https://github.com/Unity-Technologies/Graphics/blob/6000.0/staging/Packages/com.unity.render-pipelines.high-definition/Runtime/RenderPipeline/RenderPass/CustomPass/CustomPass.cs)
+declares camera resources read-write for render-graph lifetime even with no automatic target binding.
+[RenderGraph ordering](https://github.com/Unity-Technologies/Graphics/blob/6000.0/staging/Packages/com.unity.render-pipelines.high-definition/Runtime/RenderPipeline/HDRenderPipeline.RenderGraph.cs)
+and [post-processing](https://github.com/Unity-Technologies/Graphics/blob/6000.0/staging/Packages/com.unity.render-pipelines.high-definition/Runtime/RenderPipeline/HDRenderPipeline.PostProcess.cs)
+establish the chosen hook after tone mapping. Model controls beyond Strength remain unvalidated and unexposed.
+
 Reviewed 2026-09-18. The source targets Streamline 2.14.1, rather than assuming
 older DLSS-G headers include Dynamic MFG. These links are documentation/source
 references, not bundled dependencies or evidence of successful game testing.
@@ -146,6 +156,21 @@ Reviewed 2026-09-26.
   This software contains source code provided by NVIDIA Corporation.
   Integration guide and bridge (RAB_*) reference:
   https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/Integration.md
+- NVIDIA NVAPI R615 (https://github.com/NVIDIA/nvapi, commit 70d337d as fetched 2026-10-09 by the worker
+  `megageo1`; MIT license, `License.txt` in the folder), in the gitignored `NVAPI-R615/`, never committed. Its
+  header and `nvapi64.lib` are used only by a build with CMake's `TGPT_MEGA_GEOMETRY` ON (TG Path Tracing's RTX
+  Mega Geometry path: the capability queries and the partitioned top-level structure; PT-109). NVIDIA's RTX Mega
+  Geometry SDK (https://github.com/NVIDIA-RTX/RTXMG; NVIDIA RTX SDKs License, object code only) was READ for that
+  work and nothing of it is copied; the nvpro samples' READMEs (`vk_animated_clusters`: Apache-2.0;
+  `vk_partitioned_tlas`: license not verified) were read only. Added 2026-10-10, from the worker's report
+  (`docs/agents/megageo-1.md`); `License.txt` read again by the coordinator (MIT for the libraries); the commit
+  number is the worker's.
+- meshoptimizer v1.3 (https://github.com/zeux/meshoptimizer/tree/v1.3, MIT license, `LICENSE.md`): fetched by CMake's
+  FetchContent (GIT_TAG v1.3) only in a build with `TGPT_MEGA_GEOMETRY` ON, never committed or copied by hand. Its
+  `meshopt_buildMeshletsSpatial` and `meshopt_optimizeMeshlet` cut the small plants' meshes into clusters for the RTX
+  Mega Geometry trial (PT-109, `docs/agents/megageo-4.md`): the clusterizer NVIDIA's own samples use
+  (nvpro-samples `vk_animated_clusters`, `vk_lod_clusters`; read, nothing copied: `docs/agents/megageo-3.md`). Its notice
+  is installed beside the DLL. Added 2026-10-11 by the worker `megageo-4`.
 - NVIDIA NRD (Real-Time Denoisers) 4.17.3 (tag v4.17.3), fetched into the gitignored `NRD-SDK-4.17.3/` and compiled
   into TGPathTracing.Native.dll as a static library with its shaders embedded as DXIL (RELAX's diffuse denoiser for
   the bounced light: the Denoising choice NRD), never committed: https://github.com/NVIDIA-RTX/NRD. Its CMake downloads
@@ -171,3 +196,18 @@ Reviewed 2026-09-26.
   https://media.disneyanimation.com/technology/publications/2019/TamingtheShadowTerminator.pdf
 - HDRP 17's `DLSSPass` and `HDRenderPipeline` (pre-exposure `Mathf.Clamp(hdCamera.GpuExposureValue(),
   0.2f, 2f)` handed to DLSS), read from the game's `Unity.RenderPipelines.HighDefinition.Runtime.dll`.
+- Xueqing Yang and Yaobin Ouyang, "Real-Time Ray Traced Caustics", Ray Tracing Gems II, chapter 30 (2021), its water
+  caustics: rays from the light onto the water, refracted and traced on, the pattern rebuilt as a mesh whose cells' light
+  is their area at the start over their area where they land ("procedural caustic mesh"), in cascades for large water.
+  TG Path Tracing's caustics (pt_caustics.hlsl, PT-14) take that mesh and its area ratio, and differ: the grid lies on the
+  water's own surface (camera-centred levels, each twice as coarse, moved by a random fraction of a cell every frame), point
+  lights as well as the sun, reflection as well as refraction, and the landed triangles go into a world-space hash any
+  surface point asks, instead of being drawn into the screen. Summary: `docs/CAUSTICS-RESEARCH.md` section B.
+- Van Oosterom and Strackee, "The Solid Angle of a Plane Triangle", IEEE Transactions on Biomedical Engineering 30 (2),
+  1983: the solid angle a water triangle fills seen from a lamp (pt_caustics.hlsl solid_angle).
+- Unity's Graphics repository, HDRP 17 (6000.0 branch), read for how HDRP's water moves its surface, nothing copied:
+  `Runtime/Water/Shaders/SampleWaterSurface.hlsl` (each band's UV as the surface's x and z times its scale less its offset,
+  its displacement times its amplitude and distance fade, the horizontal move times the choppiness 2.25, the surface
+  gradient read bicubic), `Runtime/Water/Shaders/WaterSimulation.compute` (EvaluateNormalsJacobian: the gradient from the
+  displaced texels, amplitude in, choppiness out), `HDRenderPipeline.WaterSystem.cs` (UpdatePerSurfaceConstantBuffer's
+  band data): https://github.com/Unity-Technologies/Graphics/tree/6000.0/staging/Packages/com.unity.render-pipelines.high-definition/Runtime/Water

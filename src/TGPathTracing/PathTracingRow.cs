@@ -31,9 +31,9 @@ namespace TGPathTracing
         private const string IdPrefix = "TGPT.Video.";
         private readonly EnumArrowsOption mode, denoiser, view, reflections;
         private readonly ToggleOption[] modeChoices, denoiserChoices;
-        private readonly SliderOption exposure, darkAdaptation, shadowDetail, rays, bounces, indirectColor, spatial, distance, radius, sky, reflectionBoost;
-        private readonly ToggleOption radianceCache, waterReflections, boilingFilter, emissiveLights, creviceLight;
-        private readonly ToggleOption hairShadows, fillLightFog;
+        private readonly SliderOption exposure, darkAdaptation, rays, bounces, indirectColor, spatial, sky, reflectionBoost;
+        private readonly ToggleOption radianceCache, boilingFilter, emissiveLights, creviceLight;
+        private readonly ToggleOption caustics, fillLightFog;
         // Restore Defaults picks the best denoiser this PC runs, which is known only once the GPU has reported.
         private static readonly FieldInfo DefaultValue = typeof(EnumArrowsOption).GetField("_defaultValue", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
         internal PrefOption[] Top { get; }
@@ -46,8 +46,7 @@ namespace TGPathTracing
             denoiser = VideoTab.Enum(IdPrefix, "Denoising", "Denoising", (int)DenoiserChoice.Nrd, out denoiserChoices, Settings.DenoiserNames);
             VideoTab.Tooltip(denoiser, DenoiserTooltip);
             exposure = Slider("Exposure", "Exposure", -3f, 3f, false, "{0:+0.0;-0.0;0.0} EV", 0f, s.Exposure, 0.25f);
-            darkAdaptation = Slider("DarkAdaptation", "Dark Adaptation", 0f, 100f, true, "{0:0}%", 50f, s.DarkAdaptation, 5f);
-            shadowDetail = Slider("ShadowDetail", "Shadow Detail", 0f, 100f, true, "{0:0}%", 50f, s.ShadowDetail, 5f);
+            darkAdaptation = Slider("DarkAdaptation", "Dark Adaptation", 0f, 100f, true, "{0:0}%", 35f, s.DarkAdaptation, 5f);
             rays = Slider("RaysPerPixel", "Rays Per Pixel", 1f, 16f, true, "{0:0}", 1f, s.RaysPerPixel);
             bounces = Slider("Bounces", "Bounces", 1f, 4f, true, "{0:0}", 1f, s.Bounces);
             radianceCache = new ToggleOption(IdPrefix + "RadianceCache", "Radiance Cache", true, false);
@@ -55,10 +54,8 @@ namespace TGPathTracing
             indirectColor = Slider("IndirectColor", "Indirect Color", 0f, 4f, false, "{0:0.00}", 3f, s.IndirectColor);
             reflections = VideoTab.Enum(IdPrefix, "Reflections", "Reflections", (int)ReflectionChoice.All, out _, Settings.ReflectionNames);
             VideoTab.Tooltip(reflections, () => s.Reflections.Description.Description);
-            waterReflections = new ToggleOption(IdPrefix + "WaterReflections", "Water Reflections", true, false);
-            VideoTab.Tooltip(waterReflections, () => s.WaterReflections.Description.Description);
-            hairShadows = new ToggleOption(IdPrefix + "HairShadows", "Hair Shadows", true, false);
-            VideoTab.Tooltip(hairShadows, () => s.HairShadows.Description.Description);
+            caustics = new ToggleOption(IdPrefix + "Caustics", "Caustics", true, false);
+            VideoTab.Tooltip(caustics, () => s.Caustics.Description.Description);
             fillLightFog = new ToggleOption(IdPrefix + "FillLightFog", "Fill Light Fog", true, false);
             VideoTab.Tooltip(fillLightFog, () => s.FillLightFog.Description.Description);
             spatial = Slider("SpatialSamples", "Spatial Samples", 0f, 16f, true, "{0:0}", 4f, s.SpatialSamples);
@@ -68,14 +65,12 @@ namespace TGPathTracing
             VideoTab.Tooltip(emissiveLights, () => s.EmissiveLights.Description.Description);
             creviceLight = new ToggleOption(IdPrefix + "CreviceLight", "Crevice Light", false, false);
             VideoTab.Tooltip(creviceLight, () => s.CreviceLight.Description.Description);
-            distance = Slider("RayDistance", "Ray Distance", 20f, 3000f, true, "{0:0} m", 500f, s.RayDistance);
-            radius = Slider("SceneRadius", "Scene Radius", 30f, 2000f, true, "{0:0} m", 250f, s.SceneRadius);
             sky = Slider("SkyIntensity", "Sky Intensity", 0f, 4f, false, "{0:0.00}", 1f, s.SkyIntensity);
             reflectionBoost = Slider("ReflectionBoost", "Reflection Boost", 0f, 1f, false, "{0:0.00}", 0.1f, s.ReflectionBoost);
             view = VideoTab.Enum(IdPrefix, "DebugView", "Debug View", 0, out _, Settings.ViewNames);
             VideoTab.Tooltip(view, () => s.View.Description.Description);
             // In the same order as FoA Mod Manager lists them (Settings).
-            var options = new PrefOption[] { denoiser, exposure, darkAdaptation, shadowDetail, rays, bounces, radianceCache, indirectColor, reflections, waterReflections, hairShadows, fillLightFog, spatial, boilingFilter, emissiveLights, creviceLight, distance, radius, sky, reflectionBoost, view };
+            var options = new PrefOption[] { denoiser, exposure, darkAdaptation, rays, bounces, radianceCache, indirectColor, reflections, caustics, fillLightFog, spatial, boilingFilter, emissiveLights, creviceLight, sky, reflectionBoost, view };
             var rows = SwitchRowsOption.Create(mode, i => i == (int)TracingMode.On ? options : new PrefOption[0], options);
             Top = rows != null ? new PrefOption[] { rows } : new PrefOption[] { mode }.Concat(options).ToArray(); // older game builds: every row, always
             // The game's rows path tracing replaces grey out as soon as it is chosen, before Apply.
@@ -114,23 +109,23 @@ namespace TGPathTracing
             var s = Session.Settings;
             mode.OptionInt = (int)s.CurrentMode;
             denoiser.OptionInt = (int)s.CurrentDenoiser;
-            exposure.Value = s.Exposure.Value; darkAdaptation.Value = s.DarkAdaptation.Value; shadowDetail.Value = s.ShadowDetail.Value;
+            exposure.Value = s.Exposure.Value; darkAdaptation.Value = s.DarkAdaptation.Value;
             rays.Value = s.RaysPerPixel.Value; bounces.Value = s.Bounces.Value; indirectColor.Value = s.IndirectColor.Value;
-            radianceCache.Enabled = s.RadianceCache.Value; reflections.OptionInt = (int)s.CurrentReflections; waterReflections.Enabled = s.WaterReflections.Value;
-            hairShadows.Enabled = s.HairShadows.Value; fillLightFog.Enabled = s.FillLightFog.Value; boilingFilter.Enabled = s.BoilingFilter.Value; emissiveLights.Enabled = s.EmissiveLights.Value;
+            radianceCache.Enabled = s.RadianceCache.Value; reflections.OptionInt = (int)s.CurrentReflections; caustics.Enabled = s.Caustics.Value;
+            fillLightFog.Enabled = s.FillLightFog.Value; boilingFilter.Enabled = s.BoilingFilter.Value; emissiveLights.Enabled = s.EmissiveLights.Value;
             creviceLight.Enabled = s.CreviceLight.Value;
             spatial.Value = s.SpatialSamples.Value;
-            distance.Value = s.RayDistance.Value; radius.Value = s.SceneRadius.Value; sky.Value = s.SkyIntensity.Value; reflectionBoost.Value = s.ReflectionBoost.Value;
+            sky.Value = s.SkyIntensity.Value; reflectionBoost.Value = s.ReflectionBoost.Value;
             view.OptionInt = (int)s.CurrentView;
             RefreshChoices();
-            foreach (var option in new PrefOption[] { mode, denoiser, exposure, darkAdaptation, shadowDetail, rays, bounces, radianceCache, indirectColor, reflections, waterReflections, hairShadows, fillLightFog, spatial, boilingFilter, emissiveLights, creviceLight, distance, radius, sky, reflectionBoost, view }) option.Apply();
+            foreach (var option in new PrefOption[] { mode, denoiser, exposure, darkAdaptation, rays, bounces, radianceCache, indirectColor, reflections, caustics, fillLightFog, spatial, boilingFilter, emissiveLights, creviceLight, sky, reflectionBoost, view }) option.Apply();
         }
         internal void Apply()
         {
             Session.Settings.Store(PendingMode, (DenoiserChoice)Mathf.Clamp(denoiser.OptionInt, 0, denoiserChoices.Length - 1),
-                Mathf.Round(exposure.Value * 20f) / 20f, Mathf.RoundToInt(darkAdaptation.Value), Mathf.RoundToInt(shadowDetail.Value), Mathf.RoundToInt(rays.Value), Mathf.RoundToInt(bounces.Value), radianceCache.Enabled, indirectColor.Value,
+                Mathf.Round(exposure.Value * 20f) / 20f, Mathf.RoundToInt(darkAdaptation.Value), Mathf.RoundToInt(rays.Value), Mathf.RoundToInt(bounces.Value), radianceCache.Enabled, indirectColor.Value,
                 (ReflectionChoice)Mathf.Clamp(reflections.OptionInt, 0, Settings.ReflectionNames.Length - 1),
-                waterReflections.Enabled, hairShadows.Enabled, fillLightFog.Enabled, Mathf.RoundToInt(spatial.Value), boilingFilter.Enabled, emissiveLights.Enabled, creviceLight.Enabled, distance.Value, radius.Value, sky.Value, reflectionBoost.Value,
+                caustics.Enabled, fillLightFog.Enabled, Mathf.RoundToInt(spatial.Value), boilingFilter.Enabled, emissiveLights.Enabled, creviceLight.Enabled, sky.Value, reflectionBoost.Value,
                 (DebugView)Mathf.Clamp(view.OptionInt, 0, Settings.ViewNames.Length - 1));
         }
 

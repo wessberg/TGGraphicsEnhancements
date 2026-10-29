@@ -6,7 +6,7 @@
   <PropertyGroup>
     <TargetFrameworks>net472;net6.0</TargetFrameworks>
     <RootNamespace>TGGraphicsBridge.Autoload</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.2.3</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <PlatformTarget>x64</PlatformTarget>

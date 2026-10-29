@@ -28,8 +28,6 @@ namespace TGPathTracing
         // Read by the same frame: the rays per pixel the comparison of what boils traces (0: the row's), and the frames
         // ReSTIR DI and GI reuse a sample over (0: the defaults or the config's).
         internal static uint Rays, DiHistory, GiHistory;
-        // Read by the water reflections' hook: HDRP's own reflections on water, for the shot that compares them.
-        internal static bool WaterOff;
         private const int ImageWidth = 1920;
         private const float LightDistance = 40f;
 
@@ -50,7 +48,7 @@ namespace TGPathTracing
             var log = new StringBuilder();
             try
             {
-                Notices.Show("tgpt.capture", PathTracingPlugin.Name, "Capturing for about 22 seconds: hold still", 22f);
+                Notices.Show("tgpt.capture", PathTracingPlugin.Name, "Capturing for about 24 seconds: hold still", 24f);
                 string probe = "";
                 try { probe = Probe.Text(24); Session.Log.LogInfo(probe); } catch (Exception ex) { probe = "The probe failed: " + ex; }
                 try
@@ -91,9 +89,12 @@ namespace TGPathTracing
                 // after the report, and the HUD and the image around it can still be changing.
                 yield return Pair(dir, "01g-bounced-light-history-4", 0u, 0u, 0u, log, change, "the bounced light's reuse over 4 frames", 4u);
                 yield return Pair(dir, "01h-as-traced-settled", 0u, 0u, 0u, log, change, "as traced again, settled");
+                // Without the traced reflections: on metal (a cage's bars) what still boils once the reuse is short may be their
+                // one reflection ray a pixel.
+                yield return Pair(dir, "01i-no-reflections", Tgpt.OptionNoSpecular, 0u, 0u, log, change, "without the reflections");
                 log.Insert(0, change.Append("\n").ToString());
                 var views = new[] { DebugView.Direct, DebugView.Indirect, DebugView.IndirectRaw, DebugView.Specular, DebugView.Albedo, DebugView.Normals,
-                                    DebugView.Coverage, DebugView.Materials, DebugView.Surfaces, DebugView.Emissive };
+                                    DebugView.Coverage, DebugView.Materials, DebugView.Surfaces, DebugView.Emissive, DebugView.Yardstick };
                 int n = 2;
                 foreach (var v in views)
                 {
@@ -114,14 +115,7 @@ namespace TGPathTracing
                 yield return Shot(dir, (n++).ToString("00") + "-pass-through-off-indirect", log);
                 settings.CurrentView = DebugView.None;
                 ExtraOptions = 0;
-                // The water with HDRP's own reflections, to compare with the traced ones in the first shot.
-                if (settings.WaterReflections.Value)
-                {
-                    WaterOff = true;
-                    yield return new WaitForSecondsRealtime(0.5f);
-                    yield return Shot(dir, (n++).ToString("00") + "-water-reflections-off", log);
-                    WaterOff = false;
-                }
+
                 string traced = HdrpPasses.ExposureText;
                 settings.CurrentMode = TracingMode.Off;
                 yield return new WaitForSecondsRealtime(1f);
@@ -130,7 +124,7 @@ namespace TGPathTracing
             }
             finally
             {
-                SkyOff = false; ExtraOptions = 0; WaterOff = false; Rays = 0; DiHistory = 0; GiHistory = 0; keep = false;
+                SkyOff = false; ExtraOptions = 0; Rays = 0; DiHistory = 0; GiHistory = 0; keep = false;
                 settings.CurrentView = view;
                 settings.CurrentMode = mode;
                 try { File.AppendAllText(Path.Combine(dir, "report.txt"), "\n\n== Capture\n" + log); } catch { }
@@ -270,15 +264,17 @@ namespace TGPathTracing
             sb.Append("Settings: mode " + settings.Mode.Value + ", denoiser " + settings.CurrentDenoiser + ", indirect color " + settings.IndirectColor.Value +
                 ", reflection boost " + settings.ReflectionBoost.Value + ", sky " + settings.SkyIntensity.Value + ", bounces " + settings.Bounces.Value +
                 ", spatial samples " + settings.SpatialSamples.Value + ", rays per pixel " + settings.RaysPerPixel.Value + ", exposure " +
-                settings.Exposure.Value.ToString("+0.0;-0.0;0.0") + " EV, dark adaptation " + settings.DarkAdaptation.Value + "%, shadow detail " + settings.ShadowDetail.Value +
+                settings.Exposure.Value.ToString("+0.0;-0.0;0.0") + " EV, dark adaptation " + settings.DarkAdaptation.Value +
                 "%, darkest EV " + settings.ExposureLowest.Value + ", boiling filter " + (settings.BoilingFilter.Value ? "on" : "off") +
                 ", radiance cache " + (settings.RadianceCache.Value ? "on" : "off") + ", crevice light " + (settings.CreviceLight.Value ? "on" : "off") +
-                ", reflections " + settings.Reflections.Value + ", water reflections " + (settings.WaterReflections.Value ? "on" : "off") +
+                ", reflections " + settings.Reflections.Value +
                 ", fill light fog " + (settings.FillLightFog.Value ? "on" : "off") +
                 ", emissive lights " + (settings.EmissiveLights.Value ? "on" : "off") + "\n");
             sb.Append("Status: " + Session.StatusText + "\n");
             string stages = Session.Tracer != null ? Session.Tracer.StageTimes() : "";
             sb.Append("GPU time by stage (the last second): " + (stages.Length > 0 ? stages : "not measured yet") + "\n");
+            string yardstick = SceneCapture.YardstickText(Session.Tracer);
+            sb.Append("Yardstick (the tracer's own first hit against the game's G-buffer): " + (yardstick.Length > 0 ? yardstick : "not counted yet") + "\n");
             sb.Append("Scene: " + SceneCapture.Summary + " | characters " + CharacterCapture.Summary + "\n");
             float log2 = HdrpPasses.LiveExposureLog;
             // HDRP's exposure is 1 / (1.2 * 2^EV100).
@@ -293,10 +289,12 @@ namespace TGPathTracing
                 sb.Append("Traced under the crosshair: " + (st.PickFound != 0 ? SceneCapture.DescribeTraced(st.PickInstance, st.PickMaterial) + ", " +
                     st.PickDistance.ToString("0.00") + " m away" : "nothing (the sky, or out of the traced scene)") +
                     "; HDRP drew " + there + " there, roughness " + (((surface >> 8) & 0xFFu) / 255f).ToString("0.00") + " (the tracer's " +
-                    (((surface >> 16) & 0xFFu) / 255f).ToString("0.00") + ")" + ((surface & 2u) != 0 ? ", glass seen through" : "") + "\n");
+                    (((surface >> 16) & 0xFFu) / 255f).ToString("0.00") + ")" + ((surface & 2u) != 0 ? ", glass seen through" : "") +
+                    (((surface >> 24) & 0xFu) != 0 ? "; the camera ray crosses the first glass along it " + ((surface >> 24) & 0xFu) + " times (2: one closed object, whose caustics are solved; " +
+                        "4 or more: hollow, with an inner wall, or several, tinted along straight lines)" : "") + "\n");
             }
             sb.Append("Diffusion profiles: " + HdrpPasses.DiffusionProfilesText + "\n");
-            sb.Append("Water: HDRP water surfaces " + WaterSurfaces() + " | " + HdrpPasses.WaterText + "\n\n");
+            sb.Append("Water: HDRP water surfaces " + WaterSurfaces() + " | " + HdrpPasses.WaterText + " | caustics traced: " + WaterCaustics.Text + "\n\n");
             sb.Append("== Probe\n" + probe + "\n\n");
             sb.Append(Lights(cam));
             return sb.ToString();
@@ -313,7 +311,10 @@ namespace TGPathTracing
             {
                 if (s == null) continue;
                 parts.Add("\"" + s.name + "\" " + s.surfaceType + " " + s.geometryType +
-                    (s.customMaterial != null && s.customMaterial.shader != null ? " (" + s.customMaterial.shader.name + ")" : "") + (s.isActiveAndEnabled ? "" : ", off"));
+                    (s.customMaterial != null && s.customMaterial.shader != null ? " (" + s.customMaterial.shader.name + ")" : "") + (s.isActiveAndEnabled ? "" : ", off") +
+                    (s.caustics ? ", caustics " + s.causticsIntensity.ToString("0.##") + " x" + s.causticsTilingFactor.ToString("0.##") + " tiling, " +
+                        s.causticsPlaneBlendDistance.ToString("0.##") + " m blend, " + (int)s.causticsResolution + "px, band " + s.causticsBand : ", no caustics") +
+                    (s.underWater ? "" : ", no underwater"));
                 if (parts.Count >= 12) break;
             }
             return surfaces.Length + ": " + string.Join(", ", parts.ToArray());

@@ -6,7 +6,7 @@
 #                             the bundled DLSS DLL for the game's own DLSS
 #   TGPathTracing.Native      TG Path Tracing extension: ReSTIR path tracing on the shared D3D12 device
 cmake_minimum_required(VERSION 3.24)
-project(TGGraphicsMods VERSION 1.2.0 LANGUAGES C CXX)
+project(TGGraphicsMods VERSION 1.2.3 LANGUAGES C CXX)
 # The C and C++ runtimes are linked into each DLL. The game ships no msvcp140.dll, so a shared runtime
 # would be whatever the player's System32 has: none (the DLLs don't load) or one older than this
 # compiler's, whose _Mtx_lock crashes on the constexpr-constructed std::mutex MSVC 14.40+ emits. Only
@@ -177,8 +177,20 @@ if(TGFG_BUILD_NATIVE)
     set(NRD_EMBEDS_SPIRV_SHADERS OFF CACHE BOOL "" FORCE)
     set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
     set(NRD_EMBEDS_DXIL_SHADERS ON CACHE BOOL "" FORCE)
+    set(NRD_SUPPORTS_HISTORY_CONFIDENCE ON CACHE BOOL "" FORCE) # PT-127: optional lighting-gradient inputs
     set(NRD_SHADERS_PATH "${CMAKE_CURRENT_BINARY_DIR}/nrd-shaders" CACHE STRING "" FORCE)
-    add_subdirectory("${TG_NRD}" "${CMAKE_CURRENT_BINARY_DIR}/nrd" EXCLUDE_FROM_ALL)
+    # A worker may only read the SDK: NRD's configure writes NRDConfig.hlsli in its source tree.
+    # An already built library with the same SDK/configuration avoids that write (no integration change).
+    set(TGPT_NRD_PREBUILT_LIBRARY "" CACHE FILEPATH "Optional existing NRD 4.17 static library for a read-only SDK")
+    if(TGPT_NRD_PREBUILT_LIBRARY)
+      set(TGPT_NRD_PREBUILT_DEPS "" CACHE STRING "Libraries required by the existing NRD static library")
+      add_library(NRD STATIC IMPORTED)
+      set_target_properties(NRD PROPERTIES IMPORTED_LOCATION "${TGPT_NRD_PREBUILT_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${TG_NRD}/Include" INTERFACE_COMPILE_DEFINITIONS "NRD_STATIC_LIBRARY=1"
+        INTERFACE_LINK_LIBRARIES "${TGPT_NRD_PREBUILT_DEPS}")
+    else()
+      add_subdirectory("${TG_NRD}" "${CMAKE_CURRENT_BINARY_DIR}/nrd" EXCLUDE_FROM_ALL)
+    endif()
     set(TGPT_NRD ON)
     message(STATUS "TG Path Tracing: NVIDIA NRD from ${TG_NRD}")
   else()
@@ -189,43 +201,135 @@ if(TGFG_BUILD_NATIVE)
   file(MAKE_DIRECTORY "${PT_GENERATED}")
   configure_file(native/pathtracing/shaders/pt_shaders.hpp.in "${PT_GENERATED}/pt_shaders.hpp" COPYONLY)
   set(PT_SHADER_HEADERS)
+  # The measuring build (PT-99, docs/agents/speed-1.md; pt_common speed_measure): OFF for every build that is installed,
+  # deployed or packaged. ON compiles the switches in that leave parts of the tracing passes out (and the picture with
+  # them), to time those parts by the stages' GPU times: for a build of its own, in a build folder of its own.
+  option(TGPT_SPEED_MEASURE "TG Path Tracing: compile the passes' timing switches in (never for a build that is deployed)" OFF)
+  set(PT_SPEED_DEFINES)
+  if(TGPT_SPEED_MEASURE)
+    set(PT_SPEED_DEFINES -D PT_SPEED_MEASURE)
+    message(WARNING "TG Path Tracing: TGPT_SPEED_MEASURE is ON: a measuring build, never to be deployed or packaged")
+  endif()
+  # The "Lamp trial lit surroundings" trial (PT-85 and PT-40, docs/agents/flame-near.md; pt_common lamp_around), compiled
+  # into the passes or not. OFF, the default since 2026-10-09 (PT-99, docs/agents/speed-1.md): its code is in no pass, the
+  # hidden setting does nothing (the tracer's log says so when it is set), and what the passes compute with the setting
+  # at 0 is the same. The game's own logs: the tavern's bounced light went from 29.4 to 61.9 ms in the build that brought
+  # the trial in, with the setting at 0. ON: the trial as it was, for a build that is to try it (recipes lamp-near,
+  # near-sweep, watch-near).
+  option(TGPT_LAMP_AROUND "TG Path Tracing: compile the 'Lamp trial lit surroundings' trial into the passes" OFF)
+  if(NOT TGPT_LAMP_AROUND)
+    list(APPEND PT_SPEED_DEFINES -D PT_NO_LAMP_AROUND)
+  endif()
+  # The rain's wetness (PT-108 and PT-104, docs/agents/rain-1.md; pt_common rain_roughness), ON TRIAL: compiled into the
+  # passes or not. OFF, the default until the game has answered: no pass holds a line of it, the plugin's hidden
+  # "Rain wetness" does nothing (the tracer's log says so when it is set), and every pass computes what it did. ON: a
+  # hit's roughness is wetted as the game's own wetness pass wets the camera's (recipe `rain`, scene spec-terrain).
+  option(TGPT_RAIN_WETNESS "TG Path Tracing: compile the rain's wetness (on trial) into the passes" OFF)
+  if(TGPT_RAIN_WETNESS)
+    list(APPEND PT_SPEED_DEFINES -D PT_RAIN_WETNESS)
+  endif()
+  # NVIDIA RTX Mega Geometry (PT-109, docs/agents/megageo-1.md; native/pathtracing/src/mega_geometry.hpp), ON TRIAL:
+  # cluster-level acceleration structures and a partitioned top level, through NVAPI on Direct3D 12. OFF, the default:
+  # the tracer holds no line of it and links no NVAPI: the build of every day. ON: the tracer asks the driver at start-up
+  # what it reports (never a table of cards) and logs it; the plain acceleration structures stay the default and serve
+  # whenever the driver does not report a part or a call fails. NVAPI (github.com/NVIDIA/nvapi, MIT) is fetched beside
+  # this file as NVAPI-<release> (or NVAPI_ROOT), never committed; its nvapi64.lib only finds the installed driver's
+  # nvapi64.dll at run time, so nothing is added to a package.
+  option(TGPT_MEGA_GEOMETRY "TG Path Tracing: compile the NVIDIA RTX Mega Geometry path (through NVAPI; on trial) in" OFF)
+  if(TGPT_MEGA_GEOMETRY)
+    set(NVAPI_ROOT "" CACHE PATH "NVIDIA NVAPI root (contains nvapi.h and amd64/nvapi64.lib)")
+    set(TG_NVAPI "${NVAPI_ROOT}")
+    if(NOT TG_NVAPI)
+      file(GLOB TG_LOCAL_NVAPI LIST_DIRECTORIES true "${CMAKE_CURRENT_SOURCE_DIR}/NVAPI-*")
+      list(SORT TG_LOCAL_NVAPI ORDER DESCENDING)
+      if(TG_LOCAL_NVAPI)
+        list(GET TG_LOCAL_NVAPI 0 TG_NVAPI)
+      endif()
+    endif()
+    if(NOT EXISTS "${TG_NVAPI}/nvapi.h" OR NOT EXISTS "${TG_NVAPI}/amd64/nvapi64.lib")
+      message(FATAL_ERROR "TGPT_MEGA_GEOMETRY needs NVIDIA NVAPI. Clone github.com/NVIDIA/nvapi into NVAPI-<release> beside this file, or set NVAPI_ROOT.")
+    endif()
+    message(STATUS "TG Path Tracing: NVIDIA RTX Mega Geometry (on trial) with NVAPI from ${TG_NVAPI}")
+    # The clusters' cut (PT-109's plants as clusters, docs/agents/megageo-4.md): NVIDIA's own clusterizer, which its samples
+    # take from meshoptimizer (meshopt_buildMeshletsSpatial; vk_animated_clusters, vk_lod_clusters, docs/agents/megageo-3.md).
+    # meshoptimizer (github.com/zeux/meshoptimizer, MIT) is fetched here at its release v1.3 and linked in statically, never
+    # committed; its notice goes beside the DLL. A tree configured with FETCHCONTENT_FULLY_DISCONNECTED=ON (build/native)
+    # fetches it once with that OFF, or names a checkout of v1.3 in FETCHCONTENT_SOURCE_DIR_MESHOPTIMIZER.
+    include(FetchContent)
+    set(MESHOPT_INSTALL OFF CACHE BOOL "" FORCE)
+    set(MESHOPT_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(meshoptimizer GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git GIT_TAG v1.3 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(meshoptimizer)
+  endif()
+  # ON TRIAL (PT-99, docs/agents/perf-1.md; pt_water_path.hlsli water_regroup): the water's path regroups its threads by
+  # what they do next (Shader Execution Reordering). OFF, the default: no pass holds a line of it. ON: the two reordering
+  # passes alone are compiled with it (every other pass is the same to the byte), and it runs only with its numbers of the
+  # hidden "Speed trial": 2, at every turn of the path's loop; 4, before a point makes its own patch of waves. These ADD
+  # regroupings inside loops: what the driver makes of the two passes with them is not known (the offline test could not
+  # make them under its memory ceiling, 2026-10-09). For a build that is to try it; never together with
+  # TGPT_SPEED_MEASURE.
+  # (Two trials that stood here until 2026-10-10 are the rule in every build since, with no switch: the two passes' own
+  # regrouping also by whether the pixel feeds the radiance cache, pt_common.hlsli regroup_key; and the lamps a ray off
+  # water or glass runs into found by a search tree, pt_common.hlsli reflected_lamps and
+  # native/pathtracing/src/lamp_tree.hpp. A third, the water's short rays, came out. docs/agents/rule-1.md.)
+  option(TGPT_REGROUP_WATER "TG Path Tracing: on trial, the water's path regroups its threads inside the reordering passes" OFF)
+  set(PT_REGROUP_DEFINES)
+  if(TGPT_REGROUP_WATER)
+    list(APPEND PT_REGROUP_DEFINES -D PT_REGROUP_WATER)
+  endif()
+  if(TGPT_REGROUP_WATER AND TGPT_SPEED_MEASURE)
+    message(FATAL_ERROR "TG Path Tracing: TGPT_REGROUP_WATER and TGPT_SPEED_MEASURE give the Speed trial's numbers 2 and 4 two meanings: build them apart")
+  endif()
   # Each pass twice: Shader Model 6.6 for every DXR 1.1 GPU, and 6.9 (DirectX Raytracing 1.2: opacity
   # micromaps) for where the device offers it; the GI and reflection passes also as ray generation shaders
   # with Shader Execution Reordering. The tracer picks a set when it starts.
   # The shaders' own headers and RTXDI's: an edit to either rebuilds every pass (its parameter blocks are in the
   # constant layout the C++ side fills).
   file(GLOB_RECURSE TG_RTXDI_HEADERS "${TG_RTXDI}/Include/*.h" "${TG_RTXDI}/Include/*.hlsli")
-  set(PT_SHADER_DEPENDS "${PT_SHADER_DIR}/pt_common.hlsli" "${PT_SHADER_DIR}/pt_restir.hlsli" "${PT_SHADER_DIR}/pt_root.hlsli"
-    "${PT_SHADER_DIR}/pt_rtxdi.hlsli" "${PT_SHADER_DIR}/pt_boil.hlsli" ${TG_RTXDI_HEADERS})
-  foreach(entry prepare:pt_prepare probe:pt_probe gi:pt_gi giSpatial:pt_gi_spatial di:pt_di diSpatial:pt_di_spatial specular:pt_specular
-                temporal:pt_temporal atrous:pt_atrous compose:pt_compose water:pt_water hdrpShadow:pt_hdrp_shadow)
+  set(PT_SHADER_DEPENDS "${PT_SHADER_DIR}/pt_psr_record.hlsli" "${PT_SHADER_DIR}/pt_psr_capture.hlsli" "${PT_SHADER_DIR}/pt_decal_graphs.hlsli" "${PT_SHADER_DIR}/pt_common.hlsli" "${PT_SHADER_DIR}/pt_restir.hlsli" "${PT_SHADER_DIR}/pt_root.hlsli"
+    "${PT_SHADER_DIR}/pt_rtxdi.hlsli" "${PT_SHADER_DIR}/pt_boil.hlsli" "${PT_SHADER_DIR}/pt_primary.hlsli" "${PT_SHADER_DIR}/pt_waves.hlsli" "${PT_SHADER_DIR}/pt_materials.hlsli" "${PT_SHADER_DIR}/pt_dielectric.hlsli"
+    "${PT_SHADER_DIR}/pt_interface.hlsli" "${PT_SHADER_DIR}/pt_medium.hlsli" "${PT_SHADER_DIR}/pt_query.hlsli" "${PT_SHADER_DIR}/pt_water_surface.hlsli" "${PT_SHADER_DIR}/pt_water_path.hlsli" "${PT_SHADER_DIR}/pt_water_sun.hlsli" "${PT_SHADER_DIR}/pt_water_foam.hlsli" "${PT_SHADER_DIR}/pt_water_lights.hlsli"
+    "${PT_SHADER_DIR}/pt_gi_own.hlsli" ${TG_RTXDI_HEADERS})
+  # giReuse (pt_gi_reuse): ReSTIR GI's reuse across frames, a pass of its own right after pt_gi, in the screen's order
+  # (PT-99, PT-110, since 2026-10-10: docs/agents/rule-2.md).
+  foreach(entry prepare:pt_prepare probe:pt_probe gi:pt_gi giReuse:pt_gi_reuse giSpatial:pt_gi_spatial di:pt_di diSpatial:pt_di_spatial specular:pt_specular
+                temporal:pt_temporal atrous:pt_atrous compose:pt_compose caustics:pt_caustics walk:pt_walk wet:pt_wet
+                fogFroxel:pt_fog_froxel fogIntegrate:pt_fog_integrate fogTail:pt_fog_tail
+                nrdConfidence:pt_nrd_confidence)
     string(REPLACE ":" ";" parts "${entry}")
     list(GET parts 0 variable)
     list(GET parts 1 name)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}.h"
-      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_6 -E main ${PT_SPEED_DEFINES} -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}.h" -Vn ${variable} "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl" VERBATIM)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}_dxr12.h"
-      COMMAND "${TG_DXC}" -nologo -T cs_6_9 -E main -D PT_DXR12 -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}_dxr12.h" -Vn ${variable}Dxr12 "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T cs_6_9 -E main -D PT_DXR12 ${PT_SPEED_DEFINES} -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}_dxr12.h" -Vn ${variable}Dxr12 "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl (Shader Model 6.9)" VERBATIM)
     list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}.h" "${PT_GENERATED}/${name}_dxr12.h")
+  endforeach()
+  foreach(header pt_fog_froxel.h pt_fog_froxel_dxr12.h pt_fog_integrate.h pt_fog_integrate_dxr12.h pt_fog_tail.h pt_fog_tail_dxr12.h)
+    add_custom_command(OUTPUT "${PT_GENERATED}/${header}" APPEND DEPENDS "${PT_SHADER_DIR}/pt_froxel.hlsli")
   endforeach()
   foreach(entry gi:pt_gi specular:pt_specular)
     string(REPLACE ":" ";" parts "${entry}")
     list(GET parts 0 variable)
     list(GET parts 1 name)
     add_custom_command(OUTPUT "${PT_GENERATED}/${name}_ser.h"
-      COMMAND "${TG_DXC}" -nologo -T lib_6_9 -D PT_DXR12 -D PT_SER -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}_ser.h" -Vn ${variable}Ser "${PT_SHADER_DIR}/${name}.hlsl"
+      COMMAND "${TG_DXC}" -nologo -T lib_6_9 -D PT_DXR12 -D PT_SER ${PT_REGROUP_DEFINES} ${PT_SPEED_DEFINES} -HV 2021 -O3 -WX -Qstrip_debug -I "${TG_RTXDI}/Include" -Fh "${PT_GENERATED}/${name}_ser.h" -Vn ${variable}Ser "${PT_SHADER_DIR}/${name}.hlsl"
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl (ray generation, Shader Execution Reordering)" VERBATIM)
     list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}_ser.h")
   endforeach()
+  # (Two options of Shader Execution Reordering stood here until 2026-10-10: the reordering study, the bounced light's pass
+  # in more arrangements, and the split trial, that pass split in two. The game answered: pt_gi regroups once after the
+  # pixel's first ray and its reuse across frames is pt_gi_reuse, in every build; the rest came out. docs/agents/rule-2.md.)
   # Passes that trace no rays: one Shader Model 6.6 build serves both sets (the opacity micromap bake, AMD Ray
   # Regeneration's guides, characters' skinned positions, RTXDI's boiling filter for the GI reservoirs, the radiance
-  # cache's frame, and the emissive triangles' records).
-  foreach(entry ommBake:pt_omm_bake rrgGuides:pt_rrg_guides skinUnpack:pt_skin giBoil:pt_gi_boil meter:pt_meter sss:pt_sss cache:pt_cache emissive:pt_emissive)
+  # cache's frame, the emissive triangles' records, swaying cloth's pose, the water's wave triangles, its wave corners kept for the sun's question, and texture sharing's start-up self-test, which
+  # texture_share.cpp includes on its own, with its own root signature).
+  foreach(entry ommBake:pt_omm_bake rrgGuides:pt_rrg_guides skinUnpack:pt_skin giBoil:pt_gi_boil meter:pt_meter cache:pt_cache emissive:pt_emissive sway:pt_sway waterMesh:pt_water_mesh sunGrid:pt_sun_grid shareTest:pt_share_test yardstick:pt_yardstick sky:pt_sky nrdConfidenceFilter:pt_nrd_confidence_filter)
     string(REPLACE ":" ";" parts "${entry}")
     list(GET parts 0 variable)
     list(GET parts 1 name)
@@ -234,6 +338,10 @@ if(TGFG_BUILD_NATIVE)
       DEPENDS "${PT_SHADER_DIR}/${name}.hlsl" ${PT_SHADER_DEPENDS}
       COMMENT "DXC ${name}.hlsl" VERBATIM)
     list(APPEND PT_SHADER_HEADERS "${PT_GENERATED}/${name}.h")
+  endforeach()
+  # PT-112, the sky (on trial): its model (pt_sky.hlsli) is read by its own passes and the composite alone.
+  foreach(header pt_sky.h pt_compose.h pt_compose_dxr12.h)
+    add_custom_command(OUTPUT "${PT_GENERATED}/${header}" APPEND DEPENDS "${PT_SHADER_DIR}/pt_sky.hlsli")
   endforeach()
   # NRD's front end (the tracer's signals into its inputs), with NRD's own packing from its NRD.hlsli.
   if(TGPT_NRD)
@@ -248,8 +356,8 @@ if(TGFG_BUILD_NATIVE)
   add_library(TGGraphicsBridge.Native SHARED
     native/bridge/src/core.cpp native/bridge/src/hooks.cpp native/bridge/src/device.cpp
     native/bridge/src/extensions.cpp native/bridge/src/exports.cpp native/bridge/src/performance.cpp
-    native/bridge/src/agility.cpp native/bridge/src/diagnostics.cpp)
-  target_include_directories(TGGraphicsBridge.Native PRIVATE ${BRIDGE_INCLUDE})
+    native/bridge/src/agility.cpp native/bridge/src/diagnostics.cpp native/bridge/src/ngx_session.cpp native/bridge/src/dlss_inputs.cpp)
+  target_include_directories(TGGraphicsBridge.Native PRIVATE ${BRIDGE_INCLUDE} "${NGX_INCLUDE_DIR}")
   target_compile_definitions(TGGraphicsBridge.Native PRIVATE ${TG_DEFINES})
   target_link_libraries(TGGraphicsBridge.Native PRIVATE minhook dxgi d3d11 d3d12 dxguid wintrust crypt32 pdh version)
 
@@ -278,8 +386,8 @@ if(TGFG_BUILD_NATIVE)
 
   # No d3d12.lib: every D3D12 call goes through the bridge's device, so the DLL never loads d3d12.dll itself.
   add_library(TGPathTracing.Native SHARED
-    native/pathtracing/src/extension.cpp native/pathtracing/src/scene.cpp native/pathtracing/src/tracer.cpp
-    native/pathtracing/src/ray_regeneration.cpp native/pathtracing/src/nrd_denoiser.cpp "${TG_RTXDI}/Source/RtxdiUtils.cpp")
+    native/pathtracing/src/extension.cpp native/pathtracing/src/scene.cpp native/pathtracing/src/scene_water.cpp native/pathtracing/src/tracer.cpp
+    native/pathtracing/src/ray_regeneration.cpp native/pathtracing/src/nrd_denoiser.cpp native/pathtracing/src/texture_share.cpp "${TG_RTXDI}/Source/RtxdiUtils.cpp")
   add_dependencies(TGPathTracing.Native TGPathTracingShaders)
   if(TGPT_NRD)
     target_link_libraries(TGPathTracing.Native PRIVATE NRD)
@@ -289,10 +397,71 @@ if(TGFG_BUILD_NATIVE)
   target_include_directories(TGPathTracing.Native PRIVATE ${PT_INCLUDE} ${BRIDGE_INCLUDE} "${CMAKE_CURRENT_BINARY_DIR}/generated" "${PT_GENERATED}"
     "${FIDELITYFX_ROOT}/Kits/FidelityFX/api/include" "${FIDELITYFX_ROOT}/Kits/FidelityFX/denoisers/include" "${TG_RTXDI}/Include")
   target_compile_definitions(TGPathTracing.Native PRIVATE ${TG_DEFINES})
+  if(NOT TGPT_LAMP_AROUND)
+    target_compile_definitions(TGPathTracing.Native PRIVATE TGPT_NO_LAMP_AROUND=1) # the tracer's log says the trial is compiled out
+  endif()
+  if(TGPT_RAIN_WETNESS)
+    target_compile_definitions(TGPathTracing.Native PRIVATE TGPT_RAIN_WETNESS=1) # without it the tracer's log says the trial is compiled out
+  endif()
+  if(TGPT_MEGA_GEOMETRY)
+    # NVAPI's static library is the door to the driver's own nvapi64.dll: no Direct3D 12 import of its own.
+    target_sources(TGPathTracing.Native PRIVATE native/pathtracing/src/mega_geometry.cpp)
+    target_include_directories(TGPathTracing.Native PRIVATE "${TG_NVAPI}")
+    # (And meshoptimizer's clusterizer, static: the clusters' cut, mega_geometry.cpp.)
+    target_link_libraries(TGPathTracing.Native PRIVATE "${TG_NVAPI}/amd64/nvapi64.lib" meshoptimizer)
+    target_compile_definitions(TGPathTracing.Native PRIVATE TGPT_MEGA_GEOMETRY=1)
+  endif()
+  if(TGPT_REGROUP_WATER)
+    target_compile_definitions(TGPathTracing.Native PRIVATE TGPT_REGROUP_WATER=1) # the tracer's log says whether the trial is compiled in
+  endif()
+  if(TGPT_SPEED_MEASURE)
+    target_compile_definitions(TGPathTracing.Native PRIVATE TGPT_SPEED_MEASURE=1) # the measuring build's own switches of the tracer (tracer.cpp)
+  endif()
   target_link_libraries(TGPathTracing.Native PRIVATE d3d11 d3dcompiler dxguid)
 
+  add_library(TGNeuralRendering.Native SHARED native/neural/src/extension.cpp)
+  # The model's caller-name requirement stays inside this optional NR-only adapter (NR-30/31/32).
+  add_library(TGNeuralRendering.Community SHARED native/neural/src/community_adapter.cpp)
+  set_target_properties(TGNeuralRendering.Community PROPERTIES OUTPUT_NAME "TGNeuralRendering.nvngx")
+  target_include_directories(TGNeuralRendering.Community PRIVATE native/neural/include "${DLSS_ROOT}/include")
+  target_compile_definitions(TGNeuralRendering.Community PRIVATE ${TG_DEFINES})
+  target_link_libraries(TGNeuralRendering.Community PRIVATE bcrypt)
+  add_dependencies(TGNeuralRendering.Native TGNeuralRendering.Community)
+  target_include_directories(TGNeuralRendering.Native PRIVATE native/neural/include ${BRIDGE_INCLUDE} "${DLSS_ROOT}/include")
+  target_compile_definitions(TGNeuralRendering.Native PRIVATE ${TG_DEFINES})
+  target_link_libraries(TGNeuralRendering.Native PRIVATE d3d11 d3d12 d3dcompiler dxguid version bcrypt
+    "${DLSS_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")
+  install(TARGETS TGNeuralRendering.Native TGNeuralRendering.Community RUNTIME DESTINATION TGNeuralRendering COMPONENT TGNative)
+  install(FILES "${DLSS_ROOT}/LICENSE.txt" DESTINATION TGNeuralRendering/Notices RENAME LICENSE-NVIDIA-RTX-SDKs.txt COMPONENT TGNative)
+  install(TARGETS TGNeuralRendering.Native TGNeuralRendering.Community RUNTIME DESTINATION TGNeuralRendering COMPONENT TGNRProbe)
+  install(TARGETS TGGraphicsBridge.Native RUNTIME DESTINATION TGGraphicsBridge COMPONENT TGNRProbe)
+  install(TARGETS TGFG.Native RUNTIME DESTINATION TGFrameGeneration COMPONENT TGNRProbe)
+  install(TARGETS TGBetterUpscaling.Native RUNTIME DESTINATION TGBetterUpscaling COMPONENT TGNRProbe)
+  if(BUILD_TESTING)
+    add_executable(tgnr_policy_tests tests/neural_policy_tests.cpp)
+    target_include_directories(tgnr_policy_tests PRIVATE native/neural/include)
+    add_test(NAME tgnr_policy COMMAND tgnr_policy_tests)
+    add_executable(tgnr_runtime_tests tests/neural_runtime_tests.cpp)
+    target_include_directories(tgnr_runtime_tests PRIVATE native/neural/include native/neural/src "${DLSS_ROOT}/include")
+    target_link_libraries(tgnr_runtime_tests PRIVATE bcrypt)
+    add_dependencies(tgnr_runtime_tests TGNeuralRendering.Community)
+    add_test(NAME tgnr_runtime COMMAND tgnr_runtime_tests "${CMAKE_CURRENT_BINARY_DIR}/nr-runtime-test" "$<TARGET_FILE:TGNeuralRendering.Community>")
+    add_library(tgnr_mock_runtime SHARED tests/neural_mock_runtime.cpp)
+    target_include_directories(tgnr_mock_runtime PRIVATE "${DLSS_ROOT}/include")
+    add_executable(tgnr_adapter_test tests/neural_adapter_test.cpp)
+    target_include_directories(tgnr_adapter_test PRIVATE native/neural/include native/neural/src "${DLSS_ROOT}/include")
+    target_link_libraries(tgnr_adapter_test PRIVATE bcrypt)
+    add_dependencies(tgnr_adapter_test TGNeuralRendering.Community tgnr_mock_runtime)
+    foreach(case success changed api unsupported)
+      add_test(NAME tgnr_adapter_${case} COMMAND tgnr_adapter_test "$<TARGET_FILE:TGNeuralRendering.Community>" "$<TARGET_FILE:tgnr_mock_runtime>" ${case})
+    endforeach()
+    add_executable(tgnr_gpu_smoke tests/neural_gpu_smoke.cpp)
+    target_include_directories(tgnr_gpu_smoke PRIVATE native/neural/include ${BRIDGE_INCLUDE})
+    target_link_libraries(tgnr_gpu_smoke PRIVATE dxgi d3d11)
+  endif()
+
   if(MSVC)
-    foreach(target TGGraphicsBridge.Native TGFG.Native TGBetterUpscaling.Native TGPathTracing.Native)
+    foreach(target TGGraphicsBridge.Native TGFG.Native TGBetterUpscaling.Native TGPathTracing.Native TGNeuralRendering.Native TGNeuralRendering.Community)
       target_compile_options(${target} PRIVATE /W4 /EHsc /permissive- /utf-8)
     endforeach()
   endif()
@@ -349,6 +518,22 @@ if(TGFG_BUILD_NATIVE)
     # scene is registered and rasterized into an HDRP-style GBuffer, and frames are traced and composited
     # through the real render events. Writes PNGs of the result and the debug views; skips (77) without
     # a DXR 1.1 GPU or the staged DLLs.
+    # Focused diagnostic only; never starts the renderer's full GPU suite.
+    add_executable(tgpt_vfx_simulation_test tests/vfx_simulation_test.cpp)
+    target_include_directories(tgpt_vfx_simulation_test PRIVATE ${BRIDGE_INCLUDE})
+    target_compile_definitions(tgpt_vfx_simulation_test PRIVATE ${TG_DEFINES})
+    target_link_libraries(tgpt_vfx_simulation_test PRIVATE minhook d3d11 dxgi d3dcompiler)
+    # The lamps' search tree (lamp_tree.hpp; pt_common.hlsli reflected_lamps walks it) against the loop over every lamp
+    # it took the place of, lamp by lamp, over rays that graze lamps from a centimetre to kilometres away. On the CPU
+    # alone, seconds.
+    add_executable(tgpt_lamp_tree_test tests/lamp_tree_test.cpp)
+    target_include_directories(tgpt_lamp_tree_test PRIVATE ${PT_INCLUDE})
+    add_test(NAME tgpt_lamp_tree COMMAND tgpt_lamp_tree_test)
+    # The light grid's cells (light_grid.hpp build_cells: one walk a light; PT-99, docs/agents/reccpu.md) against the loop
+    # they took the place of (build_cells_reference), byte by byte, over made-up lights. On the CPU alone, seconds.
+    add_executable(tgpt_light_grid_test tests/light_grid_test.cpp)
+    target_include_directories(tgpt_light_grid_test PRIVATE ${PT_INCLUDE})
+    add_test(NAME tgpt_light_grid COMMAND tgpt_light_grid_test)
     add_executable(tgpt_gpu_test tests/pathtracing_gpu_test.cpp)
     target_include_directories(tgpt_gpu_test PRIVATE ${BRIDGE_INCLUDE} ${PT_INCLUDE})
     target_compile_definitions(tgpt_gpu_test PRIVATE ${TG_DEFINES})
@@ -358,6 +543,11 @@ if(TGFG_BUILD_NATIVE)
     endif()
     add_test(NAME tgpt_gpu_test COMMAND tgpt_gpu_test "${TG_TEST_NATIVE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/tgpt-images")
     set_tests_properties(tgpt_gpu_test PROPERTIES SKIP_RETURN_CODE 77)
+    # PT-45 phase 3: the texture-sharing checks alone, with the start-up self-test made to read BC7 sRGB back wrong: that
+    # format must stay unshared (its atlas tile serves) while every other is read directly.
+    add_test(NAME tgpt_share_selftest_fails_one COMMAND tgpt_gpu_test "${TG_TEST_NATIVE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/tgpt-images-share")
+    set_tests_properties(tgpt_share_selftest_fails_one PROPERTIES SKIP_RETURN_CODE 77
+      ENVIRONMENT "TGPT_TEST_SHARE_ONLY=1;TGPT_TEST_SHARE_BREAK=99;TGPT_TEST_STAGE=tgpt-native-share")
   endif()
   # Component TGNative: MinHook's own install rules (headers, static library) stay out of the mods.
   install(TARGETS TGGraphicsBridge.Native RUNTIME DESTINATION TGGraphicsBridge COMPONENT TGNative)
@@ -367,7 +557,13 @@ if(TGFG_BUILD_NATIVE)
   # The notices of what is compiled into it, next to it: NVIDIA's RTXDI (and NRD) under the NVIDIA RTX SDKs license (object
   # code only), and with NRD its MathLib and ShaderMake's blob reader under MIT (LICENSES/THIRD_PARTY.md).
   install(FILES "${TG_RTXDI}/LICENSE.txt" DESTINATION TGPathTracing/Notices RENAME LICENSE-NVIDIA-RTX-SDKs.txt COMPONENT TGNative)
-  if(TGPT_NRD)
+  if(TGPT_MEGA_GEOMETRY)
+    # NVAPI's library is linked into it (MIT: its notice goes with it).
+    install(FILES "${TG_NVAPI}/License.txt" DESTINATION TGPathTracing/Notices RENAME LICENSE-NVAPI.txt COMPONENT TGNative)
+    # And meshoptimizer's (MIT), whose clusterizer is linked in with it.
+    install(FILES "${meshoptimizer_SOURCE_DIR}/LICENSE.md" DESTINATION TGPathTracing/Notices RENAME LICENSE-meshoptimizer.md COMPONENT TGNative)
+  endif()
+  if(TGPT_NRD AND NOT TGPT_NRD_PREBUILT_LIBRARY)
     FetchContent_GetProperties(mathlib)
     FetchContent_GetProperties(shadermake)
     install(FILES "${mathlib_SOURCE_DIR}/LICENSE.txt" DESTINATION TGPathTracing/Notices RENAME LICENSE-MathLib.txt COMPONENT TGNative)

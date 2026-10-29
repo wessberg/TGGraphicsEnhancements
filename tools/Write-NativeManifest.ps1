@@ -15,6 +15,9 @@ $hashes = [ordered]@{}
 $components = Get-TgNativeComponents
 foreach ($component in $components.Keys) {
     $path = Join-Path $Stage $components[$component]
+    # A PT-only build can retain an older NR stage. NR packaging still requires
+    # the adapter and its recorded hash through Get-TgNativePayload.
+    if ($component -eq 'TGNeuralRenderingCommunity' -and -not (Test-Path -LiteralPath $path)) { continue }
     Assert-TgAmd64 $path
     $hashes[$component] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }

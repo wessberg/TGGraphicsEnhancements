@@ -68,7 +68,7 @@ namespace TGPathTracing
 
         private static bool Wanted(VegetationType type) => type == VegetationType.Tree || type == VegetationType.LargeObjects || type == VegetationType.Objects;
 
-        internal static int Capture(Vector3 camera, float radius, SceneCapture.Sink sink)
+        internal static int Capture(Vector3 camera, SceneCapture.Sink sink)
         {
             var manager = VegetationStudioManager.Instance;
             var systems = manager != null ? manager.VegetationSystemList : null;
@@ -78,7 +78,6 @@ namespace TGPathTracing
                 return 0;
             }
             int cells = 0; seen.Clear();
-            float r2 = radius * radius;
             var cam = Camera.main;
             float lodScale = cam != null ? QualitySettings.lodBias / (2f * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad)) : 1f;
             int count = 0;
@@ -89,7 +88,7 @@ namespace TGPathTracing
                 var packages = system.VegetationPackageProList;
                 foreach (var cell in system.LoadedVegetationCellList)
                 {
-                    if (cell == null || cell.VegetationCellBounds.SqrDistance(camera) > r2) continue;
+                    if (cell == null) continue;
                     ++cells;
                     for (int p = 0; p < cell.VegetationPackageInstancesList.Count && p < packages.Count; p++)
                     {
@@ -112,7 +111,6 @@ namespace TGPathTracing
                                 var m = list[j];
                                 var position = new Vector3(m.Position.x, m.Position.y, m.Position.z);
                                 float distance2 = (position - camera).sqrMagnitude;
-                                if (distance2 > r2) continue;
                                 var scale = new Vector3(m.Scale.x, m.Scale.y, m.Scale.z);
                                 float height = prefab.Size * Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z)) * lodScale / Mathf.Max(Mathf.Sqrt(distance2), 0.01f);
                                 int lod = prefab.Lods.Count - 1; // past the last LOD the coarsest still shadows

@@ -5,6 +5,50 @@ a mandatory build dependency. Normal NGX loading of NR is a candidate, not a mea
 are not license-cleared. Evidence and limits: [DLSS5-RESEARCH.md](DLSS5-RESEARCH.md). Working name:
 **TG Neural Rendering**, GUID `com.wessberg.tgneuralrendering`.
 
+## Implementation and pipeline update, 2026-10-07 evening
+
+R17, 2026-10-09 supersession: the owner explicitly approved a separate compatibility adapter, including its
+caller-name requirement, for community runtimes. The owner then rejected per-file allowlisting. The signed SDK
+route stays the default; an unsigned/modified NR DLL automatically selects the NR-only adapter, which validates
+its direct interface and runtime support. No player switch, driver replacement or changed trust policy for other
+consumers. Details and hardware-evidence limits: [DLSS5-COMPATIBILITY.md](DLSS5-COMPATIBILITY.md).
+The earlier caller-policy restrictions below describe the original research state and are superseded for this
+NR-only route. The proprietary runtime remains outside packages.
+
+The original research requirements below are retained. Ordinary public NGX has since created/evaluated NR on
+our shared device, including offline RR coexistence. Both game versions compile; Mono is deployed. Current
+evidence and remaining acceptance work: [DLSS5-TUNING.md](DLSS5-TUNING.md).
+
+The owner's later instruction supersedes the original post-tone-map placement: both Before and After Upscaling
+must precede motion blur, DoF, chromatic aberration and vignette. The implementation brackets SR/RR before
+lens effects, using our HDR-to-LDR adapter on both routes; game tone mapping follows NR. HDR restoration uses
+the original pixel's shoulder factor to apply NR's colour gain, avoiding near-white amplification (NR-17).
+The neutral transform is reversible; changed model colour is not inverted through its own new peak. That adapter
+is a measured integration choice, not NVIDIA's demonstrated tone-mapped input, and appearance/HDR validation
+remains necessary. FG capture and UI follow NR. RR forces After; no noisy undenoised PT input is accepted.
+
+### Renderer ownership: fog and geometry guides
+
+Owner, 2026-10-07: "Keep in mind that the PT mod fundamentally renders the scene differently, including its own
+rendering of fog". NR consumes the active renderer's completed scene, including its fog and transparents. With
+PT enabled these are PT's responsibility; NR must not assume HDRP supplied them, add fog again, or split the
+tracer's surface and volume lighting. Placement selects the side of SR/RR, while both choices precede lens
+effects. RR still requires After because it denoises and upscales together.
+
+Depth and motion come from the actual selected DLSS invocation. In 1.2.3 the bridge owns the NGX D3D11
+observer formerly private to FG. FG and NR subscribe independently. The packet includes the actual resources,
+image regions, vector scale, jitter, reset and depth convention. BU publishes its selected D3D11 RR inputs
+at the shared-device handoff and only marks success after writing the upscaled output. NR associates that
+packet with the gameplay camera's colour resource; missing, failed or mismatched calls disable NR, without
+substituting another camera's guides. Before evaluates before SR; After evaluates after successful SR/RR.
+The managed render-graph pass only supplies camera identity, settings and resource lifetime dependencies.
+
+NR-10 / PT-72 remains a renderer migration requirement: when PT changes the visible geometry, the inputs to
+DLSS itself must match it. Changing lighting or fog alone does not imply different surface motion. NR must
+consume whatever DLSS actually uses, not invent a separate NR-to-PT lookup. PT's published guide API does
+not yet export its own geometry depth/motion. Validate hair, glass/water and fog after PT updates that common
+handoff. Current scene comparisons use PT Off; the real RR+NR GPU check is synthetic, not PT image acceptance.
+
 ## Goal
 
 Add optional NVIDIA DLSS 5 Neural Rendering to Tainted Grail: The Fall of Avalon using TG Graphics Bridge. Players

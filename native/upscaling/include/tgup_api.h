@@ -107,6 +107,8 @@ TGUP_EXPORT void* TGUP_CALL TGUP_GetRenderEvent();
 // runtime was probed on the shared device. Returns how many there are (at most capacity are written), or
 // negative.
 TGUP_EXPORT int32_t TGUP_CALL TGUP_GetModes(uint32_t backend, TGUP_Mode* modes, uint32_t capacity);
+// RR's own recommended input dimensions, for this output size and NGX quality mode. 0 success; negative unavailable.
+TGUP_EXPORT int32_t TGUP_CALL TGUP_GetRrOptimalSettings(uint32_t outputWidth, uint32_t outputHeight, uint32_t mode, uint32_t* renderWidth, uint32_t* renderHeight);
 // The DLSS Super Resolution DLL NVIDIA's runtime loaded for the game's DLSS, as file versions
 // (major.minor.build.revision, 16 bits each): the one loaded, the one it asked for, the bundled one.
 // Returns TGUP_DLSS_*.

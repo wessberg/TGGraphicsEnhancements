@@ -51,7 +51,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         // evenly.
         if (id.x >= pass.b.z) return;
         const LightRecord cluster = records[pass.b.y + id.x];
-        const uint first = cluster.flags, count = max(asuint(cluster.cookieScale), 1u);
+        // At most a cluster's triangles (scene.cpp makes none bigger): a record that were ever wrong can't keep the GPU here.
+        const uint first = cluster.flags, count = clamp(asuint(cluster.cookieScale), 1u, CLUSTER_TRIANGLES);
         float total = 0.0;
         for (uint k = 0; k < count; ++k) total += records[first + k].color.x;
         float running = 0.0;
@@ -97,7 +98,9 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float area = 0.5 * length(cross(e1, e2));
     const ClusterInfo cluster = clusters[e.firstCluster + p / CLUSTER_TRIANGLES];
     uint flags = (cluster.state & EMITTER_SAMPLED) | ((m.flags & MATERIAL_DOUBLE_SIDED) != 0 ? EMITTER_TWO_SIDED : 0u);
-    if (g.settings2.z > 0) {
+    // A glowing surface the plugin found a kept light standing for, however far the light sits from it (a crystal's).
+    if ((m.flags & MATERIAL_OWN_SURFACE) != 0) flags |= EMITTER_PAIRED;
+    else if (g.settings2.z > 0) {
         uint first, count;
         if (light_cell((v0 + v1 + v2) / 3.0, first, count)) {
             StructuredBuffer<uint2> entries = ResourceDescriptorHeap[g.grid.y];

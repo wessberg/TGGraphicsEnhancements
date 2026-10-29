@@ -1,0 +1,6 @@
+{
+  "name": "TG Frame Generation",
+  "native": "Native/TGFG.Native.dll",
+  "bridge": "Native/TGGraphicsBridge.Native.dll",
+  "bridgeVersion": "1.2.1"
+}

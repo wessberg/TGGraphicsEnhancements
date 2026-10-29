@@ -34,7 +34,7 @@ class AutoloadIntegration(unittest.TestCase):
     def test_matching_versions_and_paths(self):
         autoload = ET.parse(ROOT/'src/TGGraphicsBridge.Autoload/Autoload.props')
         props = ET.parse(ROOT/'src/Game.References.props')
-        self.assertEqual(autoload.find('.//Version').text, '1.2.0')
+        self.assertEqual(autoload.find('.//Version').text, '1.2.3')
         self.assertEqual(set(autoload.find('.//TargetFrameworks').text.split(';')), {'net472','net6.0'})
         self.assertEqual(autoload.find('Import').get('Project'), '$(MSBuildThisFileDirectory)..\\..\\Build.Local.props')
         for prop in ['GameDirMono', 'GameDirIl2Cpp']:
@@ -44,7 +44,7 @@ class AutoloadIntegration(unittest.TestCase):
             imports = [i.get('Project') for i in project.findall('Import')]
             self.assertEqual(imports, ['..\\..\\Build.Local.props', '..\\Game.References.props'], mod)
         for path in ['src/TGGraphicsBridge/Plugin.cs', 'src/TGFrameGeneration/Plugin.cs', 'src/TGBetterUpscaling/Plugin.cs']:
-            self.assertIn('Version = "1.2.0"', text(path))
+            self.assertIn('Version = "1.2.3"', text(path))
         # BepInEx picks a plugin copy by its declared version, the runtime binds references by the
         # assembly version: the two must never differ, or BepInEx 6 may load a copy a mod cannot bind to.
         for mod in MODS:
@@ -55,7 +55,7 @@ class AutoloadIntegration(unittest.TestCase):
         bridge = re.search(r'internal const string BridgeVersion = "([^"]+)";', text('src/TGGraphicsBridge.Autoload/Bootstrap.cs')).group(1)
         self.assertEqual(bridge, ET.parse(ROOT/'src/TGGraphicsBridge/TGGraphicsBridge.csproj').find('.//Version').text)
         self.assertEqual(bridge, autoload.find('.//Version').text)
-        self.assertIn('internal const string BridgeVersion = "1.2.0";', text('src/TGGraphicsBridge.Autoload/Bootstrap.cs'))
+        self.assertIn('internal const string BridgeVersion = "1.2.3";', text('src/TGGraphicsBridge.Autoload/Bootstrap.cs'))
         self.assertIn('[PatcherPluginInfo(Identity.PatcherGuid, Identity.Title + " graphics bridge autoload", Bootstrap.BridgeVersion)]', text('src/TGGraphicsBridge.Autoload/Patcher.cs'))
         # Every copy of the bridge a mod bundles says the same version, which is the bridge's.
         import json
@@ -63,7 +63,7 @@ class AutoloadIntegration(unittest.TestCase):
         for mod, title in [('TGFrameGeneration', 'TG Frame Generation'), ('TGBetterUpscaling', 'TG Better Upscaling')]:
             manifest = json.loads(text(f'src/{mod}/graphics-bridge-extension.json'))
             self.assertEqual(manifest['bridge'], 'Native/TGGraphicsBridge.Native.dll', mod)
-            self.assertEqual(manifest['bridgeVersion'], '1.2.0', mod)
+            self.assertEqual(manifest['bridgeVersion'], '1.2.3', mod)
             identity = text(f'src/{mod}.Autoload/Identity.cs')
             self.assertIn(f'internal const string Folder = "{mod}";', identity)
             self.assertIn(f'internal const string Title = "{title}";', identity)
@@ -199,11 +199,11 @@ class AutoloadIntegration(unittest.TestCase):
         for path in paths:
             self.assertTrue((ROOT/path.replace('\\','/')).is_file(), path)
         self.assertEqual(sorted(Path(p.replace('\\','/')).name for p in paths),
-                         ['TGBetterUpscaling.Autoload.csproj','TGBetterUpscaling.csproj','TGFrameGeneration.Autoload.csproj','TGFrameGeneration.csproj','TGGraphicsBridge.csproj'])
+                         ['TGBetterUpscaling.Autoload.csproj','TGBetterUpscaling.csproj','TGFrameGeneration.Autoload.csproj','TGFrameGeneration.csproj','TGGraphicsBridge.csproj','TGNeuralRendering.Autoload.csproj','TGNeuralRendering.csproj'])
 
     def test_native_version_kept_together(self):
-        self.assertIn('VERSION 1.2.0',text('CMakeLists.txt'))
-        self.assertIn("$script:TgVersion = '1.2.0'",text('tools/Package.Common.ps1'))
+        self.assertIn('VERSION 1.2.3',text('CMakeLists.txt'))
+        self.assertIn("$script:TgVersion = '1.2.3'",text('tools/Package.Common.ps1'))
         self.assertIn("$script:TgAbi = '0x00010100'",text('tools/Package.Common.ps1'))
         self.assertIn("version = (Get-TgVersion)",text('tools/Write-NativeManifest.ps1'))
         self.assertIn('0x00010100',text('src/TGFrameGeneration/NativeAbi.cs'))

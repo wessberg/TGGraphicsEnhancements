@@ -160,15 +160,38 @@ namespace TGGraphicsBridge
         }
         // The game's upscaling row (Dynamic Resolution) once the game has created its setting, else null.
         public static EnumArrowsOption UpscalingRow() => GraphicSetting<UpScaling>("UpScaling")?.UpscalingTypeOption;
+        // The settings screen's row views as Unity finds them in the scene, not from the screen's own set
+        // (Model.Views, an IEnumerable over a HashSet). Walking that set through the interop's enumerator threw
+        // "Collection was modified" the first time the settings opened, in every normal-version log on record
+        // (2026-09-25, 2026-10-06): RowAlerts gave up for the session, and the rows' alert icons never showed.
+        // A failure here gives no views this time and is logged once; the callers ask again while the screen is open.
+        private static bool viewsFailed, viewsListed;
         public static List<VFocusableSetting> FocusableViews(AllSettingsUI ui)
         {
             var views = new List<VFocusableSetting>();
-            var enumerator = ui.Views.GetEnumerator();
-            var cursor = enumerator.Cast<Il2CppSystem.Collections.IEnumerator>();
-            while (cursor.MoveNext())
+            try
             {
-                var view = enumerator.Current?.TryCast<VFocusableSetting>();
-                if (view != null) views.Add(view);
+                var found = UnityEngine.Object.FindObjectsByType(Il2CppType.Of<VFocusableSetting>(), FindObjectsSortMode.None);
+                if (found == null) return views;
+                for (int i = 0; i < found.Length; i++)
+                {
+                    var view = found[i]?.TryCast<VFocusableSetting>();
+                    if (view != null) views.Add(view);
+                }
+                if (!viewsListed && views.Count > 0)
+                {
+                    viewsListed = true;
+                    BridgeLog.Log.LogInfo("The settings screen's rows are listed for the mods' alert icons (" + views.Count + " rows).");
+                }
+            }
+            catch (Exception ex)
+            {
+                views.Clear();
+                if (!viewsFailed)
+                {
+                    viewsFailed = true;
+                    BridgeLog.Log.LogWarning("The settings screen's rows could not be listed, so the mods' alert icons and row states may lag; asked again while it is open: " + ex);
+                }
             }
             return views;
         }

@@ -22,6 +22,12 @@ inline D3D12_RESOURCE_DESC buffer_desc(uint64_t size, D3D12_RESOURCE_FLAGS flags
     return d;
 }
 
+inline uint64_t allocation_bytes(ID3D12Resource* resource) {
+    if(!resource) return 0;
+    ComPtr<ID3D12Device> device; if(FAILED(resource->GetDevice(IID_PPV_ARGS(&device)))) return 0;
+    const auto desc=resource->GetDesc(); const auto bytes=device->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
+    return bytes==UINT64_MAX ? 0 : bytes;
+}
 struct Buffer {
     ComPtr<ID3D12Resource> resource;
     uint64_t size=0;
@@ -58,40 +64,74 @@ struct Texture {
 // One CPU/GPU descriptor heap; slots are handed out and back through a free list. A released slot may still
 // be read by frames the GPU has not finished: it returns to the free list once the consumer fence passes the
 // value set_retire named when it was released (the frame being recorded then), in collect.
+// Every slot's state is kept (since 2026-10-11, PT-118: the fog grid read a texture another owner's view had replaced): a
+// slot given back twice would sit in the free list twice and go to two owners, the later view replacing the earlier. A
+// second give-back, and a view written into a slot that is not handed out, are refused or noted with the line that did
+// it (take_misuse, which the tracer logs).
 class DescriptorHeap {
+public:
+    struct Misuse { uint32_t index; uint8_t state; bool write; const char* file; int line; const char* gaveBackFile; int gaveBackLine; };
+private:
     ComPtr<ID3D12DescriptorHeap> heap_;
     uint32_t capacity_=0, increment_=0, next_=0;
     std::vector<uint32_t> free_;
     std::deque<std::pair<uint64_t, uint32_t>> retiring_;
     uint64_t retireAt_=0;
+    std::vector<uint8_t> state_;                               // 0 free or never used, 1 handed out, 2 given back and waiting
+    std::vector<std::pair<const char*, int>> gaveBack_;        // where each slot was last given back
+    mutable std::vector<Misuse> misuse_; mutable uint64_t misuseCount_=0;
+    void note(uint32_t index, bool write, const char* file, int line) const {
+        ++misuseCount_;
+        if(misuse_.size()<32) misuse_.push_back({index, index<capacity_ ? state_[index] : uint8_t(255), write, file, line,
+                                                 index<capacity_ ? gaveBack_[index].first : nullptr, index<capacity_ ? gaveBack_[index].second : 0});
+    }
 public:
     void create(ID3D12Device* device, uint32_t capacity) {
         D3D12_DESCRIPTOR_HEAP_DESC d{}; d.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; d.NumDescriptors=capacity;
         d.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         check(device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&heap_)), "Create path tracing descriptor heap");
         capacity_=capacity; increment_=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV); next_=0; free_.clear(); retiring_.clear();
+        state_.assign(capacity, 0); gaveBack_.assign(capacity, {nullptr, 0}); misuse_.clear(); misuseCount_=0;
     }
     ID3D12DescriptorHeap* get() const { return heap_.Get(); }
     uint32_t allocate() {
-        if(!free_.empty()) { const uint32_t i=free_.back(); free_.pop_back(); return i; }
+        if(!free_.empty()) { const uint32_t i=free_.back(); free_.pop_back(); state_[i]=1; return i; }
         if(next_>=capacity_) throw DxError(E_OUTOFMEMORY, "The path tracer ran out of descriptors");
-        return next_++;
+        state_[next_]=1; return next_++;
+    }
+    // What went wrong since the last call (32 at most, and how many in all), for the log.
+    std::vector<Misuse> take_misuse(uint64_t* total=nullptr) { if(total) *total=misuseCount_; std::vector<Misuse> m; m.swap(misuse_); return m; }
+    // count slots in a row, for good (the heap's whole life): only right after create, before anything comes back.
+    uint32_t allocate_range(uint32_t count) {
+        if(count>capacity_-next_) throw DxError(E_OUTOFMEMORY, "The path tracer ran out of descriptors");
+        const uint32_t first=next_; next_+=count; std::fill(state_.begin()+first, state_.begin()+first+count, uint8_t(1)); return first;
     }
     // The fence value after which the GPU has finished every frame recorded so far (never decreases).
     void set_retire(uint64_t value) { retireAt_=std::max(retireAt_, value); }
-    void release(uint32_t index) { if(index!=kInvalid) retiring_.emplace_back(retireAt_, index); }
-    void collect(uint64_t completed) {
-        while(!retiring_.empty() && retiring_.front().first<=completed) { free_.push_back(retiring_.front().second); retiring_.pop_front(); }
+    // (file, line: the caller's, by the compiler.) A slot that is not handed out is not given back again: noted, refused.
+    void release(uint32_t index, const char* file=__builtin_FILE(), int line=__builtin_LINE()) {
+        if(index==kInvalid) return;
+        if(index>=capacity_ || state_[index]!=1) { note(index, false, file, line); return; }
+        state_[index]=2; gaveBack_[index]={file, line};
+        retiring_.emplace_back(retireAt_, index);
     }
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu(uint32_t index) const { auto h=heap_->GetCPUDescriptorHandleForHeapStart(); h.ptr+=size_t(index)*increment_; return h; }
-    void reset() { heap_.Reset(); capacity_=next_=0; free_.clear(); retiring_.clear(); retireAt_=0; }
+    void collect(uint64_t completed) {
+        while(!retiring_.empty() && retiring_.front().first<=completed) { const uint32_t i=retiring_.front().second; state_[i]=0; free_.push_back(i); retiring_.pop_front(); }
+    }
+    // Where a view is written. A slot that is not handed out is noted (the view is still written: its reader may be alive).
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu(uint32_t index, const char* file=__builtin_FILE(), int line=__builtin_LINE()) const {
+        if(index>=capacity_ || state_[index]!=1) note(index, true, file, line);
+        auto h=heap_->GetCPUDescriptorHandleForHeapStart(); h.ptr+=size_t(index)*increment_; return h;
+    }
+    void reset() { heap_.Reset(); capacity_=next_=0; free_.clear(); retiring_.clear(); retireAt_=0; state_.clear(); gaveBack_.clear(); misuse_.clear(); misuseCount_=0; }
 };
 
 // Views written into the shared heap. Raw buffers are read as ByteAddressBuffer.
-inline uint32_t raw_srv(ID3D12Device* device, DescriptorHeap& heap, ID3D12Resource* buffer, uint64_t bytes) {
+// at: where the view starts in the buffer, in bytes (a multiple of 16: D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT).
+inline uint32_t raw_srv(ID3D12Device* device, DescriptorHeap& heap, ID3D12Resource* buffer, uint64_t bytes, uint64_t at=0) {
     const uint32_t i=heap.allocate();
     D3D12_SHADER_RESOURCE_VIEW_DESC d{}; d.Format=DXGI_FORMAT_R32_TYPELESS; d.ViewDimension=D3D12_SRV_DIMENSION_BUFFER;
-    d.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; d.Buffer.NumElements=UINT(std::max<uint64_t>(bytes/4, 1));
+    d.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; d.Buffer.FirstElement=at/4; d.Buffer.NumElements=UINT(std::max<uint64_t>(bytes/4, 1));
     d.Buffer.Flags=D3D12_BUFFER_SRV_FLAG_RAW;
     device->CreateShaderResourceView(buffer, &d, heap.cpu(i)); return i;
 }
@@ -155,17 +195,22 @@ public:
 // A linear upload allocator per frame slot; the slot's memory is reused once the GPU finished that frame.
 class UploadRing {
     Buffer buffer_; uint64_t offset_=0;
+    // PT-87 (docs/agents/memory-2.md, memory3): the most any frame has taken of it since it was made, and how often a
+    // frame found it full. For the memory line: Windows counts the ring against the card's budget, so its size matters.
+    uint64_t peak_=0, full_=0;
 public:
-    void create(ID3D12Device* device, uint64_t size) { buffer_=make_buffer(device, size, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, "Create path tracing upload ring"); offset_=0; }
+    void create(ID3D12Device* device, uint64_t size) { buffer_=make_buffer(device, size, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, "Create path tracing upload ring"); offset_=0; peak_=full_=0; }
     void reset() { offset_=0; }
     bool valid() const { return bool(buffer_); }
     uint64_t capacity() const { return buffer_.size; }
+    uint64_t peak() const { return peak_; }
+    uint64_t found_full() const { return full_; }
     // Returns false when the slot is full; the caller then uploads through a buffer of its own.
     bool allocate(uint64_t bytes, uint64_t alignment, void** cpu, D3D12_GPU_VIRTUAL_ADDRESS* gpu, uint64_t* offset=nullptr) {
         const uint64_t start=(offset_+alignment-1)/alignment*alignment;
-        if(start+bytes>buffer_.size) return false;
+        if(start+bytes>buffer_.size) { ++full_; return false; }
         *cpu=static_cast<uint8_t*>(buffer_.mapped)+start; *gpu=buffer_.va()+start; if(offset) *offset=start;
-        offset_=start+bytes; return true;
+        offset_=start+bytes; peak_=std::max(peak_, offset_); return true;
     }
     ID3D12Resource* resource() const { return buffer_.resource.Get(); }
 };
@@ -178,5 +223,6 @@ public:
     void collect(uint64_t completed) { while(!items_.empty() && items_.front().first<=completed) items_.pop_front(); }
     void clear() { items_.clear(); }
     size_t size() const { return items_.size(); }
+    uint64_t bytes() const { uint64_t n=0; for(const auto& i:items_) { ComPtr<ID3D12Resource> r; if(SUCCEEDED(i.second.As(&r))) n+=allocation_bytes(r.Get()); } return n; }
 };
 } // namespace tgpt

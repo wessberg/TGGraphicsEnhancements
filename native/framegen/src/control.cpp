@@ -601,7 +601,7 @@ bool bootstrap_extension() {
     s.bootstrapAttempted=true;
     try {
         s.root=std::filesystem::path(module_path(s.self)).parent_path().wstring();
-        log("TGFG 1.2.0 frame generation extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
+        log("TGFG 1.2.3 frame generation extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
         if(!load_runtime()) {
             if(s.status.reason==uint32_t(Reason::ExistingStreamline)) return false; // never a second Streamline owner
             log("Continuing without NVIDIA Streamline: DLSS Frame Generation and Reflex are unavailable in this session");

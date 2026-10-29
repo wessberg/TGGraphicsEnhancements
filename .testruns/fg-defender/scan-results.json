@@ -1,0 +1,44 @@
+﻿[
+    {
+        "Name":  "FG previous public Mono 1.2.0",
+        "Path":  "C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\artifacts\\Packages\\TGFrameGeneration-1.2.0-Mono-20260928-002619-676-42fe2e33\\BepInEx\\TGFrameGeneration\\Native\\TGFG.Native.dll",
+        "Started":  "2026-10-09T17:27:16.9247199+02:00",
+        "ExitCode":  0,
+        "Output":  "Scan starting...\nScan finished.\nScanning C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\artifacts\\Packages\\TGFrameGeneration-1.2.0-Mono-20260928-002619-676-42fe2e33\\BepInEx\\TGFrameGeneration\\Native\\TGFG.Native.dll found no threats."
+    },
+    {
+        "Name":  "FG October 7, before community support",
+        "Path":  "C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\build\\nr\\install\\TGFrameGeneration\\TGFG.Native.dll",
+        "Started":  "2026-10-09T17:27:16.9712388+02:00",
+        "ExitCode":  0,
+        "Output":  "Scan starting...\nScan finished.\nScanning C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\build\\nr\\install\\TGFrameGeneration\\TGFG.Native.dll found no threats."
+    },
+    {
+        "Name":  "FG October 9 release 1.2.3",
+        "Path":  "C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\build\\nr\\mono-r17\\verified\\TGFrameGeneration-20261009-114849-173\\BepInEx\\TGFrameGeneration\\Native\\TGFG.Native.dll",
+        "Started":  "2026-10-09T17:27:17.0152745+02:00",
+        "ExitCode":  2,
+        "Output":  "Scan starting...\nScan finished.\nScanning C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\build\\nr\\mono-r17\\verified\\TGFrameGeneration-20261009-114849-173\\BepInEx\\TGFrameGeneration\\Native\\TGFG.Native.dll found 1 threats.\n\n\u003c===========================LIST OF DETECTED THREATS==========================\u003e\n----------------------------- Threat information ------------------------------\nThreat                  : Trojan:Win32/Wacatac.H!ml\nResources               : 1 total\n    file                : C:\\Users\\Frede\\Developer\\TGFOA\\TGFrameGeneration\\build\\nr\\mono-r17\\verified\\TGFrameGeneration-20261009-114849-173\\BepInEx\\TGFrameGeneration\\Native\\TGFG.Native.dll\n-------------------------------------------------------------------------------"
+    },
+    {
+        "Name":  "Better Upscaling installed release",
+        "Path":  "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Tainted Grail FoA\\BepInEx\\TGBetterUpscaling\\Native\\TGBetterUpscaling.Native.dll",
+        "Started":  "2026-10-09T17:27:17.0613042+02:00",
+        "ExitCode":  0,
+        "Output":  "Scan starting...\nScan finished.\nScanning C:\\Program Files (x86)\\Steam\\steamapps\\common\\Tainted Grail FoA\\BepInEx\\TGBetterUpscaling\\Native\\TGBetterUpscaling.Native.dll found no threats."
+    },
+    {
+        "Name":  "Graphics Bridge installed release",
+        "Path":  "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Tainted Grail FoA\\BepInEx\\TGBetterUpscaling\\Native\\TGGraphicsBridge.Native.dll",
+        "Started":  "2026-10-09T17:27:17.1011648+02:00",
+        "ExitCode":  0,
+        "Output":  "Scan starting...\nScan finished.\nScanning C:\\Program Files (x86)\\Steam\\steamapps\\common\\Tainted Grail FoA\\BepInEx\\TGBetterUpscaling\\Native\\TGGraphicsBridge.Native.dll found no threats."
+    },
+    {
+        "Name":  "Neural Rendering installed release",
+        "Path":  "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Tainted Grail FoA\\BepInEx\\TGNeuralRendering\\Native\\TGNeuralRendering.Native.dll",
+        "Started":  "2026-10-09T17:27:17.1402059+02:00",
+        "ExitCode":  0,
+        "Output":  "Scan starting...\nScan finished.\nScanning C:\\Program Files (x86)\\Steam\\steamapps\\common\\Tainted Grail FoA\\BepInEx\\TGNeuralRendering\\Native\\TGNeuralRendering.Native.dll found no threats."
+    }
+]

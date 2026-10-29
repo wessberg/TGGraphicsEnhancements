@@ -67,6 +67,10 @@ namespace TGGraphicsBridge
                 var ui = World.Any<AllSettingsUI>();
                 if (ui == null) return;
                 var alerted = new HashSet<object>();
+                if (Has(AlertRow.NeuralRendering))
+                {
+                    lock (registered) if (registered.TryGetValue(AlertRow.NeuralRendering, out var nr)) alerted.Add(VideoTab.Identity(nr));
+                }
                 if (Has(AlertRow.FrameGeneration))
                 {
                     lock (registered) if (registered.TryGetValue(AlertRow.FrameGeneration, out var fg)) alerted.Add(VideoTab.Identity(fg));
@@ -87,7 +91,8 @@ namespace TGGraphicsBridge
         private static void CheckStarts()
         {
             foreach (var mod in new[] { new { Folder = "TGFrameGeneration", Title = "TG Frame Generation", Row = AlertRow.FrameGeneration },
-                                        new { Folder = "TGBetterUpscaling", Title = "TG Better Upscaling", Row = AlertRow.Upscaling } })
+                                        new { Folder = "TGBetterUpscaling", Title = "TG Better Upscaling", Row = AlertRow.Upscaling },
+                                        new { Folder = "TGNeuralRendering", Title = "TG Neural Rendering", Row = AlertRow.NeuralRendering } })
             {
                 if (InstallCheck.LoadedFrom(mod.Folder) == null || Claimed(mod.Row)) continue;
                 Notices.Set("start." + mod.Folder, NoticeLevel.Problem, mod.Title, "Didn't start",

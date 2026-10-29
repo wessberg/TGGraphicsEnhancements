@@ -42,10 +42,10 @@ namespace TGPathTracing
             return diffuseAlbedo != 0 && specularAlbedo != 0 && normalRoughness != 0;
         }
 
-        // Ray Reconstruction's optional inputs for the frame being rendered, written by the composite as it applied the
+        // Ray Reconstruction's reflection distance and optional transparency snapshot, written by the composite with the
         // traced light: the traced reflections' hit distance (world units) and the frame's color right after the traced
         // light, before HDRP's transparent surfaces and particles (ID3D11Resource*, exactly width x height). false when
-        // the composite didn't write them this frame (TG Better Upscaling then leaves them out).
+        // composite didn't write reflection distance this frame (TG Better Upscaling then skips RR).
         public static bool TryGetExtraGuides(int width, int height, out ulong specularHitDistance, out ulong colorBeforeTransparency)
         {
             specularHitDistance = colorBeforeTransparency = 0;
@@ -53,7 +53,7 @@ namespace TGPathTracing
             if (GuidesFrame != Time.frameCount || tracer == null || !tracer.ReadGuides(out var guides)) return false;
             if (guides.Width != (uint)width || guides.Height != (uint)height || guides.ExtrasFrameIndex != guides.FrameIndex) return false;
             specularHitDistance = guides.SpecularHitDistance; colorBeforeTransparency = guides.ColorBeforeTransparency;
-            return specularHitDistance != 0 && colorBeforeTransparency != 0;
+            return specularHitDistance != 0;
         }
 
         public static void Ran(int frame) => lastRan = frame;

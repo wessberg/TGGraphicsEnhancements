@@ -1,16 +1,17 @@
-# TG Graphics Bridge, TG Frame Generation, TG Better Upscaling and TG Path Tracing
+# TG Graphics Bridge, TG Frame Generation, TG Better Upscaling, TG Path Tracing and TG Neural Rendering
 
-Three mods for Tainted Grail: The Fall of Avalon, built from this repository, and the part they share:
+Four mods for Tainted Grail: The Fall of Avalon, built from this repository, and the part they share:
 
 | | What it does |
 |---|---|
 | **TG Frame Generation** | Frame generation with NVIDIA DLSS, AMD FSR or Intel XeSS, plus NVIDIA Reflex, Intel XeLL or AMD Anti-Lag 2. |
+| **TG Neural Rendering** | DLSS 5 Neural Rendering before the camera effects, interface and frame generation capture, with a choice of before or after upscaling. Supports official and compatible community runtime DLLs, supplied by the player. Starts Off and requires DLSS upscaling. |
 | **TG Better Upscaling** | AMD FSR (FSR 4 on Radeon RX 9000, FSR 3.1 elsewhere) and Intel XeSS upscaling, as two more choices of the game's own Upscaling row next to STP and DLSS, and a newer DLSS DLL for the game's own DLSS. |
 | **TG Path Tracing** | A prototype of ReSTIR path traced lighting (the sun, every lamp, bounced light and reflections) for the Mono version, traced with DirectX Raytracing on the bridge's Direct3D 12 device, denoised by DLSS Ray Reconstruction (with TG Better Upscaling), AMD FSR Ray Regeneration or its own denoiser. In testing. |
 | **TG Graphics Bridge** | Bundled with each mod, not a download of its own. Hooks the game's Direct3D 11 device and swapchain from a BepInEx preloader, creates one private Direct3D 12 device on the same GPU, and loads the native part of every mod built on it. Also carries what both mods share in game: the Video-tab plumbing, the mod-manager integration and two fixes to the game's motion vectors. With both mods installed, one copy runs. |
 
-Both mods are native: they work from the game's own motion vectors and depth, the inputs a game
-with built-in support hands to these SDKs, and call each vendor's SDK directly, with no OptiScaler
+The mods are native: they work from the game's own motion vectors and depth, the inputs a game
+with built-in support hands to these runtimes, and call each vendor's runtime directly, with no OptiScaler
 or other wrapper in between. Their settings are rows in the game's own Video tab.
 
 The game renders with Direct3D 11. The bridge shares the game's textures with its Direct3D 12
@@ -21,10 +22,38 @@ post-processing.
 
 ## Status
 
-Version 1.1.0 of both mods and the bridge, the numbers they have on Nexus Mods (bridge, frame
-generation and upscaling ABI 0x00010100), for both
-versions of the game: the standard version (IL2CPP) with BepInEx 6 and the Mono modding branch with
-BepInEx 5.
+TG Neural Rendering 1.2.3 is built for both game versions. I have tested it with SDR and ReShade/RenoDX HDR on
+my RTX 5080. The community DLL also passes rendering, SDR/HDR, Ray Reconstruction and multipass checks on
+that card; its in-game check and testing on older RTX cards are still pending. Video and FoA
+Mod Manager have **Neural Rendering** (Off / DLSS), **Placement** (Quality / Performance), **Strength**,
+and **Advanced**. Advanced shows **Local Tone**, **Style** (Default/A/B/C),
+**Passes** (1-4), **Detail**, **Automatic Mask** and, with
+masking on, **Skin Detail**. Hiding those controls keeps your choices. Neural Rendering starts Off.
+I use NVIDIA's Default style, full strength, tone and detail, with automatic masking Off for both placements. Quality runs
+after upscaling and is the default. Performance uses fewer pixels before upscaling, but can soften detail
+and show larger colour or brightness changes after you stop moving. Ray Reconstruction requires Quality.
+For a look closer to the original lighting and colour, lower Local Tone. Lower Strength to reduce the whole
+effect, including detail; zero keeps the original scene. These controls range from 0 to 1 and apply to each pass.
+I default to one pass. Extra passes feed the result back through NR, using the same settings each time.
+They cost more GPU time and memory and can exaggerate colour changes or artifacts. Two passes at half
+Strength are not the same as one at full Strength; Strength is not a final opacity blend.
+The main row greys out unless DLSS and the other requirements are available, with the reason in its tooltip.
+The runtime is not bundled. Close the game and put your `nvngx_dlssnr.dll` at
+`BepInEx/TGNeuralRendering/Native/DLSS/nvngx_dlssnr.dll` (create the `DLSS` folder if needed), then restart.
+
+The original NVIDIA-signed 310.8.0.0 DLL uses the normal NVIDIA path. Compatible patched DLLs use a separate
+adapter included with the mod. Selection is automatic: no extra setting, separate adapter download or list of
+approved community files. Compatible new patches can be swapped in without updating the mod; a change to
+the runtime's interface may still need a mod update.
+
+This includes the community patch intended for RTX 2000, 3000 and 4000 cards. I have tested the patched DLL
+on my RTX 5080, but have not confirmed it on those older cards. [DLL guidance](docs/nexus-neural-rendering.md).
+[Test results and remaining checks](docs/DLSS5-COMPATIBILITY.md). [Implementation](docs/DLSS5-IMPLEMENTATION.md).
+
+Version 1.2.3 of TG Frame Generation, TG Better Upscaling, TG Neural Rendering and the bridge, the numbers they have on Nexus
+Mods (bridge and frame generation ABI 0x00010100, upscaling 0x00010400), for both versions of the game: the
+standard version (IL2CPP) with BepInEx 6 and the Mono modding branch with BepInEx 5. TG Path Tracing
+(1.2.0, ABI 0x00011300) is a prototype for the Mono version only.
 
 TG Frame Generation's behaviour is unchanged from 0.5.0, which was tested in game on an RTX 5080
 with the Mono build:
@@ -118,19 +147,20 @@ last (one bounce by default), the sky's too; and traced reflections. HDRP's own 
 diffuse light (probes, lightmaps, SSGI) is off while tracing, and only lights that stand for something that
 emits light (a flame, a candle, a lamp, a magic effect) are traced: the ones placed to fake the light raster
 rendering lacks (fill lights, the light that follows the player) are left out. HDRP's emission is kept. Forward-lit
-surfaces (hair, eyes), transparents, water, particles and fog keep HDRP's lighting, with the game's own
+surfaces (hair, eyes), transparents, particles and fog keep HDRP's lighting, with the game's own
 ambient light; hair and eyes darkened by the traced shadows of the lights HDRP casts no shadows for.
 
 How it fits into HDRP's frame: a Harmony prefix on HDRP's opaque `RenderSSR`, which runs right after
 the GBuffer, records a custom pass that hands GBuffers 0 to 3, depth with stencil, motion vectors and
 the exposure to the bridge's Direct3D 12 device. There, compute shaders with inline ray tracing
 (DirectX Raytracing 1.1, Shader Model 6.6) trace the scene near the camera on an async compute queue,
-alongside HDRP's shadows and lighting. The result is denoised (SVGF-style temporal accumulation and
-a-trous filtering), stored divided by the diffuse color, and applied a frame later by a custom pass
-after opaque lighting and the sky, before fog: reprojected through that frame's motion vectors,
-checked against its depth and multiplied by its own full-resolution albedo. The game's Direct3D 11
-frame never waits for Direct3D 12 work of the same frame; outside the game that keeps the cost of the
-two APIs working together to about 1.5 ms a frame on top of the tracing itself.
+alongside HDRP's shadows and lighting. The camera's rays carry the sub-pixel shift HDRP gives its
+camera that frame and tells its upscaler. The result is denoised (SVGF-style temporal accumulation and
+a-trous filtering) and laid into HDRP's color buffer in that same frame by a custom pass after opaque
+lighting and the sky, before fog: Direct3D 11 waits there on the GPU for the frame's trace, and each
+pixel takes its own texel. (Until 2026-10-08 the light was applied a frame later, moved by that frame's
+motion vectors, so that Direct3D 11 never waited for Direct3D 12: the upscaler then got samples that
+did not lie where it was told, and every traced edge came out as a stair of render pixels.)
 
 The traced scene is rebuilt from what the game draws near the camera every two seconds: GameObjects
 with mesh renderers, the world Awaken's ECS renderer (Drake) draws, the trees and large objects
@@ -142,7 +172,7 @@ testing, and their metallic and smoothness, texel by texel from the mask map whe
 material's shader reads it (HDRP Lit's and the game's own); a metal drawn forward has no diffuse color, as in
 HDRP's metallic workflow, and where a path meets one it sends its reflected light on as diffuse light (its base color). Lights are HDRP's point and spot lights and its sun, in HDRP's units; rays that escape
 sample HDRP's sky reflection. Not traced, though HDRP still draws and lights them: statically batched
-renderers, particles and water (rays pass through it; its reflections are traced, see Water Reflections). They
+renderers and particles. They
 cast no traced shadows and bounce no traced light.
 
 Where the GPU and driver offer DirectX Raytracing 1.2 (Shader Model 6.9 and raytracing tier 1.2, for
@@ -156,18 +186,20 @@ anything loads Direct3D 12, when it is newer than both Windows' runtime and the 
 The micromaps change no pixel: outside the game the same frames with and without them are identical.
 
 The options are rows of the game's Video settings, after the upscaling and frame generation rows:
-Path Tracing (Off, On) and, nested under it while it is on, Denoising, Exposure, Dark Adaptation, Shadow Detail,
-Rays Per Pixel, Bounces, Radiance Cache, Indirect Color, Reflections, Water Reflections, Hair Shadows, Fill Light Fog, Spatial Samples,
-Boiling Filter, Emissive Lights, Crevice Light, Ray Distance, Scene Radius, Sky Intensity, Reflection Boost and Debug View.
+Path Tracing (Off, On) and, nested under it while it is on, Denoising, Exposure, Dark Adaptation,
+Rays Per Pixel, Bounces, Radiance Cache, Indirect Color, Reflections, Caustics, Fill Light Fog, Spatial Samples,
+Boiling Filter, Emissive Lights, Crevice Light, Sky Intensity, Reflection Boost and Debug View.
 FoA Mod Manager lists exactly the same rows; the hotkeys are in the config only.
 
-Water Reflections (On by default): the game's water (HDRP's water system) takes its reflections from HDRP's
-screen-space reflections, which find only what is on screen, and fills the rest from reflection probes and the
-sky. Right after that step the traced reflection replaces all of it, what HDRP's screen-space step found too (trees
-overhead, the bank behind the camera, grass within 20 m: rays from the water into the traced scene), while the water's
-shading (Fresnel, foam, refraction, fog) stays the game's. They are traced from HDRP's water depth and wave normals a frame late, averaged over frames and
-filtered over a few pixels, since no denoiser sees the water; leaves and grass in them are lit through from
-behind as on screen. Liquids that take HDRP's screen-space reflections get the same.
+I'm moving water into the traced picture, with the game's waves, reflections, refraction and absorption. The waves
+are real triangles in the traced scene, moved every frame by the game's own wave data, so the camera, mirrors, bounced
+light and shadows all meet the same water. The separate Water Reflections row is gone. This work is still being
+checked; the remaining gaps and build status are in [the water report](docs/agents/water-4.md).
+
+Caustics (On by default): the sun and lamps shining through a glass bottle, flask or potion are bent and focused by
+it into a bright spot or line in its shadow (manifold next event estimation on the glass's smooth surface). Sunlight
+reaching a lake bed or a pool's floor bends through the waves. Light reflected from those waves can reach a bridge,
+boat or overhanging rock. The tracer follows those light paths; it does not use the game's caustic pattern texture.
 
 The Denoising row lists what this PC runs: None; NRD, NVIDIA's Real-Time Denoisers (RELAX, on any GPU with
 DirectX Raytracing); Ray Regeneration, AMD's FSR Ray Regeneration (Radeon RX 9000, AMD's signed DLLs in
@@ -195,9 +227,10 @@ frame), so they shadow themselves and the floor and block the light that bounces
 read back once (only the submeshes the game draws), with their texture coordinates, so torn cloth edges are cut
 out by their texture's alpha as HDRP draws them (skin never is), and hair stops a ray as much as its strands
 cover a texel, casting soft shadows; transparent parts are left out of the traced scene, and eyes are seen by camera
-rays only. Thin skin lit from behind (ears, nostrils, fingers) lets through the light HDRP's transmission does, where
-the traced geometry is thin enough, and hair and eyes, which HDRP shades itself, take the traced shadows of the
-lights HDRP casts none for (Hair Shadows).
+rays only. Hair and eyes are shaded by the tracer, their colors baked from the game's own hair and eye shaders; while
+tracing, hair, eyebrows and lashes stay opaque as the game draws hair far away, and the eyes' transparent cornea is
+hidden. Thin skin lit from behind (ears, nostrils, fingers) lets through the light HDRP's transmission does, where
+the traced geometry is thin enough.
 Rays start from the surfaces HDRP drew, which can lie a few centimetres inside the traced meshes (an arch drawn
 smoother than its triangles): a ray that first meets the inside of a mesh within about 15 cm passes out through
 it rather than finding no light. Lamps cast shadows as sharp as their HDRP Radius makes them.
@@ -369,6 +402,7 @@ are git-ignored):
 | `AntiLag2-SDK-2.0.0a` | AMD Anti-Lag 2 SDK 2.0.0a release archive |
 | `DLSS-SDK-310.9.1` | `lib/Windows_x86_64/rel/nvngx_dlss.dll` and `LICENSE.txt` from NVIDIA's DLSS SDK 310.9.1 |
 | `RTXDI-Library-3.1` | NVIDIA's RTXDI runtime library 3.1 (`git clone https://github.com/NVIDIA-RTX/RTXDI-Library`), compiled into TG Path Tracing |
+| `NVAPI-R615` | NVIDIA's NVAPI R615 (`git clone https://github.com/NVIDIA/nvapi`): its header and `amd64/nvapi64.lib`. Needed only for a build with `-DTGPT_MEGA_GEOMETRY=ON` (TG Path Tracing's RTX Mega Geometry path, in testing); a build without that switch does not look for it |
 
 CMake fetches MinHook v1.3.4 unless `-MinHookRoot` is given. The game needs the matching BepInEx
 already installed. `docs/SOURCES.md` links every SDK release.
@@ -408,6 +442,43 @@ upscaling tests, compile the HLSL and run the GPU smoke test; `tests/source_chec
 `tests/test_autoload_integration.py` and `tests/package_tests.ps1` check sources and packaging, and
 `tests/InstallCheck.Tests.csproj` runs the install check on folders laid out the ways players unpack the mods.
 `docs/TESTING.md` has the in-game test sequence.
+
+## Freeing disk space
+
+Three folders keep growing. The in-game test runs (`docs/PT-HARNESS.md`) land in `artifacts/harness`, and their
+raw frames took 307 GB after three days. Every packaging run leaves a folder and a zip per mod in
+`artifacts/Packages`: 62 GB after two weeks. The parallel workers (`docs/AGENT-WORKERS.md`) build and test in
+`%TEMP%\tgb`: 145 GB after six days. `tools/harness/Clear-PtHarnessRuns.ps1` clears all three:
+
+```powershell
+# What would go and how much space that frees. Deletes nothing.
+.\tools\harness\Clear-PtHarnessRuns.ps1
+
+# The same, with a line for every run
+.\tools\harness\Clear-PtHarnessRuns.ps1 -List
+
+# Delete it
+.\tools\harness\Clear-PtHarnessRuns.ps1 -Apply
+
+# Delete it, but leave the neural rendering runs alone
+.\tools\harness\Clear-PtHarnessRuns.ps1 -Keep 'nr-*' -Apply
+
+# Keep only the newest 3 runs whole (the default is 10)
+.\tools\harness\Clear-PtHarnessRuns.ps1 -KeepWhole 3 -Apply
+
+# Delete every old package, the newest ones too (the default keeps 1 of each)
+.\tools\harness\Clear-PtHarnessRuns.ps1 -KeepPackages 0 -Apply
+
+# Delete the workers' folders nothing was written to for half a day (the default is 2 days; 0 leaves them alone)
+.\tools\harness\Clear-PtHarnessRuns.ps1 -WorkerDays 0.5 -Apply
+```
+
+The newest 10 runs stay as they are. Older runs lose their raw frames (`.raw`, `.hdrraw`, `.bin`) and keep
+their pictures, reports and logs. Runs older than 14 days are deleted whole unless a doc names them;
+`-DeleteAfterDays 0` turns that off. Of the packages, the newest of each mod, version and game version stays,
+folder and zip. The zips for Nexus in `artifacts/Nexus` are never touched. Of the workers' folders in
+`%TEMP%\tgb`, those nothing was written to for 2 days go; the workers' tree copies are never touched. The script
+leaves `builds` and `_config-backup` alone, and deletes nothing while a test run is going.
 
 ## Diagnostics
 
@@ -452,7 +523,7 @@ both mods.
   recovery or unloading the native DLLs while the game runs.
 - HDR10 output from frame generation is 10-bit PQ and clips outside its range and gamut.
 - TG Path Tracing traces only what it captures (see its section): statically batched renderers,
-  particles and water are missing from the traced scene. Forward-lit surfaces (hair, eyes) keep HDRP's
+  particles are missing from the traced scene. Forward-lit surfaces (hair, eyes) keep HDRP's
   lighting rather than the traced light. Meshes stay registered as the camera travels; past 2.5 GB of traced geometry the traced scene
   starts over from what is near the camera.
 

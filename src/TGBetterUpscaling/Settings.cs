@@ -7,12 +7,16 @@ using BepInEx.Configuration;
 using TGGraphicsBridge;
 namespace TGBetterUpscaling
 {
-    // The game's Upscaling row, by index: the game's own None, STP and DLSS, then the two this mod adds.
+    // The game's Upscaling row, by index: the game's own None, STP and DLSS, then FSR and XeSS. Game builds from
+    // October 2026 have an FSR entry of their own at index 3 (HDRP's FSR 2); older ones get this mod's there.
     public enum UpscalerSetting { None = 0, STP = 1, DLSS = 2, FSR = 3, XeSS = 4 }
-    // What this GPU and game build offer, from the game (STP, DLSS) and the native side (FSR, XeSS).
+    // What this GPU and game build offer, from the game (STP, DLSS, its FSR 2) and the native side (FSR, XeSS).
     internal sealed class Capabilities
     {
         internal readonly bool Known, Stp, Dlss, Fsr, Xess;
+        // The name of the game's own FSR entry (HDRP's FSR 2) where this game build has one and the game offers it on
+        // this PC, else null. It upscales only where AMD's runtime reported no FSR to this mod (Fsr is false).
+        internal readonly string GameFsr;
         internal readonly string[] FsrVersions; // AMD's names, in the order the runtime reports them
         // The FSR version that runs on this GPU: AMD's default, the newest its runtime offers here (the native log
         // confirms it when FSR starts). Null without FSR.
@@ -21,9 +25,9 @@ namespace TGBetterUpscaling
         // that upscaler keeps the game's render-scale slider.
         internal readonly QualityMode[] DlssModes, FsrModes, XessModes;
         internal Capabilities(bool known, bool stp, bool dlss, bool fsr, bool xess, IList<string> fsrVersions,
-            IEnumerable<QualityMode> dlssModes = null, IEnumerable<QualityMode> fsrModes = null, IEnumerable<QualityMode> xessModes = null)
+            IEnumerable<QualityMode> dlssModes = null, IEnumerable<QualityMode> fsrModes = null, IEnumerable<QualityMode> xessModes = null, string gameFsr = null)
         {
-            Known = known; Stp = stp; Dlss = dlss;
+            Known = known; Stp = stp; Dlss = dlss; GameFsr = gameFsr;
             // FSR and XeSS take HDRP's place for STP, so they need what STP needs.
             Fsr = fsr && stp; Xess = xess && stp;
             FsrVersions = (fsrVersions ?? new string[0]).ToArray();
@@ -41,7 +45,7 @@ namespace TGBetterUpscaling
                 case UpscalerSetting.None: return true;
                 case UpscalerSetting.STP: return Stp;
                 case UpscalerSetting.DLSS: return Dlss;
-                case UpscalerSetting.FSR: return Fsr;
+                case UpscalerSetting.FSR: return Fsr || GameFsr != null;
                 case UpscalerSetting.XeSS: return Xess;
             }
             return false;
@@ -50,10 +54,11 @@ namespace TGBetterUpscaling
         // What the Upscaling row and FoA Mod Manager call an upscaler: FSR by the short name of the version that runs
         // ("FSR 4", "FSR 3.1": the major and minor number of AMD's version name, a .0 minor dropped), its full version in the
         // FSR rows' tooltips and the logs; the others by name. The config keeps the plain name ("FSR"), so a stored choice
-        // stays valid whatever version a later session runs.
+        // stays valid whatever version a later session runs. The game's own FSR 2, where it upscales, keeps the game's name.
         internal string LabelOf(UpscalerSetting upscaler)
         {
             string version = upscaler == UpscalerSetting.FSR ? ShortVersion(FsrVersion) : null;
+            if (upscaler == UpscalerSetting.FSR && !Fsr && GameFsr != null) return GameFsr;
             return version != null ? "FSR " + version : upscaler.ToString();
         }
         internal static string Label(UpscalerSetting upscaler) => Session.Settings?.Capabilities?.LabelOf(upscaler) ?? upscaler.ToString();
@@ -282,7 +287,8 @@ namespace TGBetterUpscaling
             // also when the offered upscalers stayed the same and the entry wasn't bound again.
             rows[UpscalerKey].ChoiceLabels = string.Join(";", upscalers.Select(u => u + "=" + label(u.ToString())).ToArray());
             rows[UpscalerKey].Visible = !known || upscalers.Length > 1;
-            rows[SharpnessKey].Visible = Upscaler == UpscalerSetting.FSR;
+            // FSR Sharpness is this mod's FSR's: the game's own FSR 2 has the game's render-scale slider and nothing else.
+            rows[SharpnessKey].Visible = Upscaler == UpscalerSetting.FSR && (!known || caps.Fsr);
             // Each upscaler's modes as its runtime reports them, listed for the selected upscaler only, as
             // in the Video tab. Until the runtimes report, every stored name is kept.
             foreach (var u in WithModes)

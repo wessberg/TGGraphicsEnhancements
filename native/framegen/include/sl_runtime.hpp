@@ -23,6 +23,7 @@
 #include "tgfg_policy.hpp"
 #include "tgfg_ring.hpp"
 #include "tgb/bridge_api.hpp"
+#include "tgb/ngx_session.hpp"
 namespace tgfg {
 using Microsoft::WRL::ComPtr;
 struct Streamline {
@@ -100,7 +101,8 @@ struct State {
     HMODULE self=nullptr;
     std::wstring root, runtimeDir;
     std::string engineVersionUtf8;
-    std::array<const wchar_t*,2> pluginPaths{};
+    std::array<const wchar_t*,3> pluginPaths{};
+    std::wstring neuralRenderingDir;
     std::wstring rayReconstructionDir; // TG Better Upscaling's DLSS folder, when NGX here must find Ray Reconstruction
     std::array<sl::Feature,3> features{{sl::kFeatureDLSS_G,sl::kFeatureReflex,sl::kFeaturePCL}};
     TGFG_Request request{};
@@ -227,6 +229,7 @@ void* vtable_original(void* object,size_t slot);
 // Streamline, FSR and XeSS create swapchains and factories through the same DXGI entry points the
 // game uses; while this is set, both this extension's hooks and the bridge's pass those calls through.
 struct SLGuard {
+    tgb::NgxScope ngxSession;
     bool previous, hostPrevious;
     SLGuard():previous(insideSL),hostPrevious(host().set_internal(true)){insideSL=true;}
     ~SLGuard(){insideSL=previous;host().set_internal(hostPrevious);}

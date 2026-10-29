@@ -1,0 +1,37 @@
+--- a/BACKLOG.md
++++ b/BACKLOG.md
+@@ -91,6 +91,8 @@
+   editor. Asked the owner 2026-09-28 whether to move the capture (F7?); their keyboard has no Insert key.
+ 
+ Frame generation, upscaling, bridge:
++- 2026-10-07 (round-07): native DLSS 5 spec: `docs/DLSS5-SPEC.md`. Direct NGX, no RenoDX/ReShade.
++  Owner assigns implementation elsewhere. SDK access, D3D12 contract and runtime release rights unconfirmed.
+ - Hitches on fast pans with all three FG backends (Streamline: "Frame rate over 100.00ms"), open since 2026-09-20.
+ - `reflex.crossAdapterCopy=1.3ms` with `crossAdapter=0` (the 4060 laptop report): unexplained.
+ - Menu-text bloom with RenoDX's DLSS 5 add-on and our mods (the owner suspects the add-on's Present stage).
+--- a/ROUNDS.md
++++ b/ROUNDS.md
+@@ -3,6 +3,8 @@
+ Newest round on top. One file per round in `docs/rounds/`: read the newest, and older ones only when you need them.
+ Each round's file ends with a "▶ Starter prompt" for the next session. A round is one working session or day.
+ 
++## [Round 7](docs/rounds/round-07.md) - 2026-10-07 - native DLSS 5 feasibility and high-level handoff spec (`docs/DLSS5-SPEC.md`), requested for another implementation agent. Direct NGX is evidenced by NVIDIA's Vulkan sample and its internal beta-package override example; no public NR package download established. SDK access, D3D12 contract and runtime release rights remain unconfirmed. One shared bridge device, NR after tone mapping/before UI, explicit post-NR FG capture and NGX search-path coordination. NVIDIA inquiry drafted, not sent. Corrected the old "impossible" claim. Documentation only; source checks 88/88. Path tracing's ongoing work remains in round-06.
++
+ ## [Round 2](docs/rounds/round-02.md) - 2026-09-26 evening to 2026-09-28 01:34 - TG Path Tracing in game with the owner: ReSTIR moved onto NVIDIA RTXDI 3.1; the traced light got its own exposure while HDRP keeps the game's; lights chosen by what they belong to and traced at physical reach; Ray Reconstruction back after a night off; NRD for GPUs without RR; Exposure, Dark Adaptation and Shadow Detail rows; glass, skin scattering, metals from mask maps, water reflections, a radiance cache, glowing surfaces as lights, characters with hair strands (five subagents); the game's fog kept; per-stage GPU timings and a boiling measure in the F8 capture; Bounces 1; Fill Light Fog; the first player report's fixes for TGFG and TGBU. Committed and pushed as 166bd58; later that night hair moved into the tracer, the direct light's history went to 4 (a cage's boiling), and this harness replaced private agent memory (committed and pushed after 166bd58). New hard rule: no HDRP shading while tracing. Next: far hair, the eyes, see-through glass.
+ 
+ ## [Round 1](docs/rounds/round-01.md) - 2026-09-18 to 2026-09-26 21:21 (retroactive) - TG Frame Generation from the 0.3 load crash to 1.2.0: native Video rows, FSR and XeSS frame generation, HDRP's own inputs, the input flip for all three backends, the HUD-less frame, Exclusive Fullscreen, IL2CPP; the split into TG Frame Generation and TG Better Upscaling on a bundled TG Graphics Bridge (1.1.0, matching Nexus); the troubleshooting report and three reviews (1.2.0); TG Path Tracing from its first build to Ray Reconstruction, DXR 1.2 and traced characters and castle walls, before its move to RTXDI (commit c269d60).
+--- a/docs/PROJECT-CONTEXT.md
++++ b/docs/PROJECT-CONTEXT.md
+@@ -488,9 +488,9 @@
+ - Camera cuts reset every history: a new camera, HDRP's `resetPostProcessingHistory` rising edge, a > 60 degree turn,
+   a > 20 m jump. The radiance cache survives cuts.
+ - DLSS 5 with tracing: with RR, upscaling is TGBU's RR on the bridge device, and the add-on's neural rendering binds
+-  to its own proxy ("BindDevice rejected a distinct live D3D12 device"): an add-on limitation, told to the owner. The
+-  public DLSS SDK 310.9.1 has no neural-rendering API, so a DLSS 5 of our own isn't possible. `ReShade.log` sits in the
+-  game root and stays open while the game runs: copy it to read it.
++  to its own proxy ("BindDevice rejected a distinct live D3D12 device"): an add-on limitation. R7 corrects "impossible":
++  310.9.1 lacks a public NR API; NVIDIA's sample requires a beta NGX SDK. Direct bridge NGX spec: `docs/DLSS5-SPEC.md`.
++  SDK access, D3D12 contract and NR release rights unconfirmed. First NGX paths and post-NR FG capture need coordination.
+ 
+ ### 9.7 Surfaces
+ - Metals: path vertices are diffuse-only, so `SurfaceMaterial.reflectance` = base colour (a metal's specular energy

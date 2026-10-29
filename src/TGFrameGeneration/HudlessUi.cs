@@ -10,46 +10,19 @@ using Il2CppInterop.Runtime.Injection;
 #endif
 namespace TGFrameGeneration
 {
-    internal sealed class HudlessPass : CustomPass
-    {
-#if BEPINEX_IL2CPP
-        public HudlessPass(IntPtr pointer) : base(pointer) { }
-        internal HudlessPass() : base(ClassInjector.DerivedConstructorPointer<HudlessPass>())
-        {
-            ClassInjector.DerivedConstructorBody(this);
-            Il2CppTypes.Construct(this, typeof(CustomPass), "NativeMethodInfoPtr__ctor_Protected_Void_0");
-        }
-        private new void Execute(CustomPassContext ctx) => HudlessUi.Execute(ctx);
-#else
-        protected override void Execute(CustomPassContext ctx) => HudlessUi.Execute(ctx);
-#endif
-    }
     internal static class HudlessUi
     {
-        private static GameObject host;
+        private static bool installed;
         private static bool active, failed;
         private static string lastLayout;
         internal static string Detail { get; private set; } = "Not installed.";
         internal static void Initialize()
         {
-            if (host != null) return;
+            if (installed) return;
             try
             {
-#if BEPINEX_IL2CPP
-                Il2CppTypes.Register<HudlessPass>();
-#endif
-                host = new GameObject("TGFG HUD-less color") { hideFlags = HideFlags.HideAndDontSave };
-                host.SetActive(false);
-                UnityEngine.Object.DontDestroyOnLoad(host);
-                var volume = host.AddComponent<CustomPassVolume>();
-                volume.isGlobal = true;
-                volume.injectionPoint = CustomPassInjectionPoint.AfterPostProcess;
-                volume.customPasses.Add(new HudlessPass
-                {
-                    name = "TGFG HUD-less color",
-                    targetColorBuffer = CustomPass.TargetBuffer.None,
-                    targetDepthBuffer = CustomPass.TargetBuffer.None
-                });
+                ScenePostProcess.Register(ScenePostStage.FrameGenerationCapture, Execute);
+                installed = true;
                 failed = false;
                 Detail = "HDRP color pass installed; awaiting gameplay.";
             }
@@ -57,11 +30,11 @@ namespace TGFrameGeneration
         }
         internal static void BeginGameplayCamera()
         {
-            bool want = !failed && host != null && Session.Bridge != null && Session.Bridge.CanSetHudless &&
+            bool want = !failed && installed && Session.Bridge != null && Session.Bridge.CanSetHudless &&
                 Session.Settings.HudlessCapture.Value && Session.Selected.Backend != FrameGenerationSetting.Off;
             if (want == active) return;
             active = want;
-            host?.SetActive(want);
+            ScenePostProcess.SetActive(ScenePostStage.FrameGenerationCapture, want);
             Session.Bridge?.SetHudlessCapture(want);
             Detail = want ? "Capturing HDRP color before overlay UI; native verification pending." : "Off.";
         }
@@ -118,14 +91,14 @@ namespace TGFrameGeneration
         internal static void Reset()
         {
             active = false;
-            host?.SetActive(false);
+            ScenePostProcess.SetActive(ScenePostStage.FrameGenerationCapture, false);
             Session.Bridge?.SetHudlessCapture(false);
         }
         internal static void Dispose()
         {
             Reset();
-            if (host != null) UnityEngine.Object.Destroy(host);
-            host = null;
+            ScenePostProcess.Unregister(ScenePostStage.FrameGenerationCapture);
+            installed = false;
             lastLayout = null;
         }
     }

@@ -13,7 +13,7 @@ namespace TGPathTracing
     {
         public const string Id = "com.wessberg.tgpathtracing";
         public const string Name = "TG Path Tracing";
-        public const string Version = "1.2.0";
+        public const string Version = "1.2.3";
         private void Awake()
         {
             ModManagers.KeepOutOfAvalon(Id, Logger);
@@ -26,7 +26,8 @@ namespace TGPathTracing
     }
     public sealed class PathTracingBehaviour : MonoBehaviour
     {
-        private void Update() { Session.Tick(); }
+        private void Update() { HdrpPasses.MarkUpdate(); Session.Tick(); ParticleDiagnostic.Tick(); } // (MarkUpdate: PT-107's clock)
+        private void LateUpdate() { HdrpPasses.MarkLateUpdate(); } // (PT-107's clock)
         private void OnApplicationQuit() { Session.Stop(); }
     }
 }

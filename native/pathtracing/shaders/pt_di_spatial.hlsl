@@ -26,9 +26,15 @@ void main(uint2 p : SV_DispatchThreadID) {
     Surface s = surface.s;
 
     Rng rng = make_rng(p, g.size.z, 4);
-    float offset = ray_offset(s.distance);
-    float nearBack = near_back(s.distance);
+    float offset = surface_offset(s);
+    float nearBack = surface_near_back(s);
     float3 localDiffuse = 0.0, spec = 0.0;
+    // A leaf or a blade of grass lit from behind takes the light its diffusion profile lets through, tinted, as HDRP does
+    // (leaf_tint); ReSTIR weighs its samples with the grey share (translucent_cos), only the final shading takes the color.
+    // Where its material's own share is known (leaf_transmittance), a light's cosine is HDRP's own, wrapped from behind (leaf_cos).
+    float3 leafThrough;
+    const bool hdrpLeaf = leaf_transmittance(p, s, leafThrough);
+    const float3 backTint = hdrpLeaf ? leafThrough / s.through : float3(1.0, 1.0, 1.0);
 
     if (frame_has_lights()) {
         RTXDI_DIReservoir r = RTXDI_LoadDIReservoir(g.rtxdiReservoirs, p, g.rtxdi.x);
@@ -58,6 +64,8 @@ void main(uint2 p : SV_DispatchThreadID) {
         if (any(through > 0.0)) {
             float3 d, sp;
             rtxdi_shade(ls, surface, d, sp);
+            if (hdrpLeaf) d = ls.irradiance * leaf_cos(s.normal, ls.dir, leafThrough) / PI;
+            else if (dot(s.normal, ls.dir) < 0.0) d *= backTint;
             localDiffuse = d * W * through; spec = sp * W * through;
             // See-through glass's reflection ray finds this light's sphere itself (pt_specular reflected_lamps).
             if (s.glass && reflected_as_sphere(RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(r), false).l)) spec = 0.0;
@@ -66,20 +74,26 @@ void main(uint2 p : SV_DispatchThreadID) {
     float3 sunDiffuse = 0.0;
     if (g.sunColor.w > 0.0) {
         float3 l = cone_sample(g.sunDir.xyz, g.sunDir.w, rng.next2());
-        float nl = translucent_cos(s.normal, l, s.through); // a grass blade, a leaf or thin cloth is lit through from behind too
-        float3 sunOrigin = shadow_origin(s.position, s.geoNormal, l, offset, s.translucent);
-        // Thin skin takes the light HDRP transmits through it too (skin_transmission): a little past the terminator in front,
-        // and from behind through the skin itself (through_skin).
-        const float3 skinThrough = g.sunColor.rgb * skin_transmission(s, l) / PI;
+        // A grass blade, a leaf or thin cloth is lit through from behind too; hair about its strand, from either side (strand_cos).
+        float nl = surface_cos(s, surface.view, l);
+        float3 sunOrigin = shadow_origin(s, l, offset);
         float3 through = 0.0;
-        if (nl > 0.0 && !through_skin(s, l)) through = transmittance_from_surface(sunOrigin, l, 0.0, g.params.y, nearBack);
+        if (nl > 0.0) through = transmittance_from_surface(sunOrigin, l, 0.0, g.params.y, nearBack);
+        // Through a closed glass object the sun's light is bent and focused: its caustic (caustic_through).
+        if (g_glassMet >= 2 && any(through > 0.0)) through = caustic_through(sunOrigin, s.normal, s.geoNormal, l, 0.0, true, through);
+        const float sunFog = sun_fog(s.position); // HDRP's fog between the surface and the sun (pt_common directional_fog)
+        through *= sunFog;
         if (any(through > 0.0)) {
             sunDiffuse = g.sunColor.rgb * nl * terminator_softening(s, l) / PI;
-            sunDiffuse = (sunDiffuse + skinThrough) * through;
+            if (hdrpLeaf) sunDiffuse = g.sunColor.rgb * leaf_cos(s.normal, l, leafThrough) / PI;
+            else if (dot(s.normal, l) < 0.0) sunDiffuse *= backTint;
+            sunDiffuse *= through;
             // See-through glass's reflection ray finds the sun's disc itself (pt_specular).
-            if (dot(s.normal, l) > 0.0 && !s.glass) spec += g.sunColor.rgb * through * ggx_specular(s.normal, surface.view, l, s.f0, roughness_alpha(s.roughness));
-        } else if (through_skin(s, l) && transmitted_unoccluded(s, l, g.params.y)) sunDiffuse = skinThrough;
+            // Hair's are its highlights along the strands (hair_specular).
+            if (dot(s.normal, l) > 0.0 && !s.glass)
+                spec += g.sunColor.rgb * through * (s.hair ? hair_specular(s, surface.view, l) : ggx_specular(s.normal, surface.view, l, s.f0, roughness_alpha(s.roughness)));
+        }
     }
-    sun[p] = float4(to_storage(sunDiffuse + clamp_radiance(localDiffuse, LIMIT_DIRECT)), 1.0);
-    specular[p] = float4(to_storage(clamp_radiance(spec, LIMIT_DIRECT)), HIT_DISTANCE_MISS); // the reflection pass sets its own
+    sun[p] = float4(to_storage(sunDiffuse + finite_radiance(localDiffuse)), 1.0);
+    specular[p] = float4(to_storage(finite_radiance(spec)), HIT_DISTANCE_MISS); // the reflection pass sets its own
 }

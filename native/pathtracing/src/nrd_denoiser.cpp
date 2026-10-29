@@ -7,6 +7,7 @@ namespace tgpt::shaders {
 #include "pt_nrd_prep.h" // the prep pass, compiled by DXC at build time
 }
 #endif
+#include <cmath>
 #include <cstring>
 
 namespace tgpt {
@@ -24,8 +25,14 @@ struct Runtime {
     uint32_t increment=0, tableSize=0, textures=0, setsPerSlot=0;
     // The prep pass, on the tracer's root signature (recreated with it).
     ComPtr<ID3D12PipelineState> prep; ID3D12RootSignature* prepRoot=nullptr;
+    uint32_t kind=1; // NrdFrame::kind the instance runs
     bool available=false;
 } rt;
+
+// The denoiser an instance runs, by NrdFrame::kind (REBLUR on trial: TGPT_FRAME_NRD_*). (Until 2026-10-11 RELAX's directional
+// form for the bounced light alone: pt_nrd_prep.hlsl says why it went.)
+nrd::Denoiser denoiser_of(uint32_t kind) { return kind==2 ? nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR : nrd::Denoiser::RELAX_DIFFUSE_SPECULAR; }
+const char* name_of(uint32_t kind) { return kind==2 ? "REBLUR, the diffuse and the specular light" : "RELAX, the diffuse and the specular light"; }
 
 // nrd::Format in its order.
 constexpr DXGI_FORMAT kFormats[]={
@@ -88,18 +95,14 @@ ComPtr<ID3D12RootSignature> make_root(ID3D12Device* device, const nrd::InstanceD
 
 D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle(uint32_t i) { auto h=rt.heap->GetCPUDescriptorHandleForHeapStart(); h.ptr+=size_t(i)*rt.increment; return h; }
 D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle(uint32_t i) { auto h=rt.heap->GetGPUDescriptorHandleForHeapStart(); h.ptr+=uint64_t(i)*rt.increment; return h; }
-} // namespace
 
-bool nrd_probe(ID3D12Device* device) {
-    if(rt.available && rt.device.Get()==device) return true;
-    release_runtime();
-    if(!device) return false;
+bool make_runtime(ID3D12Device* device, uint32_t kind) {
     try {
         const nrd::LibraryDesc& library=*nrd::GetLibraryDesc();
         if(library.versionMajor!=NRD_VERSION_MAJOR || library.versionMinor!=NRD_VERSION_MINOR) throw DxError(E_FAIL, "NRD library and header versions differ");
         if(library.normalEncoding!=nrd::NormalEncoding::R10_G10_B10_A2_UNORM || library.roughnessEncoding!=nrd::RoughnessEncoding::LINEAR)
             throw DxError(E_FAIL, "NRD was built with another normal or roughness encoding than pt_nrd_prep.hlsl writes");
-        const nrd::DenoiserDesc denoiser{kRelax, nrd::Denoiser::RELAX_DIFFUSE};
+        const nrd::DenoiserDesc denoiser{kRelax, denoiser_of(kind)};
         nrd::InstanceCreationDesc create{}; create.denoisers=&denoiser; create.denoisersNum=1;
         if(nrd::CreateInstance(create, rt.instance)!=nrd::Result::SUCCESS || !rt.instance) { rt.instance=nullptr; throw DxError(E_FAIL, "nrd::CreateInstance failed"); }
         const nrd::InstanceDesc& d=*nrd::GetInstanceDesc(*rt.instance);
@@ -118,9 +121,9 @@ bool nrd_probe(ID3D12Device* device) {
         h.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         check(device->CreateDescriptorHeap(&h, IID_PPV_ARGS(&rt.heap)), "Create NRD's descriptor heap");
         rt.increment=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        rt.device=device; rt.available=true;
+        rt.device=device; rt.kind=kind; rt.available=true;
         log("NVIDIA NRD "+std::to_string(library.versionMajor)+"."+std::to_string(library.versionMinor)+"."+std::to_string(library.versionBuild)+
-            " available (RELAX, "+std::to_string(d.pipelinesNum)+" pipelines, up to "+std::to_string(rt.setsPerSlot)+" dispatches a frame)");
+            " available ("+name_of(kind)+", "+std::to_string(d.pipelinesNum)+" pipelines, up to "+std::to_string(rt.setsPerSlot)+" dispatches a frame)");
         return true;
     } catch(const DxError& e) {
         log(std::string("NVIDIA NRD is unavailable (")+e.what()+" "+tgb::hexhr(e.hr)+"); the built-in denoiser serves");
@@ -128,6 +131,22 @@ bool nrd_probe(ID3D12Device* device) {
         return false;
     }
 }
+} // namespace
+
+bool nrd_probe(ID3D12Device* device) {
+    if(rt.available && rt.device.Get()==device) return true;
+    release_runtime();
+    if(!device) return false;
+    return make_runtime(device, 1);
+}
+bool nrd_use(uint32_t kind) {
+    if(!rt.available) return false;
+    if(rt.kind==kind) return true;
+    ComPtr<ID3D12Device> device=rt.device;
+    release_runtime();
+    return make_runtime(device.Get(), kind);
+}
+uint32_t nrd_kind() { return rt.kind; }
 bool nrd_available() { return rt.available; }
 void nrd_shutdown() { release_runtime(); }
 
@@ -173,23 +192,66 @@ bool Nrd::dispatch(ID3D12GraphicsCommandList* list, uint32_t slot, UploadRing& r
     nrd::CommonSettings c{};
     std::memcpy(c.viewToClipMatrix, f.viewToClip, sizeof(c.viewToClipMatrix)); std::memcpy(c.viewToClipMatrixPrev, f.viewToClipPrev, sizeof(c.viewToClipMatrixPrev));
     std::memcpy(c.worldToViewMatrix, f.worldToView, sizeof(c.worldToViewMatrix)); std::memcpy(c.worldToViewMatrixPrev, f.worldToViewPrev, sizeof(c.worldToViewMatrixPrev));
-    // 2D motion: the previous texture coordinate minus this one's (pt_nrd_prep); RELAX estimates the previous depth.
-    c.motionVectorScale[0]=c.motionVectorScale[1]=1.f; c.motionVectorScale[2]=0.f;
+    // 2.5D motion (README: recommended): the previous texture coordinate minus this one's, and the view depth's change in z
+    // (pt_nrd_prep). Hair as NRD's strands (material ID 1: pt_nrd_prep).
+    c.motionVectorScale[0]=c.motionVectorScale[1]=c.motionVectorScale[2]=1.f;
+    c.strandMaterialID=1.f;
     for(int i=0;i<2;++i) { c.cameraJitter[i]=std::clamp(f.jitter[i], -0.5f, 0.5f); c.cameraJitterPrev[i]=std::clamp(f.jitterPrev[i], -0.5f, 0.5f); }
     c.resourceSize[0]=c.resourceSizePrev[0]=c.rectSize[0]=c.rectSizePrev[0]=uint16_t(f.width);
     c.resourceSize[1]=c.resourceSizePrev[1]=c.rectSize[1]=c.rectSizePrev[1]=uint16_t(f.height);
     c.denoisingRange=f.denoisingRange;
     c.frameIndex=f.frameIndex;
+    c.isHistoryConfidenceAvailable=f.diffuseConfidence.resource && f.specularConfidence.resource;
     c.accumulationMode=restart_ ? nrd::AccumulationMode::CLEAR_AND_RESTART : f.reset ? nrd::AccumulationMode::RESTART : nrd::AccumulationMode::CONTINUE;
     if(nrd::SetCommonSettings(*rt.instance, c)!=nrd::Result::SUCCESS) { error="NRD refused this frame's common settings"; return false; }
-    // RELAX's defaults (half a second of history at 60 frames a second), with its firefly suppression (a rare bright path
-    // otherwise stays a blotch for as long as its history) and without its pre-pass blur, which is for signals missing in
-    // some pixels (every pixel traces its bounce here); it spread the light into what should stay dark.
-    nrd::RelaxSettings relax{};
-    relax.enableAntiFirefly=true;
-    relax.diffusePrepassBlurRadius=0.f;
-    relax.hitDistanceReconstructionMode=nrd::HitDistanceReconstructionMode::OFF;
-    if(nrd::SetDenoiserSettings(*rt.instance, kRelax, &relax)!=nrd::Result::SUCCESS) { error="NRD refused RELAX's settings"; return false; }
+    // NVIDIA's defaults, but for three things below. The firefly suppression is on (REBLUR's default, not RELAX's), which takes
+    // a pixel brighter than all eight around it down to the brightest of them., which takes a pixel brighter than all eight around it down to the brightest of them.
+    // It costs light (PT-75: 5 of 100 parts of a closed room's bounced light, 6 to 10 where the sky comes through small
+    // holes, blue most: tgpt_gpu_test nrdMean), and it was off for some hours on 2026-10-08. In the game every scene was
+    // then sprinkled with dots that linger (the owner, 18:10: "stars or sprinkles ... constantly across all scenes"; the
+    // tavern: 37 places a frame against 3 with it on). A rare bright path held for as long as RELAX's history is worse
+    // than the light it carries. The light comes back by making those paths less rare in the tracer, never by this switch.
+    if(f.kind!=rt.kind) { error="NRD's instance is for another kind of frame"; return false; }
+    // NRD's history as its documentation sets it: "Always accumulate in 'seconds' not in 'frames', use
+    // 'GetMaxAccumulatedFrameNum' for conversion" (NRDSettings.h), at the real frame rate (README: frame generation's frames
+    // are not the rate). Its default time (half a second), the fast history five times shorter ("usually 5x-7x"), the frames
+    // rebuilt after a reset fewer still: most > fast > fix, as NRDSettings.h orders them. At 60 frames a second NRD's own
+    // defaults (30, 6, 3); at the tracer's 10 today 5, 1 and 0.
+    uint32_t most=0, fast=0, fix=0;
+    if(f.frameRate>0.f && std::isfinite(f.frameRate)) {
+        const bool reblur=f.kind==2;
+        most=std::clamp(nrd::GetMaxAccumulatedFrameNum(reblur ? nrd::REBLUR_DEFAULT_ACCUMULATION_TIME : nrd::RELAX_DEFAULT_ACCUMULATION_TIME, f.frameRate),
+                        1u, reblur ? nrd::REBLUR_MAX_HISTORY_FRAME_NUM : nrd::RELAX_MAX_HISTORY_FRAME_NUM);
+        fast=std::max(1u, uint32_t(float(most)/5.f+0.5f));
+        if(fast>=most) fast=most>1 ? most-1 : most;
+        fix=std::min(3u, fast>0 ? fast-1 : 0u);
+    }
+    if(f.kind==2) {
+        // ON TRIAL (TGPT_FRAME_NRD_*, 2): REBLUR: its defaults (the hit distances' normalization among them, which
+        // pt_nrd_prep's front end takes alike) and no pre-pass blur of the diffuse light, as for RELAX below.
+        nrd::ReblurSettings reblur{};
+        if(f.primarySurfaceReplacement) reblur.minMaterialForDiffuse=reblur.minMaterialForSpecular=0.f;
+        if(most) { reblur.maxAccumulatedFrameNum=most; reblur.maxFastAccumulatedFrameNum=fast; reblur.historyFixFrameNum=fix; }
+        reblur.enableAntiFirefly=true;
+        reblur.diffusePrepassBlurRadius=0.f;
+        reblur.hitDistanceReconstructionMode=nrd::HitDistanceReconstructionMode::OFF;
+        if(nrd::SetDenoiserSettings(*rt.instance, kRelax, &reblur)!=nrd::Result::SUCCESS) { error="NRD refused REBLUR's settings"; return false; }
+    } else {
+        nrd::RelaxSettings relax{};
+        if(f.primarySurfaceReplacement) relax.minMaterialForDiffuse=relax.minMaterialForSpecular=0.f;
+        if(most) {
+            relax.diffuseMaxAccumulatedFrameNum=relax.specularMaxAccumulatedFrameNum=most;
+            relax.diffuseMaxFastAccumulatedFrameNum=relax.specularMaxFastAccumulatedFrameNum=fast;
+            relax.historyFixFrameNum=fix;
+        }
+        relax.enableAntiFirefly=true;
+        // No pre-pass blur of the diffuse light: every pixel traces its own, the signal NRD's documentation calls relatively
+        // clean, for which "pre-pass may introduce additional blur" (it spread the light into what should stay dark); the
+        // specular light keeps its pre-pass, which finds the hit distance the reflections are tracked by.
+        relax.diffusePrepassBlurRadius=0.f;
+        relax.hitDistanceReconstructionMode=nrd::HitDistanceReconstructionMode::OFF;
+        if(nrd::SetDenoiserSettings(*rt.instance, kRelax, &relax)!=nrd::Result::SUCCESS) { error="NRD refused RELAX's settings"; return false; }
+    }
     const nrd::DispatchDesc* dispatches=nullptr; uint32_t count=0;
     if(nrd::GetComputeDispatches(*rt.instance, &kRelax, 1, dispatches, count)!=nrd::Result::SUCCESS) { error="NRD returned no dispatches"; return false; }
     if(count>rt.setsPerSlot) { error="NRD asked for more dispatches than its descriptor heap holds"; return false; }
@@ -199,7 +261,11 @@ bool Nrd::dispatch(ID3D12GraphicsCommandList* list, uint32_t slot, UploadRing& r
         case nrd::ResourceType::IN_MV: return &f.motion;
         case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return &f.normalRoughness;
         case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return &f.diffuse;
+        case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return &f.specular;
+        case nrd::ResourceType::IN_DIFF_CONFIDENCE: return &f.diffuseConfidence;
+        case nrd::ResourceType::IN_SPEC_CONFIDENCE: return &f.specularConfidence;
         case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return &f.diffuseOut;
+        case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return &f.specularOut;
         default: return nullptr;
         }
     };
@@ -245,7 +311,8 @@ bool Nrd::dispatch(ID3D12GraphicsCommandList* list, uint32_t slot, UploadRing& r
         barriers.push_back(b); state=to;
     };
     auto flush=[&]() { if(!barriers.empty()) { list->ResourceBarrier(UINT(barriers.size()), barriers.data()); barriers.clear(); } };
-    const NrdTexture* external[]={&f.viewZ, &f.motion, &f.normalRoughness, &f.diffuse, &f.diffuseOut};
+    const NrdTexture* external[]={&f.viewZ, &f.motion, &f.normalRoughness, &f.diffuse, &f.diffuseOut, &f.specular, &f.specularOut,
+                                 &f.diffuseConfidence, &f.specularConfidence};
     for(uint32_t i=0;i<count;++i) {
         const nrd::DispatchDesc& dispatch=dispatches[i];
         const nrd::PipelineDesc& pipeline=d.pipelines[dispatch.pipelineIndex];
@@ -291,6 +358,8 @@ bool Nrd::dispatch(ID3D12GraphicsCommandList* list, uint32_t slot, UploadRing& r
 #else
 bool nrd_probe(ID3D12Device*) { log("NVIDIA NRD is not in this build; the built-in denoiser serves"); return false; }
 bool nrd_available() { return false; }
+bool nrd_use(uint32_t) { return false; }
+uint32_t nrd_kind() { return 1; }
 void nrd_shutdown() {}
 ID3D12PipelineState* nrd_prep_for(ID3D12RootSignature*) { return nullptr; }
 void Nrd::destroy() { pools_.clear(); width_=height_=0; restart_=true; }

@@ -28,7 +28,8 @@ namespace TGGraphicsBridge
         private static readonly Mod[] Mods =
         {
             new Mod { Folder = "TGFrameGeneration", Title = "TG Frame Generation" },
-            new Mod { Folder = "TGBetterUpscaling", Title = "TG Better Upscaling" }
+            new Mod { Folder = "TGBetterUpscaling", Title = "TG Better Upscaling" },
+            new Mod { Folder = "TGNeuralRendering", Title = "TG Neural Rendering" }
         };
         // Folders that never hold a mod's files, and are large: skipped by the search.
         private static readonly HashSet<string> Skipped = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -72,7 +73,7 @@ namespace TGGraphicsBridge
             // First: with 1.0 still installed, its files are what's missing from 1.1's layout, not a partial copy.
             bool legacy = CheckLegacy();
             foreach (var mod in Mods) Check(mod, found, vortex, legacy && mod == Mods[0]);
-            foreach (var folder in new[] { "TGGraphicsBridge", "TGFrameGeneration", "TGBetterUpscaling" })
+            foreach (var folder in new[] { "TGGraphicsBridge", "TGFrameGeneration", "TGBetterUpscaling", "TGNeuralRendering" })
             {
                 string marker = Path.Combine(Path.Combine(Paths.BepInExRootPath, folder), "disable-autoload.txt");
                 if (!File.Exists(marker)) continue;

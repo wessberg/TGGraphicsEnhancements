@@ -7,11 +7,11 @@
 # Each mod bundles TG Graphics Bridge (the DX11-to-DX12 bridge, its preloader and the shared gameplay
 # library) under its own folders, so a player installs one download and two mods never deploy the
 # same file; at run time one copy starts (see src/TGGraphicsBridge.Autoload/Bootstrap.cs).
-$script:TgVersion = '1.2.0'
+$script:TgVersion = '1.2.3'
 $script:TgAbi = '0x00010100'
 function Get-TgVersion { $script:TgVersion }
 function Get-TgAbi { $script:TgAbi }
-function Get-TgModNames { @('TGFrameGeneration','TGBetterUpscaling','TGPathTracing') }
+function Get-TgModNames { @('TGFrameGeneration','TGBetterUpscaling','TGPathTracing','TGNeuralRendering') }
 # The game versions a mod is built for: both unless its table says otherwise.
 function Get-TgModRuntimes([string]$Name) {
     $m = Get-TgMod $Name
@@ -23,7 +23,8 @@ function Test-TgModRuntime([string]$Name, [string]$Runtime) { @(Get-TgModRuntime
 function Get-TgNativeComponents {
     [ordered]@{ TGGraphicsBridge='TGGraphicsBridge/TGGraphicsBridge.Native.dll'
                 TGFrameGeneration='TGFrameGeneration/TGFG.Native.dll'; TGBetterUpscaling='TGBetterUpscaling/TGBetterUpscaling.Native.dll'
-                TGPathTracing='TGPathTracing/TGPathTracing.Native.dll' }
+                TGPathTracing='TGPathTracing/TGPathTracing.Native.dll'; TGNeuralRendering='TGNeuralRendering/TGNeuralRendering.Native.dll'
+                TGNeuralRenderingCommunity='TGNeuralRendering/TGNeuralRendering.nvngx.dll' }
 }
 # TG Graphics Bridge as a mod bundles it: its gameplay plugin beside the mod's own (the same GUID in
 # every mod, BepInEx loads the newest), the mod's own copy of its preloader, and its native DLL.
@@ -43,6 +44,16 @@ function Get-TgStandaloneBridge {
 # the copy of the bridge it bundles.
 function Get-TgMod([string]$Name) {
     switch ($Name) {
+        'TGNeuralRendering' {
+            @{Name=$Name; Title='TG Neural Rendering'
+              Managed=@(@{Relative='BepInEx/plugins/TGNeuralRendering/TGNeuralRendering.dll'; Assembly='TGNeuralRendering'}) + (Get-TgBridgeManaged $Name)
+              Natives=@(@{Component=$Name; Relative='BepInEx/TGNeuralRendering/Native/TGNeuralRendering.Native.dll'},
+                        @{Component='TGNeuralRenderingCommunity'; Relative='BepInEx/TGNeuralRendering/Native/TGNeuralRendering.nvngx.dll'}, (Get-TgBridgeNative $Name))
+              # The player-supplied model is deliberately outside the package's allow-list.
+              Signed=@(@{Folder='Notices'; Signer=$null; Optional=@(); Files=@(); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
+              Extension='src/TGNeuralRendering/graphics-bridge-extension.json'
+              Obsolete=@(Get-TgStandaloneBridge)}
+        }
         'TGFrameGeneration' {
             @{Name=$Name; Title='TG Frame Generation'
               Managed=@(@{Relative='BepInEx/plugins/TGFrameGeneration/TGFrameGeneration.dll'; Assembly='TGFrameGeneration'}) + (Get-TgBridgeManaged $Name)

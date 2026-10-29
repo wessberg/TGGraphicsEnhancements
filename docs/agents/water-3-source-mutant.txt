@@ -1,0 +1,15 @@
+test_path_tracing_water_camera_surface (__main__.SourceConsistency.test_path_tracing_water_camera_surface) ... FAIL
+
+======================================================================
+FAIL: test_path_tracing_water_camera_surface (__main__.SourceConsistency.test_path_tracing_water_camera_surface)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\Frede\AppData\Local\Temp\claude\C--Users-Frede-Developer-TGFOA-TGFrameGeneration\3bcc2cf1-dcc7-4e9c-ab8a-902e08fd49b8\scratchpad\wt\water3\tests\source_checks.py", line 1515, in test_path_tracing_water_camera_surface
+    self.assertFalse((ROOT / PT / "shaders" / old).exists())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)

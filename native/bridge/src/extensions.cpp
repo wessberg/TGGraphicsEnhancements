@@ -97,7 +97,7 @@ uint32_t bootstrap() {
     // The BepInEx root is found from where the DLL sits, so a copy anywhere else says so.
     if(_wcsicmp(self.parent_path().filename().c_str(), L"Native")!=0 || _wcsicmp(std::filesystem::path(c.bepinex).filename().c_str(), L"BepInEx")!=0)
         log("TGGraphicsBridge.Native.dll is not in BepInEx/<mod>/Native ("+self.u8string()+"); its log and the BepInEx root it reports assume it is");
-    log("TG Graphics Bridge 1.2.0 bootstrap; PID="+std::to_string(GetCurrentProcessId())+"; "+
+    log("TG Graphics Bridge 1.2.3 bootstrap; PID="+std::to_string(GetCurrentProcessId())+"; "+
         std::to_string(c.extensions.size())+" extension(s) registered; running "+self.parent_path().parent_path().filename().u8string()+"'s copy");
     note_windows();
     // Before the extensions load their runtimes, the first to load d3d12.dll.

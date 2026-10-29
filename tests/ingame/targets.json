@@ -1,0 +1,21 @@
+{
+  "about": "What a harness run is judged against (tools/harness/analyze.py). The goal is the owner's: \"As performant as Cyberpunk's PT\". 55 fps confirmed by the owner on 2026-10-06 (\"yes, I guess. We may expose some levers to tweak the visuals to go beyond that visually for a fps hit, let's see\").",
+  "performance": {
+    "reference": "Cyberpunk 2077's path tracing (RT Overdrive) on an RTX 5080 at 4K with DLSS Performance and Ray Reconstruction, no frame generation: about 55 to 60 fps in published tests (gamegpu.com: 55 fps; evetech: \"close to 60\"). Not measured on the owner's PC: Cyberpunk is not installed there. A number from its own benchmark on this PC should replace this one.",
+    "conditions": "3840x2160 output, DLSS Performance (the tracer renders about 1920x1080), Ray Reconstruction, frame generation off, the world running",
+    "fps_min": 55,
+    "low_fps_min": 40,
+    "note": "The frame rate is the target. The tracer's own GPU time is reported by stage and not judged: the first run (2026-10-06) had 13.1 ms of it at 52.7 fps (Cuanacht) and 22.1 ms at 42.6 fps (Ron's Tavern), so the two do not simply add to the game's frame."
+  },
+  "restore": {
+    "about": "Turning path tracing off must give the game's own picture back. The picture after is compared with the picture before tracing was ever on, in a frozen world: the mean difference and the worst 32x32-pixel block may be at most these 8-bit levels, or floor_factor times what the game's own picture changes by itself between two halves of its frames, whichever is larger. HDRP's state (lights, volumes, camera, materials) must be the same value for value.",
+    "mean_levels": 0.25,
+    "block_levels": 1.0,
+    "floor_factor": 3.0
+  },
+  "stability": {
+    "about": "Boiling: how much 8x8-pixel blocks change from frame to frame in a frozen world, in 8-bit levels, and against the game's own picture (its upscaler shimmers a little too). A step is flagged when it is above both. The owner judges how it looks; this only says where to look. First guesses (2026-10-06), to be set from real runs.",
+    "boil_levels_max": 0.6,
+    "boil_vs_game_max": 3.0
+  }
+}

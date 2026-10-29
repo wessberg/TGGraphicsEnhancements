@@ -1,0 +1,44 @@
+ok  : scene with the ball
+ok  : the room again
+      the ball by its material's own index of refraction, over its shadow against the light it blocks: 1.5 named off the unnamed by 0.000; 1.2 off 1.5 by 1.784, 1.63 of the light through; 1 off the straight tint by 0.051
+ok  : glass naming no index of refraction bends light as ordinary glass (1.5)
+FAIL: glass bends light by its material's own index of refraction (another index lays the light elsewhere)
+ok  : glass with an index of refraction of 1 bends nothing: its light comes straight through
+
+ok  : the reflection hit distance is a distance
+      DirectX Raytracing 1.2: yes, Shader Execution Reordering on; micromaps: 2 meshes, 0 waiting
+      the driver reports DirectX Raytracing 1.2 with Shader Model 6.9: yes
+ok  : TG Path Tracing's Agility SDK runtime brings DirectX Raytracing 1.2 (Shader Model 6.9)
+FAIL: every mesh with alpha-tested instances has opacity micromaps
+      instances tracing with micromaps: 0 off, 2 on; image difference: mean 0.000000, largest 0.00000
+
+ok  : the panel fills a good part of the mirror
+ok  : a mirror shows the game's own texture sharp, cell for cell, where the 64x64 tile was grey
+ok  : the shared texture's light is the tile's on average (same colors, same light)
+      without a number, and with the number of a texture the game freed: off the atlas image by 1.28e-03 and 1.07e-03 of its light
+FAIL: a material without a number, or whose texture died, reads its atlas tile as before
+      tiled 16 times (cells a sixth of a pixel): the panel's relative spread 0.190 (the grey tile's, the lamp's falloff alone: 0.190), its mean 0.3029 against the untiled's 0.3008
+
+      character seen by camera rays only (the eyes): shadow 14.8
+ok  : a surface seen by camera rays only casts no shadow
+      glass: grey (luminance 0.36) shadow 61.2, 0.46 of a solid one's (0.64 expected); clear 55.1
+ok  : grey glass lets light through as bright as its color (its shadow about 0.64 of a solid one's)
+FAIL: clear glass casts no shadow
+ok  : a character's cut-outs let light through, texel by texel
+
+      skin out of the sun at its material's occlusion 1: 0.0600, 0.25: 0.0246, 0: 0.0126 (the bounced and sky light kept: 0.25 of it, 0.25 expected)
+ok  : skin's own ambient occlusion darkens its bounced and sky light
+ok  : the room again
+      a character's forward face: a plain material 0.0806 (HDRP's shading kept), an eye 0.0911 (traced), behind a lash card 4 cm in front 0.0909
+FAIL: a character's eye drawn forward is shaded by the tracer, not left to HDRP
+ok  : hair well in front of what HDRP drew forward is passed: the eye behind a lash card is found
+
+ok  : every thing the game moves is traced, however many
+ok  : nothing moving
+      totals: frames traced 25382, failed 0, last error 0x00000000, disabled 0; images in C:\Users\Frede\AppData\Local\Temp\tgb\light-gpu-images
+ok  : no frame failed
+      composites applied: 25381 of 25382 traced frames
+ok  : traced light applied to the color buffer (the status counts it)
+      GPU time by stage: scene 0.39 ms, prepare 1.81 ms, bounced light 34.14 ms, bounced light spatial reuse 0.76 ms, direct light 2.44 ms, reflections 3.24 ms, radiance cache 0.12 ms, denoising 0.00 ms, caustics 0.00 ms, composite 0.11 ms
+ok  : the frame's stages are timed on the GPU
+FAILED 5 checks

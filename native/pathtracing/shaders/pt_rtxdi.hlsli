@@ -41,11 +41,11 @@ RAB_Surface RAB_GetGBufferSurface(int2 p, bool prevFrame) {
     }
     return r;
 }
-bool RAB_IsSurfaceValid(RAB_Surface r) { return r.s.valid && r.s.deferred; }
+bool RAB_IsSurfaceValid(RAB_Surface r) { return r.s.valid && r.s.deferred && !r.s.water && !r.s.underwater; }
 float3 RAB_GetSurfaceWorldPos(RAB_Surface r) {
     // For testing (OPTION_OFFSET_RECEIVER): where the surface's rays start, off it along its normal (pt_gi, pt_gi_spatial), and
     // so where its lights are sampled from too (the bounced light is estimated there, the direct light at the surface).
-    if ((g.settings2.y & OPTION_OFFSET_RECEIVER) != 0) return r.s.position + r.s.geoNormal * ray_offset(r.s.distance);
+    if ((g.settings2.y & OPTION_OFFSET_RECEIVER) != 0) return r.s.position + r.s.geoNormal * surface_offset(r.s);
     return r.s.position;
 }
 // The surface's own orientation (from depth), which the tracer's reuse compared too: normal maps made neighbours on one
@@ -71,10 +71,14 @@ int2 RAB_ClampSamplePositionIntoView(int2 p, bool prevFrame) {
 // ---------------------------------------------------------------- lights
 struct RAB_LightInfo { LightRecord l; };
 // A point of a light as seen from a receiver: where it is, and the light arriving from it there (irradiance on a
-// surface facing it; the light's range window and spot cone applied). emitter: a point of an emissive triangle.
-struct RAB_LightSample { float3 position; float3 irradiance; float3 dir; float dist; bool valid; bool emitter; bool diffuseOnly; };
+// surface facing it; the light's range window and spot cone applied). emitter: a point of an emissive triangle. ownReach:
+// how near the light its shadow ray stops being tested (light_own_reach); atEmitter: the light stands at its flame
+// (TGPT_LIGHT_AT_EMITTER), its ray tested up to that reach without the surface's offset taken off as well.
+// highlightDir, ON TRIAL (C, pt_common lamp_trial): the direction a lamp's highlight is evaluated towards; dir unless the
+// trial is on.
+struct RAB_LightSample { float3 position; float3 irradiance; float3 dir; float dist; bool valid; bool emitter; bool diffuseOnly; float ownReach; bool atEmitter; float3 highlightDir; };
 RAB_LightInfo RAB_EmptyLightInfo() { RAB_LightInfo i; i.l = (LightRecord)0; return i; }
-RAB_LightSample RAB_EmptyLightSample() { RAB_LightSample s; s.position = 0.0; s.irradiance = 0.0; s.dir = 0.0; s.dist = 0.0; s.valid = false; s.emitter = false; s.diffuseOnly = false; return s; }
+RAB_LightSample RAB_EmptyLightSample() { RAB_LightSample s; s.position = 0.0; s.irradiance = 0.0; s.dir = 0.0; s.dist = 0.0; s.valid = false; s.emitter = false; s.diffuseOnly = false; s.ownReach = 0.05; s.atEmitter = false; s.highlightDir = 0.0; return s; }
 // The plugin keeps every light in a stable slot, with its identity (0: an empty slot): an index means the same light in
 // both frames when the slot holds the same identity in both, and RTXDI's temporal reuse weighs a light at the previous
 // surface with the previous frame's record (a torch that flickered or a light that just came into range is judged by
@@ -108,19 +112,33 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo info, RAB_Surface surfa
     if (l.type == LIGHT_TRIANGLE) {
         float3 y;
         r.irradiance = triangle_incident(l, at, uv, r.dir, r.dist, y);
-        r.position = y; r.emitter = true;
+        r.position = y; r.emitter = true; r.highlightDir = r.dir;
         r.valid = any(r.irradiance > 0.0);
         return r;
     }
     float3 toCentre; float centreDist;
     r.irradiance = light_incident(l, at, toCentre, centreDist);
     r.diffuseOnly = (l.flags & LIGHT_NO_SPECULAR) != 0;
+    r.ownReach = light_own_reach(l); r.atEmitter = (l.flags & LIGHT_AT_EMITTER) != 0u;
     float3 t, b; basis(toCentre, t, b);
-    float2 disk = disk_sample(uv) * l.radius;
+    const float2 unit = disk_sample(uv);
+    float2 disk = unit * l.radius;
     r.position = l.position + t * disk.x + b * disk.y;
     float3 d = r.position - at;
     r.dist = max(length(d), 1e-4);
     r.dir = d / r.dist;
+    r.highlightDir = r.dir;
+    // ON TRIAL (pt_common lamp_trial; both off: nothing below runs, all as before). D: the shadow ray aims at the same point
+    // of a disc of the lamp's other radius (position; dir, which the diffuse light and the reuse read, stays the lamp's
+    // own). C: the highlight is evaluated towards that point of a disc of its other radius (highlightDir).
+    if (lamp_trial_mode(LAMP_TRIAL_SHADOW) != 0u) {
+        const float2 soft = unit * lamp_trial_radius(l, LAMP_TRIAL_SHADOW);
+        r.position = l.position + t * soft.x + b * soft.y;
+    }
+    if (lamp_trial_mode(LAMP_TRIAL_HIGHLIGHT) != 0u) {
+        const float2 wide = unit * lamp_trial_radius(l, LAMP_TRIAL_HIGHLIGHT);
+        r.highlightDir = normalize(l.position + t * wide.x + b * wide.y - at);
+    }
     r.valid = any(r.irradiance > 0.0);
     return r;
 }
@@ -133,14 +151,13 @@ void rtxdi_shade(RAB_LightSample ls, RAB_Surface surface, out float3 diffuse, ou
     diffuse = 0.0; specular = 0.0;
     if (!ls.valid) return;
     Surface s = surface.s;
-    // Thin skin takes the light HDRP transmits through it too (skin_transmission; from behind, rtxdi_visible's ray goes
-    // through the skin).
-    const float3 through = ls.irradiance * skin_transmission(s, ls.dir) / PI;
-    float nl = translucent_cos(s.normal, ls.dir, s.through); // a grass blade, a leaf or thin cloth is lit through from behind too
-    if (nl <= 0.0) { diffuse = through; return; }
+    // A grass blade, a leaf or thin cloth is lit through from behind too; hair about its strand, from either side (strand_cos).
+    float nl = surface_cos(s, surface.view, ls.dir);
+    if (nl <= 0.0) return;
     diffuse = ls.irradiance * nl * terminator_softening(s, ls.dir) / PI;
-    diffuse += through;
-    if (dot(s.normal, ls.dir) > 0.0 && !ls.emitter && !ls.diffuseOnly) specular = ls.irradiance * ggx_specular(s.normal, surface.view, ls.dir, s.f0, roughness_alpha(s.roughness));
+    // Hair's highlight lies along its strands (hair_specular).
+    if (dot(s.normal, ls.dir) > 0.0 && !ls.emitter && !ls.diffuseOnly)
+        specular = ls.irradiance * (s.hair ? hair_specular(s, surface.view, ls.dir) : ggx_specular(s.normal, surface.view, ls.highlightDir, s.f0, roughness_alpha(s.roughness)));
 }
 // ReSTIR's target function: the sample's unshadowed contribution at the surface.
 float RAB_GetLightSampleTargetPdfForSurface(RAB_LightSample ls, RAB_Surface surface) {
@@ -152,36 +169,41 @@ float RAB_GetLightSampleTargetPdfForSurface(RAB_LightSample ls, RAB_Surface surf
 
 // ---------------------------------------------------------------- visibility
 // A shadow ray from the surface to the sample's point, with the tracer's rules for rays leaving HDRP's surfaces
-// (shadow_origin, occluded_from_surface's pass-through near the surface); the lamp's own mesh around it doesn't count. To
+// (shadow_origin, occluded_from_surface's pass-through near the surface); the lamp's own mesh around it doesn't count (5 cm
+// and the surface's offset short of it; a light at its flame only its own size and 1 cm: light_own_reach, as the offset of
+// 2 cm took with it left a candle's top 3 cm under its flame untested). To
 // an emissive triangle's point it ends just short of the triangle (as triangle_shadow_ray's): 5 cm and the ray's offset
 // short, as for a lamp, it passed through what lay against a glowing surface (17 cm of it 50 m from the camera).
 float light_ray_end(RAB_LightSample ls, float dist, float offset) {
-    return ls.emitter ? max(dist - max(1e-3 * dist, 2e-3), 0.0) : max(dist - 0.05 - offset, 0.0);
+    return ls.emitter ? max(dist - max(1e-3 * dist, 2e-3), 0.0) : max(dist - ls.ownReach - (ls.atEmitter ? 0.0 : offset), 0.0);
 }
-// Thin skin lit from behind: the light comes through the skin itself (transmitted_unoccluded).
-bool rtxdi_through_skin(Surface s, RAB_LightSample ls) { return transmitted_unoccluded(s, ls.dir, light_ray_end(ls, ls.dist, 0.0)); }
 bool rtxdi_visible(RAB_Surface surface, RAB_LightSample ls) {
     if (!ls.valid) return false;
     Surface s = surface.s;
-    if (through_skin(s, ls.dir)) return rtxdi_through_skin(s, ls);
-    float offset = ray_offset(s.distance);
-    float3 origin = shadow_origin(s.position, s.geoNormal, ls.position - s.position, offset, s.translucent);
+    float offset = surface_offset(s);
+    float3 origin = shadow_origin(s, ls.position - s.position, offset);
     float3 v = ls.position - origin;
     float dist = max(length(v), 1e-4);
-    return !occluded_from_surface(origin, v / dist, 0.0, light_ray_end(ls, dist, offset), near_back(s.distance));
+    // A light's shadow ray, as the final shading's (rtxdi_transmittance): a leaf or a blade of grass lets it through part of the
+    // time (alpha_opaque), so that the reuse weighs a sample behind grass as that shading lights it.
+    g_lightRay = true;
+    const bool visible = !occluded_from_surface(origin, v / dist, 0.0, light_ray_end(ls, dist, offset), near_back_towards(s, v / dist));
+    g_lightRay = false;
+    return visible;
 }
 // The same ray for the final shading, tinted by the glass it crosses (transmittance_from_surface); reuse keeps rtxdi_visible.
-// Thin skin lit from behind as there: from the surface, a lamp behind an ear was stopped by the ear's own front, so ears and
-// fingers let the sun through (pt_di_spatial) but no lamp.
 float3 rtxdi_transmittance(RAB_Surface surface, RAB_LightSample ls) {
     if (!ls.valid) return 0.0;
     Surface s = surface.s;
-    if (through_skin(s, ls.dir)) return rtxdi_through_skin(s, ls) ? 1.0 : 0.0;
-    float offset = ray_offset(s.distance);
-    float3 origin = shadow_origin(s.position, s.geoNormal, ls.position - s.position, offset, s.translucent);
+    float offset = surface_offset(s);
+    float3 origin = shadow_origin(s, ls.position - s.position, offset);
     float3 v = ls.position - origin;
     float dist = max(length(v), 1e-4);
-    return transmittance_from_surface(origin, v / dist, 0.0, light_ray_end(ls, dist, offset), near_back(s.distance));
+    const float3 straight = transmittance_from_surface(origin, v / dist, 0.0, light_ray_end(ls, dist, offset), near_back_towards(s, v / dist));
+    // Through a closed glass object a lamp's light is bent and focused: its caustic (caustic_through). Not a glowing
+    // triangle's, which is no point.
+    if (g_glassMet >= 2 && any(straight > 0.0) && !ls.emitter) return caustic_through(origin, s.normal, s.geoNormal, v / dist, dist, false, straight);
+    return straight;
 }
 bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample ls) { return rtxdi_visible(surface, ls); }
 // There is only this frame's acceleration structure: traced from the current surface, as RTXDI allows.
@@ -191,25 +213,34 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surfa
 
 // ---------------------------------------------------------------- ReSTIR GI
 // The target function of a GI sample at a surface: the light arriving from its path vertex, times the cosine (the
-// diffuse color is divided out of the traced light).
+// diffuse color is divided out of the traced light). On a leaf or a blade of grass a sample behind it counts with the grey
+// share it lets through (gathers_behind, pt_gi).
 float RAB_GetGISampleTargetPdfForSurface(float3 samplePosition, float3 sampleRadiance, RAB_Surface surface) {
     float3 d = samplePosition - RAB_GetSurfaceWorldPos(surface);
     float len = length(d);
-    return len > 0.0 ? luminance(sampleRadiance) * saturate(dot(surface.s.normal, d / len)) : 0.0;
+    if (!(len > 0.0)) return 0.0;
+    const float c = dot(surface.s.normal, d / len);
+    if (gathers_behind(surface.s) && dot(d, surface.s.geoNormal) < 0.0) return luminance(sampleRadiance) * surface.s.through * saturate(-c);
+    return luminance(sampleRadiance) * saturate(c);
 }
 // Whether a surface could have found a GI sample's path vertex: the shading pass's final visibility ray from it, and only
 // above it (its rays never leave below it: pt_gi). With TGPT_OPTION_GI_VISIBILITY, ReSTIR GI's reuse counts a pixel for
 // a sample only if so (tracer.cpp); the previous frame's surface is traced in this frame's scene.
 bool rtxdi_gi_visible(RAB_Surface surface, float3 samplePosition) {
     Surface s = surface.s;
-    const float offset = ray_offset(s.distance);
+    if (gathers_behind(s) && dot(samplePosition - s.position, s.geoNormal) < 0.0) s.geoNormal = -s.geoNormal; // a leaf's, from its far side
+    const float offset = surface_offset(s);
     const float3 origin = s.position + s.geoNormal * offset;
     const float3 toSample = samplePosition - origin;
     const float dist = max(length(toSample), 1e-4);
     const float3 dir = toSample / dist;
     if (dot(dir, s.geoNormal) <= 0.0) return false;
     const bool sky = gi_sample_is_sky(samplePosition, origin);
-    return !occluded_from_surface(origin, dir, 0.0, sky ? g.params.y : max(dist - 0.02, 0.0), near_back(s.distance));
+    // Thin cloth lets it through by chance, as in the final shading (pt_gi_spatial, g_bounceRay).
+    g_bounceRay = true;
+    const bool visible = !occluded_from_surface(origin, dir, 0.0, sky ? g.params.y : max(dist - 0.02, 0.0), surface_near_back(s));
+    g_bounceRay = false;
+    return visible;
 }
 bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition) { return rtxdi_gi_visible(surface, samplePosition); }
 bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surface previousSurface, float3 samplePosition) { return rtxdi_gi_visible(previousSurface, samplePosition); }
@@ -223,10 +254,14 @@ bool RAB_ValidateGISampleWithJacobian(inout float jacobian) {
     return true;
 }
 
-// The motion RTXDI's temporal reuse follows: to the previous frame's pixel (HDRP's motion vectors, in pixels), and the
-// change of the surface's distance from the camera (the previous camera's distance minus this one's).
+// The motion RTXDI's temporal reuse follows: to the pixel of the previous frame's own grid that showed the point (in
+// pixels: the motion and the two frames' sub-pixel shifts, previous_place; as NVIDIA's RTXDI sample hands it its motion
+// vectors with the two frames' pixel offsets in them), and the change of the surface's distance from the camera (the
+// previous camera's distance minus this one's).
+// ON TRIAL (PT-85, the plugin's hidden setting "Reuse follows camera shift": g.look.w): 0 off, the motion alone as before
+// (g.look's y and z are then 0); 1 this; 2 for finding causes, ReSTIR by the motion alone while the tracer's own
+// histories follow the shifts.
 float3 rtxdi_motion(uint2 p, Surface s) {
-    Texture2D<float2> motion = ResourceDescriptorHeap[g.inputs1.y];
-    float2 mv = motion.Load(int3(p, 0)) * float2(g.size.xy);
-    return float3(-mv, length(s.position - g.prevCameraPos.xyz) - s.distance);
+    const float2 to = g.look.w > 1.5 ? -motion_at(p) * float2(g.size.xy) : previous_place(p, motion_at(p)) - (float2(p) + 0.5);
+    return float3(to, length(s.position - g.prevCameraPos.xyz) - s.distance);
 }

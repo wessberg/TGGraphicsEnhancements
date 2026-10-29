@@ -5,7 +5,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
-    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling','TGPathTracing')][string]$Mod = 'All',
+    [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling','TGPathTracing','TGNeuralRendering')][string]$Mod = 'All',
     [switch]$Deploy
 )
 $ErrorActionPreference = 'Stop'

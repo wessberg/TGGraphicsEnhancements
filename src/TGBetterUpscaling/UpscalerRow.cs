@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 // FSR and XeSS are choices of the game's own Upscaling row, not rows of their own: one selector for
-// one concept. The row gets two more entries after None, STP and DLSS. STP keeps the game's
+// one concept. The row has None, STP and DLSS, then FSR and XeSS. Game builds from October 2026 have an
+// FSR entry of their own (HDRP's FSR 2) with the index and preference ID this mod's always had: this
+// mod's FSR 3.1 or 4 takes that entry where AMD's runtime reports it, the game's FSR 2 keeps it where
+// it doesn't, and XeSS follows it. Older builds get both entries from this mod. STP keeps the game's
 // render-scale slider; DLSS, FSR and XeSS each get a Quality Mode row with the modes their runtime
 // reports, and FSR its own sharpening below it. An upscaler whose runtime reports no modes keeps the
 // slider. The game stores the row's index in its own preferences, so a choice of FSR or XeSS persists
@@ -24,6 +27,7 @@ namespace TGBetterUpscaling
         private const string IdPrefix = "TGUP.Video.";
         private const string TypeKey = "UpScalingType"; // the game's preference key for the row's index
         internal const int FsrIndex = (int)UpscalerSetting.FSR, XessIndex = (int)UpscalerSetting.XeSS;
+        private const string FsrId = "UpScalingType_FSR", XessId = "UpScalingType_XeSS"; // the entries' preference IDs; FSR's is also the game's
         private static readonly PrefOption[] None = new PrefOption[0];
         private static UpScaling owner;
         private static EnumArrowsOption type;
@@ -35,6 +39,9 @@ namespace TGBetterUpscaling
         private static float nextPoll, firstTick = -1;
         internal static string Status { get; private set; } = "Not installed yet.";
         internal static bool Installed => owner != null;
+        // The row was left as the game has it (nothing to add, a row this mod does not know, or an error): the
+        // game then sets its upscalers up itself, at its own slider.
+        internal static bool Failed => failed;
         // A troubleshooting step selected this upscaler in the game's row: the game applies it as usual,
         // but the config keeps the player's choice, which EndTest puts back.
         private static bool testing;
@@ -56,13 +63,29 @@ namespace TGBetterUpscaling
         // The game's Upscaling setting, once its settings model has created it.
         internal static UpScaling Game() => World.Any<UpScaling>();
         private static float? NoStep => null;
+        private static readonly FieldInfo ForbiddenField = typeof(EnumArrowsOption).GetField("_forbiddenOptions", BindingFlags.NonPublic | BindingFlags.Instance);
+        // Whether the game offers an entry of its row on this PC: it forbids the upscalers that can't run here.
+        private static bool GameOffers(EnumArrowsOption row, ToggleOption entry) =>
+            !(ForbiddenField?.GetValue(row) is ToggleOption[] forbidden) || Array.IndexOf(forbidden, entry) < 0;
 #else
+        private static bool GameOffers(EnumArrowsOption row, ToggleOption entry)
+        {
+            var forbidden = row._forbiddenOptions;
+            if (forbidden == null) return true;
+            for (int i = 0; i < forbidden.Length; i++) if (VideoTab.Same(forbidden[i], entry)) return false;
+            return true;
+        }
         private static SliderOption Quality(UpScaling up) => up._qualitySlider;
         private static bool SetMain(UpScaling up, DependentOption option) { up._mainOption = option; return true; }
         private static void ApplyRefreshing(UpScaling up) => up.Apply(true, out _);
         internal static UpScaling Game() => VideoTab.GraphicSetting<UpScaling>("UpScaling"); // not World.Any<UpScaling>(): see there
         private static Il2CppSystem.Nullable<float> NoStep => new Il2CppSystem.Nullable<float>(); // see PerformanceOverlayRows
 #endif
+        // The game's own FSR entry (HDRP's FSR 2, game builds from October 2026), as the game made its row: after None,
+        // STP and DLSS, under this mod's index and preference ID for FSR. Null in older builds, and for a row this mod
+        // has already extended.
+        private static ToggleOption GameFsrEntry(ToggleOption[] entries) =>
+            entries.Length == FsrIndex + 1 && entries[FsrIndex].ID == FsrId ? entries[FsrIndex] : null;
         internal static void Tick(float now)
         {
             if (failed || now < nextPoll) return;
@@ -107,10 +130,15 @@ namespace TGBetterUpscaling
                     string dlssDetail = "";
                     var dlssModes = UpScaling.IsDLSSAvailable ? DlssModes.Query(out dlssDetail) : new QualityMode[0];
                     if (dlssDetail.Length > 0) Session.Log.LogWarning(dlssDetail + ".");
+                    // The game's own FSR 2, where this game build has it and the game offers it on this PC (it
+                    // forbids the entry otherwise), under the name the game gives it.
+                    var gameRow = up.UpscalingTypeOption;
+                    var gameFsr = GameFsrEntry(VideoTab.Entries(gameRow));
+                    string gameFsrName = gameFsr == null || !GameOffers(gameRow, gameFsr) ? null : string.IsNullOrEmpty(gameFsr.DisplayName) ? "FSR" : gameFsr.DisplayName;
                     settings.ApplyCapabilities(new Capabilities(true, UpScaling.IsSTPAvailable, UpScaling.IsDLSSAvailable,
                         ready && Session.Status.Has(NativeFlags.BackendFsr), ready && Session.Status.Has(NativeFlags.BackendXess),
                         ready ? Session.Upscaler.FsrVersions(Session.Status.FsrVersionCount) : null, dlssModes,
-                        ready ? Session.Upscaler.Modes(NativeFlags.BackendFsr) : null, ready ? Session.Upscaler.Modes(NativeFlags.BackendXess) : null),
+                        ready ? Session.Upscaler.Modes(NativeFlags.BackendFsr) : null, ready ? Session.Upscaler.Modes(NativeFlags.BackendXess) : null, gameFsrName),
                         up.QualityScaling);
                 }
                 var reported = settings.Capabilities;
@@ -139,20 +167,28 @@ namespace TGBetterUpscaling
             caps = reported;
             type = up.UpscalingTypeOption;
             var entries = VideoTab.Entries(type);
-            if (entries.Length == 3)
+            var gameFsr = GameFsrEntry(entries);
+            if (entries.Length == 3 || gameFsr != null)
             {
-                fsrChoice = VideoTab.Choice("UpScalingType_FSR", Capabilities.Label(UpscalerSetting.FSR));
-                xessChoice = VideoTab.Choice("UpScalingType_XeSS", Capabilities.Label(UpscalerSetting.XeSS));
-                VideoTab.SetEntries(type, entries.Concat(new[] { fsrChoice, xessChoice }).ToArray());
+                // With FSR from AMD's runtime, this mod's entry stands at index 3 under the name of the version that
+                // runs, in place of the game's own FSR 2 where the game has one. Without it the game's entry stays, and
+                // the game runs its FSR 2 there (StpHost leaves it to the game's controller).
+                fsrChoice = gameFsr != null && !caps.Fsr ? gameFsr : VideoTab.Choice(FsrId, Capabilities.Label(UpscalerSetting.FSR));
+                xessChoice = VideoTab.Choice(XessId, Capabilities.Label(UpscalerSetting.XeSS));
+                bool onGameFsr = gameFsr != null && VideoTab.Same(type.Option, gameFsr);
+                VideoTab.SetEntries(type, entries.Take(FsrIndex).Concat(new[] { fsrChoice, xessChoice }).ToArray());
+                // The row's current entry has to be one of its entries: the game reads and stores its index.
+                if (onGameFsr && !VideoTab.Same(fsrChoice, gameFsr)) type.Option = fsrChoice;
             }
-            else if (entries.Length == 5 && entries[FsrIndex].ID == "UpScalingType_FSR" && entries[XessIndex].ID == "UpScalingType_XeSS")
+            else if (entries.Length == 5 && entries[FsrIndex].ID == FsrId && entries[XessIndex].ID == XessId)
             {
                 fsrChoice = entries[FsrIndex]; xessChoice = entries[XessIndex]; // the game rebuilt its model around the same row
             }
             else
             {
                 failed = true;
-                Status = "The game's Upscaling row has " + entries.Length + " entries, not the 3 this mod extends; left as it is.";
+                Status = "The game's Upscaling row has " + entries.Length + " entries (" + string.Join(", ", entries.Select(e => e.ID).ToArray()) +
+                    "), not the None, STP, DLSS and FSR this mod knows; left as it is, and the game sets its upscalers up itself.";
                 Session.Log.LogWarning(Status);
                 return;
             }
@@ -161,7 +197,7 @@ namespace TGBetterUpscaling
             {
                 caps.Stp ? null : VideoTab.Entries(type)[(int)UpscalerSetting.STP],
                 caps.Dlss ? null : VideoTab.Entries(type)[(int)UpscalerSetting.DLSS],
-                caps.Fsr ? null : fsrChoice,
+                caps.Offers(UpscalerSetting.FSR) ? null : fsrChoice,
                 caps.Xess ? null : xessChoice
             }.Where(o => o != null));
 
@@ -177,7 +213,8 @@ namespace TGBetterUpscaling
             var xessMode = ModeRow(UpscalerSetting.XeSS, "XessMode");
             var sliderRows = quality != null ? new PrefOption[] { quality } : None;
             var dlssRows = dlssMode != null ? new PrefOption[] { dlssMode } : sliderRows;
-            var fsrRows = new PrefOption[] { (PrefOption)fsrMode ?? quality, sharpness }.Where(o => o != null).ToArray();
+            // The game's own FSR 2 keeps the slider and has no sharpening of this mod's.
+            var fsrRows = caps.Fsr ? new PrefOption[] { (PrefOption)fsrMode ?? quality, sharpness }.Where(o => o != null).ToArray() : sliderRows;
             var xessRows = xessMode != null ? new PrefOption[] { xessMode } : sliderRows;
             var every = new PrefOption[] { quality, dlssMode, fsrMode, xessMode, sharpness }.Where(o => o != null).ToArray();
 #if BEPINEX_IL2CPP
@@ -191,7 +228,7 @@ namespace TGBetterUpscaling
 
             // The index a previous session stored: the game could not select FSR or XeSS before the row had them.
             int stored = PrefMemory.GetInt(TypeKey, -1);
-            if ((stored == FsrIndex && caps.Fsr) || (stored == XessIndex && caps.Xess)) type.OptionInt = stored;
+            if ((stored == FsrIndex && caps.Offers(UpscalerSetting.FSR)) || (stored == XessIndex && caps.Xess)) type.OptionInt = stored;
             // The game closed during a troubleshooting test: its preferences hold the test's upscaler, the
             // config the player's.
             if (InterruptedTest())
@@ -213,6 +250,9 @@ namespace TGBetterUpscaling
             OnGameApplied(up);
             Status = "FSR " + (caps.Fsr ? "available" : "unavailable") + ", XeSS " + (caps.Xess ? "available" : "unavailable") +
                 " in the game's Upscaling row" + (nested ? "" : " (FSR Sharpness and the quality modes only in the config: this game build's row cannot nest them)") +
+                (gameFsr == null ? "" : caps.Fsr ? "; this game build has an FSR entry of its own (FSR 2), which this mod's FSR takes the place of"
+                    : caps.GameFsr != null ? "; the game's own FSR 2 keeps its entry (\"" + caps.GameFsr + "\"), at the game's slider"
+                    : "; the game's own FSR entry stays greyed out, as the game has it on this PC") +
                 "; quality modes " + string.Join("; ", Settings.WithModes.Select(u => u + ": " + (caps.Modes(u).Length > 0 ? string.Join(", ", caps.Modes(u).Select(m => m.ToString()).ToArray()) : "none, the slider")).ToArray()) +
                 (caps.FsrVersions.Length > 0 ? "; FSR versions offered " + string.Join(", ", caps.FsrVersions) : "") +
                 (caps.FsrVersion != null ? "; the row shows FSR as \"" + caps.LabelOf(UpscalerSetting.FSR) + "\" (" + caps.FsrVersion + ", AMD's default here)" : "") +

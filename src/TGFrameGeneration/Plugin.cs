@@ -9,7 +9,7 @@ using BepInEx.Unity.IL2CPP;
 namespace TGFrameGeneration
 {
     [BepInPlugin(Id, Name, Version)]
-    [BepInDependency(BridgePlugin.Id, BepInDependency.DependencyFlags.HardDependency)]
+    [BepInDependency(BridgePlugin.Id, "1.2.3")]
     [BepInDependency("kane.tgfoa.mod-manager", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency("com.avalonmodmanager", BepInDependency.DependencyFlags.SoftDependency)]
 #if BEPINEX_IL2CPP
@@ -20,7 +20,7 @@ namespace TGFrameGeneration
     {
         public const string Id = "com.wessberg.tgframegeneration";
         public const string Name = "TG Frame Generation";
-        public const string Version = "1.2.0";
+        public const string Version = "1.2.3";
 #if BEPINEX_IL2CPP
         public override void Load()
         {

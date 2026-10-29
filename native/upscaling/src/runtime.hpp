@@ -30,7 +30,7 @@ struct Inputs {
     ID3D12Resource* diffuseAlbedo=nullptr;
     ID3D12Resource* specularAlbedo=nullptr;
     ID3D12Resource* normalRoughness=nullptr;
-    // Its optional inputs: the traced reflections' hit distance, and the color before transparency (null without).
+    // Required reflection distance (no specular motion vectors are supplied), and optional color before transparency.
     ID3D12Resource* specularHitDistance=nullptr;
     ID3D12Resource* colorBeforeTransparency=nullptr;
     const TGUP_Frame* frame=nullptr;
@@ -75,6 +75,7 @@ std::vector<TGUP_Mode> xess_modes();
 // upscale of a path-traced frame, with TG Path Tracing's guides. Probed once per device (any thread).
 bool rr_probe(ID3D12Device* device);
 bool rr_available();
+bool rr_optimal_settings(uint32_t outputWidth, uint32_t outputHeight, uint32_t mode, uint32_t& width, uint32_t& height);
 std::string rr_unavailable_reason();
 std::unique_ptr<Backend> create_rr_backend(ID3D12Device* device);
 

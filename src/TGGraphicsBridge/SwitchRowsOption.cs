@@ -38,7 +38,8 @@ namespace TGGraphicsBridge
                     Shown = wanted;
                     Current = Rows(wanted) ?? None;
 #if BEPINEX_IL2CPP
-                    Owner._OtherOptions_k__BackingField = new Il2CppReferenceArray<PrefOption>(Current);
+                    Owner.nativeRows = new Il2CppReferenceArray<PrefOption>(Current);
+                    Owner._OtherOptions_k__BackingField = Owner.nativeRows;
 #else
                     OthersField.SetValue(Owner, Current);
 #endif
@@ -49,12 +50,18 @@ namespace TGGraphicsBridge
         }
         private readonly PrefOption[] all; // the selector and every row any of its values shows
 #if BEPINEX_IL2CPP
+        // Keep the native array's managed wrapper alive as long as this option owns it.
+        // be.755 does not retain this inherited reference through the injected class:
+        // a temporary array wrapper can be finalized while OtherOptions still points
+        // to it. A later menu then reads recycled memory as PrefOption objects (NR-37).
+        private Il2CppReferenceArray<PrefOption> nativeRows;
         public SwitchRowsOption(IntPtr pointer) : base(pointer) { }
         private SwitchRowsOption(EnumArrowsOption selector, Switch rows, PrefOption[] every) : base(ClassInjector.DerivedConstructorPointer<SwitchRowsOption>())
         {
             ClassInjector.DerivedConstructorBody(this);
+            nativeRows = new Il2CppReferenceArray<PrefOption>(rows.Current);
             Il2CppTypes.Construct(this, typeof(DependentOption), "NativeMethodInfoPtr__ctor_Public_Void_PrefOption_Il2CppReferenceArray_1_PrefOption_0",
-                selector, new Il2CppReferenceArray<PrefOption>(rows.Current));
+                selector, nativeRows);
             all = new PrefOption[] { selector }.Concat(every).ToArray();
             Il2CppOptionConditions.Register(this, rows.Show);
         }

@@ -70,8 +70,8 @@ namespace TGBetterUpscaling
             catch (Exception ex) { Break(ex); return false; }
         }
 
-        // TG Path Tracing's optional inputs for this frame: the traced reflections' hit distance and the color before
-        // transparency, or false (an older TG Path Tracing, or none written this frame).
+        // Required reflection distance and an optional transparency snapshot. Older plugins may return false when only
+        // the optional snapshot is missing; retain their output pointers and decide by the required distance alone.
         internal static bool TryExtraGuides(uint width, uint height, out ulong specularHitDistance, out ulong colorBeforeTransparency)
         {
             specularHitDistance = colorBeforeTransparency = 0;
@@ -79,11 +79,11 @@ namespace TGBetterUpscaling
             {
                 if (!Find() || extraGuides == null) return false;
                 var args = new object[] { (int)width, (int)height, 0ul, 0ul };
-                if (!(bool)extraGuides.Invoke(null, args)) return false;
+                extraGuides.Invoke(null, args);
                 specularHitDistance = (ulong)args[2]; colorBeforeTransparency = (ulong)args[3];
-                return specularHitDistance != 0 && colorBeforeTransparency != 0;
+                return specularHitDistance != 0;
             }
-            catch (Exception ex) { Session.Log.LogWarning("TG Path Tracing's optional Ray Reconstruction inputs failed; they are left out: " + ex.Message); extraGuides = null; return false; }
+            catch (Exception ex) { Session.Log.LogWarning("TG Path Tracing's reflection guides failed; Ray Reconstruction cannot run this frame: " + ex.Message); extraGuides = null; return false; }
         }
 
         // Tells TG Path Tracing whether NGX runs Ray Reconstruction on this GPU, once (its Denoising row lists it only then).

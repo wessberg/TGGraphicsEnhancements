@@ -5,7 +5,8 @@
 cbuffer Constants : register(b0) { uint4 c0; float4 c1; };
 
 #if defined(TGPT_COMPOSITE) || defined(TGPT_GUIDES)
-// Ray Reconstruction's guides, which the guides pass writes and the composite corrects on see-through glass.
+// Ray Reconstruction's guides, which the guides pass writes and the composite corrects on see-through glass; HDRP's normals
+// (its normal buffer's and its water GBuffer's, PackNormalOctQuadEncode into 8:8:8).
 float3 decode_normal(float4 v) {
     uint3 i = (uint3)(v.rgb * 255.5);
     uint hi = i.z >> 4, lo = i.z & 15;
@@ -62,95 +63,6 @@ RWTexture2D<float2> target : register(u0);
 Texture2D<float2> source : register(t0);
 RWTexture2D<float> target : register(u0);
 [numthreads(1, 1, 1)] void main() { target[uint2(0, 0)] = (c0.z & 1) ? source.Load(int3(0, 0, 0)).x : c1.x; }
-#elif defined(TGPT_COPY_WATER_DEPTH)
-// HDRP's depth where its transparent SSR step gives a surface reflections (the stencil bit in c0.z, HDRP's TraceReflectionRay:
-// its water, and transparent surfaces that take them), 0 everywhere else.
-Texture2D<float> source : register(t0);
-Texture2D<uint2> stencil : register(t1);
-RWTexture2D<float> target : register(u0);
-[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
-    if (any(p >= c0.xy)) return;
-    target[p] = (stencil.Load(int3(p, 0)).g & c0.z) != 0u ? source.Load(int3(p, 0)) : 0.0;
-}
-#elif defined(TGPT_WATER)
-// The previous frame's traced reflections on water in place of HDRP's reflections for its water and transparent surfaces:
-// HDRP's shading takes its reflection from its SSR texture (what its SSR found in the last frame's image, premultiplied by
-// its weight in alpha) and leaves the rest of the weight to reflection probes and the sky. The traced reflection replaces
-// all of it, SSR's own hits too (they miss what is off screen or hidden, fade out at the screen's edges and on waves, and
-// show last frame's image), with the weight 1, so HDRP's shading takes the reflection as it stands (its own Fresnel term,
-// foam, refraction and fog stay the game's); the SSR texture is only where HDRP's water reads it from. Each pixel takes the traced frame's light around where its own surface was then: 5x5 texels
-// weighted as a Gaussian of 1.5 texels, each only if its water lay where this pixel's does and its reflection met
-// something as far away as the nearest texel's did (no denoiser sees HDRP's water, and accumulated over frames alone a
-// reflection of what bounced light lights kept a fifth of a frame's grain; the edges between near and far things in it
-// stay sharp). With none (the traced frame saw no water there: the frame's delay uncovering it), HDRP's stays. The traced light was pre-exposed with the traced frame's
-// exposure, which is the one HDRP takes its SSR texture back out of (its previous frame's), and the whole is divided by
-// HDRP's reflection lighting multiplier, which it applies to a reflection's every part.
-cbuffer Water : register(b1) {
-    float4x4 invViewProj;       // this frame's, camera-relative (Unity's column-major memory order)
-    float4x4 tracedViewProj;    // the traced frame's, relative to its camera
-    float4x4 tracedInvViewProj; // the traced frame's inverse
-    float4 cameraDelta;         // xyz: this camera minus the traced frame's; w: 1 / HDRP's reflection lighting multiplier
-    uint4 frameSize;            // width, height
-};
-Texture2D<float> waterDepth : register(t0);   // this frame: HDRP's depth where it takes reflections, 0 elsewhere
-Texture2D<float4> traced : register(t2);      // the traced frame: reflected light pre-exposed, a its hit distance (0: none)
-Texture2D<float> tracedDepth : register(t3);  // the traced frame's water depth
-RWTexture2D<float4> target : register(u0);    // HDRP's reflections
-float3 camera_relative(float4x4 inverse, float2 uv, float d) { float4 w = mul(inverse, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0)); return w.xyz / w.w; }
-// The traced frame's texel c, if its water lay where this pixel's does (dist from the traced frame's camera) and it has a
-// reflection: its light and hit distance.
-bool traced_texel(int2 c, float2 size, float dist, float tolerance, out float4 t) {
-    t = 0.0;
-    if (any(c < 0) || any(c >= int2(frameSize.xy))) return false;
-    t = traced.Load(int3(c, 0));
-    const float td = tracedDepth.Load(int3(c, 0));
-    if (!(t.a > 0.0) || !(td > 0.0)) return false;
-    return abs(length(camera_relative(tracedInvViewProj, (float2(c) + 0.5) / size, td)) - dist) <= tolerance;
-}
-// Whether two reflections met things about as far away (the sky, 65504, counts as one distance).
-bool same_reach(float a, float b) {
-    const bool skyA = a >= 32752.0, skyB = b >= 32752.0;
-    return skyA == skyB && (skyA || abs(a - b) <= 0.15 * b + 0.2);
-}
-[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
-    if (any(p >= frameSize.xy)) return;
-    const float d = waterDepth.Load(int3(p, 0));
-    if (!(d > 0.0)) return;
-    const float2 size = float2(frameSize.xy);
-    const float3 rel = camera_relative(invViewProj, (float2(p) + 0.5) / size, d) + cameraDelta.xyz; // from the traced frame's camera
-    const float dist = length(rel);
-    const float4 clip = mul(tracedViewProj, float4(rel, 1.0));
-    if (clip.w <= 1e-4) return;
-    const float2 texel = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5) * size - 0.5;
-    const int2 center = int2(round(texel));
-    const float tolerance = 0.03 * dist + 0.05;
-    // The nearest texel with this pixel's surface: the others' reflections must have met something as far away as its did,
-    // and about as bright (a Gaussian of 0.5 in log luminance: the texels hold light accumulated over frames, whose grain is
-    // a few tenths of a frame's, so a ratio of several is an edge, a lamp beside leaves as far away, not noise).
-    float reach = -1.0, nearest = 1e30, level = 0.0;
-    [unroll] for (int k = 0; k < 9; ++k) {
-        const int2 c = center + int2(k % 3 - 1, k / 3 - 1);
-        float4 t;
-        if (!traced_texel(c, size, dist, tolerance, t)) continue;
-        const float2 o = float2(c) - texel;
-        if (dot(o, o) < nearest) { nearest = dot(o, o); reach = t.a; level = dot(t.rgb, float3(0.2126, 0.7152, 0.0722)); }
-    }
-    if (reach < 0.0) return;
-    float3 fill = 0.0; float weights = 0.0;
-    [unroll] for (int i = 0; i < 25; ++i) {
-        const int2 c = center + int2(i % 5 - 2, i / 5 - 2);
-        float4 t;
-        if (!traced_texel(c, size, dist, tolerance, t) || !same_reach(t.a, reach)) continue;
-        const float2 o = float2(c) - texel;
-        const float l = dot(t.rgb, float3(0.2126, 0.7152, 0.0722)), least = 1e-3 * max(l, level) + 1e-7;
-        const float ratio = log((l + least) / (level + least));
-        const float w = exp(-dot(o, o) * (1.0 / (2.0 * 1.5 * 1.5)) - ratio * ratio * (1.0 / (2.0 * 0.5 * 0.5)));
-        fill += t.rgb * w; weights += w;
-    }
-    if (weights < 1e-4) return;
-    fill /= weights;
-    target[p] = float4(fill * cameraDelta.w, 1.0);
-}
 #elif defined(TGPT_SKY_CUBE) || defined(TGPT_SKY_CUBEARRAY)
 #if defined(TGPT_SKY_CUBE)
 TextureCube<float4> source : register(t0);
@@ -169,19 +81,22 @@ RWTexture2D<float4> target : register(u0);
 #else
     float4 c = source.SampleLevel(linearSampler, float4(dir, 0.0), c1.x);
 #endif
-    target[p] = float4(max(c.rgb, 0.0), 1.0);
+    // c0.z: the first row written (the fog's sky: a tile per mip, stacked; 0 for the sky itself).
+    target[p + uint2(0, c0.z)] = float4(max(c.rgb, 0.0), 1.0);
 }
 #elif defined(TGPT_ATLAS)
-// One material texture into its 64x64 tile: sampled at the mip nearest the tile's size, 2x2 each texel.
+// One material texture into its tile (64x64, or c1.y texels a side: a detail tile's 512): sampled at the mip nearest twice
+// the tile's size, 2x2 each texel.
 Texture2D<float4> source : register(t0);
 SamplerState wrapSampler : register(s0);
 RWTexture2D<unorm float4> target : register(u0);
 float3 encode(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(abs(c), 1.0 / 2.4) - 0.055; }
 [numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
-    if (any(p >= 64)) return;
+    const uint size = c1.y > 0.0 ? uint(c1.y) : 64u;
+    if (any(p >= size)) return;
     float4 sum = 0.0;
     [unroll] for (int i = 0; i < 4; ++i) {
-        float2 uv = (float2(p) + float2(0.25 + 0.5 * (i & 1), 0.25 + 0.5 * (i >> 1))) / 64.0;
+        float2 uv = (float2(p) + float2(0.25 + 0.5 * (i & 1), 0.25 + 0.5 * (i >> 1))) / float(size);
         sum += source.SampleLevel(wrapSampler, uv, c1.x);
     }
     sum *= 0.25;
@@ -200,12 +115,177 @@ float3 encode(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(abs(c)
     }
     target[c0.xy + p] = float4(rgb, saturate(sum.a));
 }
+#elif defined(TGPT_EYE)
+// An eye's color into its tile (TGPT_RegisterEyeColor; 64x64, or c1.y texels a side: a detail tile's 512), texel by texel
+// and 2x2 each, as the game's eye shader computes it (read from its compiled code): the sclera map tiled about the centre
+// times its tint; over it by the iris map's alpha, the iris map, magnified toward the centre by the pupil, times its tint,
+// through the shader's overlay with its limbal ring. c0.z: which maps it has (bit 0 sclera, 1 iris). Its fake reflection
+// is left out.
+Texture2D<float4> scleraMap : register(t0);
+Texture2D<float4> irisMap : register(t1);
+SamplerState clampSampler : register(s0); // clamped: the shader's one sampler for both maps (a repeating iris would tile the sclera)
+RWTexture2D<unorm float4> target : register(u0);
+cbuffer Eye : register(b1) {
+    float4 scleraTint, irisTint;
+    float4 params;          // sclera tiling, iris tiling, pupil size, limbal ring size
+    float4 params2;         // limbal ring intensity, iris emission intensity
+};
+float3 encode(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(abs(c), 1.0 / 2.4) - 0.055; }
+// The mip whose texels the tile's 2x2 samples cover, for a map tiled this many times across the eye.
+float lod_for(Texture2D<float4> t, float tiling, float size) {
+    uint w, h, levels; t.GetDimensions(0, w, h, levels);
+    return clamp(log2(max(abs(tiling) * float(max(w, h)) / (2.0 * size), 1e-6)), 0.0, max(float(levels) - 1.0, 0.0));
+}
+[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
+    const uint size = c1.y > 0.0 ? uint(c1.y) : 64u;
+    if (any(p >= size)) return;
+    const float scleraLod = (c0.z & 1u) != 0 ? lod_for(scleraMap, params.x, float(size)) : 0.0;
+    const float irisLod = (c0.z & 2u) != 0 ? lod_for(irisMap, params.y, float(size)) : 0.0;
+    float3 sum = 0.0;
+    [unroll] for (int i = 0; i < 4; ++i) {
+        const float2 uv = (float2(p) + float2(0.25 + 0.5 * (i & 1), 0.25 + 0.5 * (i >> 1))) / float(size);
+        const float2 d = uv - 0.5;
+        const float3 sclera = ((c0.z & 1u) != 0 ? scleraMap.SampleLevel(clampSampler, d * params.x + 0.5, scleraLod).rgb : 1.0) * scleraTint.rgb;
+        // The pupil: the iris magnified toward the centre (within an eighth of the eye's coordinates).
+        const float w = 1.0 - min(8.0 * length(d), 1.0);
+        const float2 irisUv = lerp(d * params.y + 0.5, d * (params.y + 8.0 * params.z - 6.0) + 0.5, w);
+        const float4 iris = (c0.z & 2u) != 0 ? irisMap.SampleLevel(clampSampler, irisUv, irisLod) : float4(1.0, 1.0, 1.0, 0.0);
+        const float3 tint = lerp(irisTint.rgb, float3(0.093520, 0.118404, 0.169881), saturate((params2.y - 1.0) / 9.0));
+        float3 b = lerp(sclera, iris.rgb * tint, iris.a);
+        // The limbal ring: the iris's outer params.w darkens toward its edge; 1 elsewhere, through the same overlay.
+        const float r = length(2.0 * (irisUv - 0.5));
+        const float ring = r > 1.0 - params.w ? pow(0.1 + 0.9 * max(1.0 - r, 0.0) / max(params.w, 1e-4), params2.x) : 1.0;
+        const float3 over = b <= 0.5 ? 2.0 * b * ring : 1.0 - 2.0 * (1.0 - b) * (1.0 - ring);
+        sum += lerp(b, over, iris.a);
+    }
+    target[c0.xy + p] = float4(encode(saturate(sum * 0.25)), 1.0);
+}
+#elif defined(TGPT_HAIR)
+// RealHair's color into its tile (TGPT_RegisterHairColor; 64x64, or c1.y texels a side: a detail tile's 512), texel by texel
+// and 2x2 each, as the game's shader computes it (read from its compiled code): its diffuse map (at the Shader Graph's tiling)
+// toward the root-to-end gradient along the root map, two highlight bands by the ID map, times its strength, the blend map and
+// the mask map's occlusion, and its color. Maps at the mip nearest twice the tile's size; one c0.z leaves out (bit 0 diffuse,
+// 1 root, 2 ID, 3 mask, 4 blend) reads as white.
+Texture2D<float4> diffuseMap : register(t0);
+Texture2D<float4> rootMap : register(t1);
+Texture2D<float4> idMap : register(t2);
+Texture2D<float4> maskMap : register(t3);
+Texture2D<float4> blendMap : register(t4);
+SamplerState wrapSampler : register(s0);
+RWTexture2D<unorm float4> target : register(u0);
+cbuffer Hair : register(b1) {
+    float4 tilingOffset;                                        // the diffuse map's tiling (xy) and offset (zw)
+    float4 diffuseColor, rootColor, endColor, highlightAColor, highlightBColor;
+    float4 highlightA, highlightB;                              // a band's start, peak and end on the ID map; w: its fade toward the end
+    float4 strengths0;                                          // base color, global, root color, end color strength
+    float4 strengths1;                                          // root map inverted; highlight blend; highlight A, B strength
+    float4 strengths2;                                          // highlight A, B overlap inverted; diffuse strength; blend strength
+    float4 strengths3;                                          // occlusion strength, occlude all
+};
+float3 encode(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(abs(c), 1.0 / 2.4) - 0.055; }
+float tile_size() { return c1.y > 0.0 ? c1.y : 64.0; }
+float lod_of(Texture2D<float4> t) {
+    uint w, h, levels; t.GetDimensions(0, w, h, levels);
+    return clamp(log2(max(float(max(w, h)), 1.0) / (2.0 * tile_size())), 0.0, max(float(levels) - 1.0, 0.0));
+}
+float4 read_map(Texture2D<float4> t, uint bit, float2 uv) { return (c0.z & bit) != 0 ? t.SampleLevel(wrapSampler, uv, lod_of(t)) : 1.0; }
+// A highlight band: rising from d.x to its peak at d.y, falling to d.z (smoothsteps, as the shader's).
+float band(float id, float4 d) {
+    const float rise = saturate((id - d.x) / max(d.y - d.x, 1e-5)), fall = saturate((id - d.y) / max(d.z - d.y, 1e-5));
+    return id >= d.y ? 1.0 - fall * fall * (3.0 - 2.0 * fall) : rise * rise * (3.0 - 2.0 * rise);
+}
+[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
+    const uint size = uint(tile_size());
+    if (any(p >= size)) return;
+    float4 sum = 0.0;
+    [unroll] for (int i = 0; i < 4; ++i) {
+        const float2 uv = (float2(p) + float2(0.25 + 0.5 * (i & 1), 0.25 + 0.5 * (i >> 1))) / float(size);
+        const float4 diffuse = read_map(diffuseMap, 1u, uv * tilingOffset.xy + tilingOffset.zw);
+        const float root = read_map(rootMap, 2u, uv).g, id = read_map(idMap, 4u, uv).g;
+        const float along = lerp(root, 1.0 - root, strengths1.x);
+        float3 c = lerp(1.0, diffuse.rgb, strengths0.x);
+        c = lerp(c, lerp(rootColor.rgb, endColor.rgb, along), lerp(strengths0.z, strengths0.w, along) * strengths0.y);
+        const float a = saturate(band(id, highlightA) * strengths1.z * (1.0 - highlightA.w * lerp(root, 1.0 - root, strengths2.x)) * strengths1.y);
+        c = lerp(c, highlightAColor.rgb, a);
+        const float b = saturate(band(id, highlightB) * strengths1.w * (1.0 - highlightB.w * lerp(root, 1.0 - root, strengths2.y)) * strengths1.y);
+        c = lerp(c, highlightBColor.rgb, b);
+        c *= strengths2.z;
+        c = lerp(c, c * read_map(blendMap, 16u, uv).g, strengths2.w);
+        c = lerp(c, c * lerp(1.0, read_map(maskMap, 8u, uv).g, strengths3.x), strengths3.y);
+        sum += float4(c * diffuseColor.rgb, diffuse.a);
+    }
+    sum *= 0.25;
+    target[c0.xy + p] = float4(encode(saturate(sum.rgb)), saturate(sum.a));
+}
+#elif defined(TGPT_HAIR_LOBES)
+// RealHair's strands into a 64x64 tile (TGPT_RegisterHairLobes), texel by texel and 2x2 each, as the game's shader reads them
+// for its highlights, at its mesh's own coordinates: red and green the flow map's direction in the mesh's tangent frame (red
+// times alpha, and green, each to -1..1, green flipped as far as c1.z as the shader does it; stored as 0.5 + 0.5 x), blue its
+// mask map's alpha to the power c1.x (how far the primary lobe is from its lowest smoothness to its highest), alpha its
+// specular map's luminance. c0.z: the maps it has (bit 0 flow, 1 mask, 2 specular); a missing flow runs along -v (root to tip,
+// as the game's hair cards lie), a missing mask is full, a missing specular map white. Maps at the mip nearest twice the tile's
+// size. Stored as they are: read back texel by texel (pt_common hair_lobe), not as colors.
+Texture2D<float4> flowMap : register(t0);
+Texture2D<float4> maskMap : register(t1);
+Texture2D<float4> specularMap : register(t2);
+SamplerState wrapSampler : register(s0);
+RWTexture2D<unorm float4> target : register(u0);
+float lod_of(Texture2D<float4> t) {
+    uint w, h, levels; t.GetDimensions(0, w, h, levels);
+    return clamp(log2(max(float(max(w, h)), 1.0) / 128.0), 0.0, max(float(levels) - 1.0, 0.0));
+}
+[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
+    if (any(p >= 64)) return;
+    float4 sum = 0.0;
+    [unroll] for (int i = 0; i < 4; ++i) {
+        const float2 uv = (float2(p) + float2(0.25 + 0.5 * (i & 1), 0.25 + 0.5 * (i >> 1))) / 64.0;
+        float2 flow = float2(0.0, -1.0);
+        if ((c0.z & 1u) != 0) {
+            const float4 f = flowMap.SampleLevel(wrapSampler, uv, lod_of(flowMap));
+            flow = float2(f.r * f.a, f.g) * 2.0 - 1.0;
+            flow.y += c1.z * (1.0 - 2.0 * flow.y);
+        }
+        const float mask = (c0.z & 2u) != 0 ? maskMap.SampleLevel(wrapSampler, uv, lod_of(maskMap)).a : 1.0;
+        const float3 spec = (c0.z & 4u) != 0 ? specularMap.SampleLevel(wrapSampler, uv, lod_of(specularMap)).rgb : 1.0;
+        sum += float4(flow * 0.5 + 0.5, pow(saturate(mask), max(c1.x, 0.0)), dot(saturate(spec), float3(0.2126, 0.7152, 0.0722)));
+    }
+    target[c0.xy + p] = saturate(sum * 0.25);
+}
+#elif defined(TGPT_STRAND_ALPHA)
+// A hair material's diffuse map's alpha into its block of the strand atlas (tracer.cpp bake_hair), texel for texel at the
+// map's mip whose size is the block's (c1.x): the strands as sharp as the game's texture has them. c0.xy: the block's corner,
+// c0.z its size.
+Texture2D<float4> source : register(t0);
+SamplerState wrapSampler : register(s0);
+RWTexture2D<unorm float> target : register(u0);
+[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
+    if (any(p >= c0.z)) return;
+    target[c0.xy + p] = source.SampleLevel(wrapSampler, (float2(p) + 0.5) / float(c0.z), c1.x).a;
+}
+#elif defined(TGPT_STRAND_MIP)
+// A block of the strand atlas one level down from the level above it: each texel the mean of the four it covers there (the
+// share of it the strands cover). c0.xy: the block's corner at this level, c0.z its size there.
+Texture2D<float> above : register(t0);
+RWTexture2D<unorm float> target : register(u0);
+[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
+    if (any(p >= c0.z)) return;
+    const uint2 q = (c0.xy + p) * 2u;
+    target[c0.xy + p] = 0.25 * (above.Load(int3(q, 0)) + above.Load(int3(q + uint2(1, 0), 0)) + above.Load(int3(q + uint2(0, 1), 0)) +
+                                above.Load(int3(q + uint2(1, 1), 0)));
+}
 #elif defined(TGPT_SKIN)
 // Characters' skinned positions from the game's skinning output into this frame's shared texture, a vertex a
 // texel and 4096 a row; one dispatch a character. c0: first vertex there, count, first texel, stride in bytes.
+// ON TRIAL (PT-92; SKIN_NORMAL: the 32-bit word after the position's three that holds it, 0 the first): the game's own
+// skinned normal of the vertex goes with its position, in the texel's alpha, as the game packed it (TGPT_SetSkinned) with
+// bit 30 set: no valid one has that bit, and with it every one is an ordinary float (pt_skin.hlsl SKIN_NORMAL_MARK takes
+// it off again). Without SKIN_NORMAL the alpha is 1 as before, and nothing reads it.
 #if defined(SKIN_RAW)
 ByteAddressBuffer source : register(t0);
 float3 load_position(uint i) { return asfloat(source.Load3(i * c0.w)); }
+#if defined(SKIN_NORMAL)
+uint load_normal(uint i) { return source.Load(i * c0.w + 12u + 4u * SKIN_NORMAL); }
+#endif
 #else
 struct SkinVertex {
     float3 position;
@@ -215,12 +295,19 @@ struct SkinVertex {
 };
 StructuredBuffer<SkinVertex> source : register(t0);
 float3 load_position(uint i) { return source[i].position; }
+#if defined(SKIN_NORMAL)
+uint load_normal(uint i) { return source[i].rest[SKIN_NORMAL]; }
+#endif
 #endif
 RWTexture2D<float4> target : register(u0);
 [numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= c0.y) return;
     uint t = c0.z + id.x;
+#if defined(SKIN_NORMAL)
+    target[uint2(t % 4096u, t / 4096u)] = float4(load_position(c0.x + id.x), asfloat(load_normal(c0.x + id.x) | 0x40000000u));
+#else
     target[uint2(t % 4096u, t / 4096u)] = float4(load_position(c0.x + id.x), 1.0);
+#endif
 }
 #elif defined(TGPT_COOKIE_CUBE) || defined(TGPT_COOKIE_2D)
 // A light's cookie (HDRP's mask on its intensity by direction) into its 64x64 tile of the cookie atlas: a point light's
@@ -272,186 +359,115 @@ RWTexture2D<unorm float> target : register(u0);
     target[c0.xy + p] = covered / 16.0;
 }
 #elif defined(TGPT_COMPOSITE) || defined(TGPT_COMPOSITE_RASTER)
-// The previous frame's traced light applied to this frame: each pixel finds its previous position
-// through HDRP's motion vectors and blends the four texels around it bilinearly, each only if its
-// surface was this one (its distance from the previous camera matches); with none matching, the best
-// of the eight neighbours of the nearest texel. The light is multiplied by this frame's diffuse color.
+// The frame's own traced light laid into HDRP's color buffer: each pixel takes its own texel of the light the tracer made
+// for this very frame (tracer.cpp composite_event waits for it on the GPU). So the picture the upscaler gets was traced
+// through the points HDRP drew this frame's depth at, under the sub-pixel shift the upscaler is told, still or moving (PT-84).
+// (Until 2026-10-08 this pass showed the light of the frame before: each pixel looked for it through HDRP's motion vectors,
+// took the texel nearest that place, or four around it, matched them by HDRP's depth, and where none matched a neighbour's
+// or a random one's nearby. The picture was a frame late, and its samples lay under another sub-pixel shift than the one the
+// upscaler was told: after it every edge was a stair of render pixels and thin things were rows of dots.)
 // Returns (rgb, a): the pixel becomes color * a + rgb.
 cbuffer Composite : register(b1) {
-    float4x4 invViewProj;   // this frame's, camera-relative (Unity's column-major memory order)
-    float4 cameraDelta;     // xyz: this camera minus the previous one; w: the frame index (a random seed)
-    uint4 frameSize;        // width, height, 1 for the nearest texel (Ray Reconstruction), debug view
-    uint4 extras;           // x: 1 writes Ray Reconstruction's hit distance and color before transparency (u1, u2)
+    float4x4 guidesMatrix;  // the guides pass's (one buffer serves both: tracer.cpp CompositeConstants); not read here
+    float4 guidesVector;    // the guides pass's; not read here
+    uint4 frameSize;        // width, height, unused, debug view
+    uint4 extras;           // x: 1 writes Ray Reconstruction's hit distance and color before transparency (u1, u2); z: unused (Fog Adaptation's copy until 2026-10-11)
 };
-Texture2D<float4> albedo : register(t0);   // this frame: sRGB diffuse color, a: deferred
-Texture2D<float4> emission : register(t1); // this frame: GBuffer3, pre-exposed
-Texture2D<float> depth : register(t2);     // this frame
-Texture2D<float2> motion : register(t3);   // this frame
-Texture2D<float4> tracedA : register(t4);  // previous frame: diffuse light, distance
-Texture2D<float4> tracedB : register(t5);  // previous frame: specular light
-Texture2D<float> exposureNow : register(t6);    // HDRP's exposure this frame, which its color is pre-exposed with
-Texture2D<float> exposureTraced : register(t7); // the one the traced light was pre-exposed with, a frame earlier
-Texture2D<float> tracedC : register(t8);  // previous frame: the traced reflections' hit distance
-Texture2D<float4> normalsIn : register(t9); // this frame: HDRP's normal buffer
-static float g_hitDistance = 65504.0;     // the hit distance of the texels composite() takes (a miss: none)
-static bool g_glass = false;              // and whether they are see-through glass (B's alpha -1: pt_compose)
+Texture2D<float4> albedo : register(t0);   // sRGB diffuse color, a: deferred
+Texture2D<float4> emission : register(t1); // GBuffer3, pre-exposed
+Texture2D<float> depth : register(t2);
+Texture2D<float4> tracedA : register(t3);  // the traced light (pt_compose's output A); a: the surface's distance, 0 where nothing was traced
+Texture2D<float4> tracedB : register(t4);  // its specular part; a: what the texel holds (below)
+Texture2D<float4> tracedC : register(t5); // RGB specular albedo, A reflections' hit distance
+// Ray Reconstruction's guides where the tracer knows the pixel better than the GBuffer (pt_compose traced_guides, pt_primary
+// write_guides): color (sRGB) and how much of the pixel they describe; normal (octahedral) and roughness.
+// RGB specular reflectance travels in tracedC.
+Texture2D<float4> tracedG0 : register(t6);
+Texture2D<float4> tracedG1 : register(t7);
+static int2 g_guideTexel = int2(-1, -1);   // the pixel's own texel where it took traced light (none: -1)
+static float g_hitDistance = 65504.0;     // its reflection's hit distance (a miss: none)
+static float3 g_through = -1.0;           // glass in front of the sky: the share of HDRP's sky it lets through
 float3 decode(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((abs(c) + 0.055) / 1.055, 2.4); }
-// A traced texel's kind from B's alpha (pt_compose): 0 see-through glass (-1), 1 deferred (0), 2 forward (1), 3 a share of
-// HDRP's shading (2).
-int texel_kind(float k) { return k < -0.5 ? 0 : k < 0.5 ? 1 : k < 1.5 ? 2 : 3; }
+// HDRP's GBuffer3 at a pixel as the composite adds it: emission (and what HDRP bakes in), pre-exposed; its tag for "no
+// emission, ambient occlusion in green" (Lit.hlsl AO_IN_GBUFFER3_TAG) none.
+float3 gbuffer3_emission(uint2 p) {
+    float3 e = emission.Load(int3(p, 0)).rgb;
+    return abs(e.r - 2048.0) < 1.0 && abs(e.b - 1024.0) < 1.0 ? 0.0 : e;
+}
+// What a texel holds, by B's alpha (pt_compose):
+//   1  the pixel's whole light: the surface the tracer's own camera ray stopped at, its color and emission in it (A + B);
+//  -2  glass in front of the sky: A the share of HDRP's sky it lets through, B its own light;
+//   0  the route before the tracer's own camera rays (TGPT_OPTION_GBUFFER_SURFACES): a surface of HDRP's G-buffer, A its
+//      diffuse light divided by its color, which this frame's G-buffer multiplies back in, with its GBuffer3; -1 that
+//      route's see-through glass (all of it in B).
+// A's alpha 0: nothing was traced for the pixel (the sky, or a surface the tracer has no light for), and HDRP's own stays.
 float4 composite(uint2 p) {
-    float2 size = float2(frameSize.xy);
-    float2 uv = (float2(p) + 0.5) / size;
-    float2 prevUv = uv - motion.Load(int3(p, 0));
-    int2 q = int2(floor(prevUv * size));
-    bool nearest = frameSize.z != 0;
+    const float4 ta = tracedA.Load(int3(p, 0));
     if (frameSize.w != 0) {
-        q = clamp(q, int2(0, 0), int2(frameSize.xy) - 1);
-        return float4(tracedA.Load(int3(q, 0)).rgb, 0.0);
+        // A debug view's colors are in A. The emissive view (TGPT_VIEW_EMISSIVE) adds HDRP's GBuffer3 where it is drawn, as
+        // the lit composite adds it to a surface of the G-buffer: where it lights something HDRP's emission is not (skin
+        // under a crown of hair, 2026-10-06), the view shows it.
+        const float3 hdrpEmission = frameSize.w == 10u && depth.Load(int3(p, 0)) > 0.0 && albedo.Load(int3(p, 0)).a >= 0.5 ? gbuffer3_emission(p) : 0.0;
+        return float4(ta.rgb + hdrpEmission, 0.0);
     }
-    float d = depth.Load(int3(p, 0));
-    float4 a = albedo.Load(int3(p, 0));
-    if (!(d > 0.0)) return float4(0, 0, 0, 1);
-    // A surface HDRP draws forward (hair, some props) takes traced light only from texels where the tracer found it along
-    // the camera ray (B's alpha: light already multiplied by its color); a deferred one only from the others. One HDRP shades
-    // itself (B's alpha 2) keeps HDRP's color, times the share of its light the traced shadows leave (A).
-    const bool forward = a.a < 0.5;
-    float4 w = mul(invViewProj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0));
-    float dist = length(w.xyz / w.w + cameraDelta.xyz);
-    float tolerance = 0.03 * dist + 0.05;
-    float3 diffuse = 0.0, specular = 0.0, shadeAdd = 0.0; float weights = 0.0, shade = 0.0, shadeWeights = 0.0;
-    float2 texel = prevUv * size - 0.5;
-    int2 corner = int2(floor(texel));
-    float2 f = texel - float2(corner);
-    // The texels around the position of one kind only (B's alpha: -1 see-through glass, 0 a deferred surface, 1 a forward one
-    // the tracer lit, its light already times its color, 2 a share of HDRP's own shading), the kind holding the most of the
-    // weight among those the surface takes (a deferred one glass or deferred, a forward one the others). Mixed, glass's light
-    // (all specular) was filtered with the wall's beside it under a guide of one or the other, and a pixel HDRP shades itself
-    // took a forward neighbour's traced light in place of HDRP's whenever one such texel was among the four.
-    float kinds[4] = { 0.0, 0.0, 0.0, 0.0 };
-    [unroll] for (int i = 0; i < 4 && !nearest; ++i) {
-        int2 o = int2(i & 1, i >> 1), c = corner + o;
-        if (any(c < 0) || any(c >= int2(frameSize.xy))) continue;
-        float stored = tracedA.Load(int3(c, 0)).a;
-        float wgt = (o.x ? f.x : 1.0 - f.x) * (o.y ? f.y : 1.0 - f.y);
-        const int kind = texel_kind(tracedB.Load(int3(c, 0)).a);
-        if (!(stored > 0.0) || abs(stored - dist) > tolerance || wgt <= 0.0 || (kind >= 2) != forward) continue;
-        kinds[kind] += wgt;
-    }
-    const int want = forward ? (kinds[3] > kinds[2] ? 3 : 2) : (kinds[0] > kinds[1] ? 0 : 1);
-    float heaviest = 0.0;
-    [unroll] for (int j = 0; j < 4 && !nearest; ++j) {
-        int2 o = int2(j & 1, j >> 1), c = corner + o;
-        if (any(c < 0) || any(c >= int2(frameSize.xy))) continue;
-        float4 t = tracedA.Load(int3(c, 0));
-        float wgt = (o.x ? f.x : 1.0 - f.x) * (o.y ? f.y : 1.0 - f.y);
-        if (!(t.a > 0.0) || abs(t.a - dist) > tolerance || wgt <= 0.0 || texel_kind(tracedB.Load(int3(c, 0)).a) != want) continue;
-        if (want == 3) { shade += t.r * wgt; shadeAdd += tracedB.Load(int3(c, 0)).rgb * wgt; shadeWeights += wgt; continue; }
-        diffuse += t.rgb * wgt; specular += tracedB.Load(int3(c, 0)).rgb * wgt; weights += wgt;
-        if (wgt > heaviest) { heaviest = wgt; g_hitDistance = tracedC.Load(int3(c, 0)); g_glass = want == 0; }
-    }
-    // HDRP's own shading of it, times the share its traced shadows leave, and the traced bounced light it gains (pt_compose),
-    // pre-exposed a frame earlier.
-    float en0 = exposureNow.Load(int3(0, 0, 0)), et0 = exposureTraced.Load(int3(0, 0, 0));
-    const float shareRatio = (en0 > 0.0 && et0 > 0.0 && en0 < 1e20 && et0 < 1e20) ? en0 / et0 : 1.0;
-    if (weights <= 1e-3 && shadeWeights > 1e-3) return float4(max(shadeAdd / shadeWeights * shareRatio, 0.0), saturate(shade / shadeWeights));
-    if (weights > 1e-3) { diffuse /= weights; specular /= weights; }
-    else {
-        // No texel around the position was this surface (it was hidden or off screen last frame): the closest
-        // match near it, first among the eight neighbours, then two and four texels out in eight directions,
-        // where the background a moving edge just uncovered was still visible.
-        const int2 offsets[9] = { int2(0, 0), int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1), int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1) };
-        int2 best = int2(-1, -1); float bestError = tolerance;
-        [unroll] for (int i = 0; i < 9; ++i) {
-            int2 c = q + offsets[i];
-            if (any(c < 0) || any(c >= int2(frameSize.xy))) continue;
-            float stored = tracedA.Load(int3(c, 0)).a;
-            float error = abs(stored - dist) + (i == 0 ? 0.0 : tolerance * 0.25);
-            if (stored > 0.0 && error < bestError && (tracedB.Load(int3(c, 0)).a > 0.5) == forward) { bestError = error; best = c; }
-        }
-        bestError = tolerance * 1.5;
-        [unroll] for (int ring = 2; ring <= 4 && best.x < 0; ring *= 2) {
-            [unroll] for (int i = 1; i < 9; ++i) {
-                int2 c = q + offsets[i] * ring;
-                if (any(c < 0) || any(c >= int2(frameSize.xy))) continue;
-                float stored = tracedA.Load(int3(c, 0)).a;
-                float error = abs(stored - dist);
-                if (stored > 0.0 && error < bestError && (tracedB.Load(int3(c, 0)).a > 0.5) == forward) { bestError = error; best = c; }
-            }
-        }
-        // Still nothing (a disocclusion, or the band a turning camera just brought into view): the light of a traced texel
-        // nearby, picked at random for each pixel and frame among eight within about 24 pixels (a disc kept on screen),
-        // the closest in distance from the camera. One texel for a whole band (the nearest to a position off screen, the
-        // same for every pixel of a column) drew streaks along the edge a quick turn revealed, which Ray Reconstruction,
-        // given single noisy texels, kept; a random pick is noise of the kind it removes. HDRP's own lighting, which was
-        // left there before, draws the fill lights the tracer leaves out (new parts of the view went from bright to dark).
-        if (best.x < 0 && !forward) {
-            const float radius = max(8.0, 24.0 * size.x / 1920.0);
-            const int2 margin = int2(min(radius, size * 0.5 - 1.0));
-            int2 c = clamp(q, margin, int2(frameSize.xy) - 1 - margin);
-            uint h = (p.x * 1973u + p.y * 9277u + asuint(cameraDelta.w) * 26699u) | 1u;
-            float closest = 1e30;
-            [unroll] for (int k = 0; k < 8; ++k) {
-                h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-                float a = float(h & 0xFFFFu) * (6.28318531 / 65536.0), r = radius * sqrt(float(h >> 16) / 65536.0);
-                int2 n = c + int2(round(float2(cos(a), sin(a)) * r));
-                if (any(n < 0) || any(n >= int2(frameSize.xy))) continue;
-                float stored = tracedA.Load(int3(n, 0)).a;
-                float error = abs(stored - dist);
-                // A forward texel's light is already times its own color, and one HDRP shades itself holds none.
-                if (tracedB.Load(int3(n, 0)).a > 0.5) continue;
-                if (stored > 0.0 && error < closest) { closest = error; best = n; }
-            }
-            if (best.x < 0) return float4(0, 0, 0, 1);
-        }
-        if (best.x < 0) return float4(0, 0, 0, 1); // a surface drawn forward the tracer has no light for: HDRP's shading stays
-        if (tracedB.Load(int3(best, 0)).a > 1.5) return float4(max(tracedB.Load(int3(best, 0)).rgb * shareRatio, 0.0), saturate(tracedA.Load(int3(best, 0)).r));
-        diffuse = tracedA.Load(int3(best, 0)).rgb; specular = tracedB.Load(int3(best, 0)).rgb;
-        g_hitDistance = tracedC.Load(int3(best, 0)); g_glass = tracedB.Load(int3(best, 0)).a < -0.5;
-    }
-    float3 base = forward ? 1.0 : decode(a.rgb);
-    // The traced light was pre-exposed with the previous frame's exposure: into this frame's, as auto exposure adapts.
-    float en = exposureNow.Load(int3(0, 0, 0)), et = exposureTraced.Load(int3(0, 0, 0));
-    float ratio = (en > 0.0 && et > 0.0 && en < 1e20 && et < 1e20) ? en / et : 1.0;
-    diffuse *= ratio; specular *= ratio;
-    float3 e = forward ? 0.0 : emission.Load(int3(p, 0)).rgb; // GBuffer3 holds nothing of a surface drawn forward
-    // HDRP's tag for "no emission, ambient occlusion in green" (Lit.hlsl AO_IN_GBUFFER3_TAG).
-    if (abs(e.r - 2048.0) < 1.0 && abs(e.b - 1024.0) < 1.0) e = 0.0;
-    return float4(max(e + base * diffuse + specular, 0.0), 0.0);
+    if (!(ta.a > 0.0)) return float4(0, 0, 0, 1);
+    const float4 tb = tracedB.Load(int3(p, 0));
+    g_guideTexel = int2(p);
+    g_hitDistance = tracedC.Load(int3(p, 0)).a;
+    if (tb.a > 0.5) return float4(max(ta.rgb + tb.rgb, 0.0), 0.0);
+    if (tb.a < -1.5) { g_through = saturate(ta.rgb); return float4(max(tb.rgb, 0.0), dot(g_through, 1.0 / 3.0)); }
+    const float4 a = albedo.Load(int3(p, 0));
+    // The route before: only a surface of the G-buffer has a color to multiply back in (one HDRP drew forward keeps HDRP's).
+    if (!(depth.Load(int3(p, 0)) > 0.0) || a.a < 0.5) { g_guideTexel = int2(-1, -1); g_hitDistance = 65504.0; return float4(0, 0, 0, 1); }
+    return float4(max(gbuffer3_emission(p) + decode(a.rgb) * ta.rgb + tb.rgb, 0.0), 0.0);
 }
 #if defined(TGPT_COMPOSITE)
 RWTexture2D<float4> target : register(u0);
 RWTexture2D<float> hitOut : register(u1);     // Ray Reconstruction's specular hit distance (extras.x)
 RWTexture2D<float4> beforeOut : register(u2); // and its color before transparency: the pixel as the composite leaves it
-// And its guides (the guides pass wrote them from the GBuffer), corrected where the light is see-through glass's.
+// The tracer's first surface supplies the guides below, glass included.
 RWTexture2D<unorm float4> diffuseGuide : register(u3);
 RWTexture2D<unorm float4> specularGuide : register(u4);
 RWTexture2D<float4> normalGuide : register(u5);
-// See-through glass's light is all specular (pt_specular refracts what lies behind it into the reflections), so Ray
-// Reconstruction takes it as the near-mirror the tracer made of it (pt_prepare: roughness 0.03, a dielectric's reflectance):
-// no diffuse albedo, and a specular albedo that covers the light the glass lets through (1 - F of its color, as pt_specular
-// weights what lies behind) as well as what it reflects. Its hit distance is already the distance to what is seen behind.
-void glass_guides(uint2 p) {
-    float2 uv = (float2(p) + 0.5) / float2(frameSize.xy);
-    float4 w = mul(invViewProj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth.Load(int3(p, 0)), 1.0));
-    float3 v = -normalize(w.xyz / w.w);
-    float3 n = decode_normal(normalsIn.Load(int3(p, 0)));
-    float nv = saturate(dot(n, v));
-    float fresnel = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
-    float3 spec = saturate(env_brdf_approx2(0.04, 0.03 * 0.03, nv) + (1.0 - fresnel) * decode(albedo.Load(int3(p, 0)).rgb));
-    const float diffuse = dot(spec, 1.0 / 3.0) < 0.05 ? 0.05 : 0.0; // never both near 0, as the guides pass keeps them
-    diffuseGuide[p] = float4(diffuse, diffuse, diffuse, 1.0);
-    specularGuide[p] = float4(spec, 1.0);
-    normalGuide[p] = float4(n, 0.03);
+float3 guide_normal(float2 e) {
+    float3 n = float3(e * 2.0 - 1.0, 0.0);
+    n.z = 1.0 - abs(n.x) - abs(n.y);
+    const float t = saturate(-n.z);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
+// Where the tracer knows what the pixel shows better than HDRP's GBuffer (its guide outputs, from the texel whose light the
+// pixel took: pt_compose traced_guides, pt_primary write_guides), its guides over the guides pass's, by the share of the pixel
+// they describe: all of a surface HDRP draws forward that the tracer shades (an eye: its own color and wet finish, not the
+// grey albedo and dielectric the guides pass gives what the GBuffer lacks; hair), the cover of the hair a pixel's ray crossed
+// in front of a surface of the G-buffer (a brow's color, roughness and specular albedo over the skin's, which the GBuffer
+// holds there). Albedos and roughness blend; the normal is the one that covers more of the pixel, unblended (NVIDIA's RR guide
+// 3.4.1 and 3.4.3: Ray Reconstruction computes the reflections' motion from it and from the hit distance). Without them Ray
+// Reconstruction took the strands' light for noise on the skin and smoothed it.
+void traced_guides(uint2 p) {
+    if (g_guideTexel.x < 0) return;
+    const float4 a = tracedG0.Load(int3(g_guideTexel, 0));
+    const float w = saturate(a.a);
+    if (!(w > 0.0)) return;
+    const float4 b = tracedG1.Load(int3(g_guideTexel, 0));
+    const float4 nr = normalGuide[p];
+    float3 diffuse = lerp(diffuseGuide[p].rgb, decode(a.rgb), w);
+    const float3 spec = lerp(specularGuide[p].rgb, tracedC.Load(int3(g_guideTexel, 0)).rgb, w);
+    diffuseGuide[p] = float4(saturate(diffuse), 1.0);
+    specularGuide[p] = float4(saturate(spec), 1.0);
+    normalGuide[p] = float4(w > 0.5 ? guide_normal(b.rg) : nr.xyz, lerp(nr.a, b.b, w));
 }
 [numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
     if (any(p >= frameSize.xy)) return;
     float4 o = composite(p);
     float4 c = target[p];
-    if (!(o.a == 1.0 && all(o.rgb == 0.0))) { c.rgb = c.rgb * o.a + o.rgb; target[p] = c; }
-    if (extras.x != 0) {
-        hitOut[p] = g_hitDistance; beforeOut[p] = float4(c.rgb, 1.0);
-        if (g_glass) glass_guides(p);
+    if (g_through.x >= 0.0) { c.rgb = c.rgb * g_through + o.rgb; target[p] = c; } // the sky behind see-through glass
+    else if (!(o.a == 1.0 && all(o.rgb == 0.0))) { c.rgb = c.rgb * o.a + o.rgb; target[p] = c; }
+    if ((extras.x & 1u) != 0u) {
+        hitOut[p] = g_hitDistance;
+        if ((extras.x & 2u) != 0u) beforeOut[p] = float4(c.rgb, 1.0);
+        traced_guides(p);
     }
 }
 #else
@@ -464,50 +480,29 @@ float4 psMain(float4 position : SV_Position) : SV_Target { return composite(uint
 // integration guide, section 3.4): linear diffuse albedo; specular albedo, the specular color's average
 // reflectance at this view angle and roughness (the guide's EnvBRDFApprox2); world-space normals with
 // linear roughness (HDRP's perceptual roughness, whose square is GGX's alpha) in alpha. Surfaces HDRP draws forward
-// keep their normals and get a gray albedo. Where a pixel emits light (GBuffer3) or is sky, the diffuse guide leans
-// towards that light's color, as NVIDIA's RTXPT mixes its stable radiance in ("stable radiance comes from emitters
-// including sky; it is good to have it as guidance"): the square root of its Reinhard-mapped, pre-exposed color.
+// keep their normals and get a gray albedo until the traced guides overwrite it. Albedo is material reflectance,
+// independent of illumination or emission (DLSS-RR guide 3.4.1). Sky defaults to 0.5 as that section recommends.
 cbuffer Composite : register(b1) {
     float4x4 invViewProj;   // this frame's, camera-relative
     float4 cameraDelta;     // w: Reflection Boost
     uint4 frameSize;        // width, height
     uint4 extras;           // y: the diffusion profiles that transmit as thick objects (TGPT_Frame::thickProfiles)
+    float4 profileF0[4];    // per diffusion profile, four to a row: its mirror reflectance (TGPT_SetProfileReflectance), 0 none
 };
 Texture2D<float4> albedo : register(t0);    // sRGB diffuse color, a: deferred
 Texture2D<float4> normals : register(t1);   // HDRP's normal buffer: octahedral normal 12:12 in RGB, roughness in A
 Texture2D<float4> specular : register(t2);  // GBuffer2: specular color (fast sRGB), feature in A's low bits
 Texture2D<float> depth : register(t3);
-Texture2D<float4> emissionIn : register(t4); // GBuffer3: emission, pre-exposed (HDRP's tag where there is none)
-Texture2D<float4> skyIn : register(t5);      // the sky rays see (latitude-longitude, HDRP's units)
-Texture2D<float> exposureIn : register(t6);  // HDRP's exposure, which its color is pre-exposed with
 RWTexture2D<unorm float4> diffuseOut : register(u0);
 RWTexture2D<unorm float4> specularOut : register(u1);
 RWTexture2D<float4> normalOut : register(u2);
 float3 decode(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((abs(c) + 0.055) / 1.055, 2.4); }
 float3 fast_srgb_to_linear(float3 c) { return c * (c * (c * 0.305306011 + 0.682171111) + 0.012522878); }
-float3 stable_mix(float3 albedo, float3 radiance) {
-    radiance = max(radiance, 0.0);
-    float3 stable = sqrt(radiance / (1.0 + max(radiance.r, max(radiance.g, radiance.b))));
-    float s = dot(stable, 1.0 / 3.0);
-    if (!(s > 0.0)) return albedo;
-    return lerp(albedo, lerp(stable, 0.5, 0.2), saturate(s / (dot(albedo, 1.0 / 3.0) + sqrt(s) + 1e-7)));
-}
 [numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
     if (any(p >= frameSize.xy)) return;
     float d = depth.Load(int3(p, 0));
-    float e0 = exposureIn.Load(int3(0, 0, 0));
-    float exposure = (e0 > 0.0 && e0 < 1e20) ? e0 : 1.0;
     if (!(d > 0.0)) {
-        // The sky: its color along the view ray, as HDRP's color holds it (pre-exposed).
-        float2 suv = (float2(p) + 0.5) / float2(frameSize.xy);
-        float4 far = mul(invViewProj, float4(suv.x * 2.0 - 1.0, 1.0 - suv.y * 2.0, 1e-7, 1.0));
-        float3 dir = normalize(far.xyz / far.w);
-        uint sw, sh; skyIn.GetDimensions(sw, sh);
-        float u = atan2(dir.x, dir.z) * (0.5 / 3.14159265) + 0.5, v = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265;
-        float3 sky = skyIn.Load(int3(min(uint2(uint(u * sw), uint(v * sh)), uint2(sw - 1, sh - 1)), 0)).rgb * exposure;
-        float3 skyGuide = stable_mix(0.0, sky);
-        if (dot(skyGuide, 1.0 / 3.0) < 0.05) skyGuide += 0.05;
-        diffuseOut[p] = float4(skyGuide, 1.0); specularOut[p] = 0.0; normalOut[p] = 0.0; return;
+        diffuseOut[p] = float4(0.5, 0.5, 0.5, 1.0); specularOut[p] = 0.0; normalOut[p] = 0.0; return;
     }
     float4 a = albedo.Load(int3(p, 0));
     float4 nb = normals.Load(int3(p, 0));
@@ -519,53 +514,54 @@ float3 stable_mix(float3 albedo, float3 radiance) {
     const uint features = uint(gb2.a * 255.0 + 0.5);
     const bool skin = (features & 7u) >= 2u && (features & 7u) <= 3u && (features & 8u) == 0u &&
                       ((extras.y >> (uint(gb2.b / (16.0 / 255.0) + 1.0 / 255.0) & 15u)) & 1u) != 0u;
-    const float boost = deferred && !skin ? cameraDelta.w : 0.0;
-    float roughness = lerp(saturate(nb.a), 0.05, boost);
+    const bool transmits = (features & 7u) >= 2u && (features & 7u) <= 3u; // grass and leaves too (pt_prepare)
+    const float boost = deferred && !skin && !transmits ? cameraDelta.w : 0.0;
+    float roughness = saturate(nb.a);
     float2 uv = (float2(p) + 0.5) / float2(frameSize.xy);
     float4 w = mul(invViewProj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0));
     float3 v = -normalize(w.xyz / w.w);
     float3 f0 = 0.04;
     if (deferred) {
         if ((features & 7u) == 0u) f0 = fast_srgb_to_linear(gb2.rgb);
-        f0 = lerp(f0, 0.6, 0.7 * boost);
+        // A leaf's or a blade's, its diffusion profile's (pt_prepare): the game's foliage mirrors 0.0023, not 0.04.
+        else if (transmits && !skin && (features & 8u) == 0u) {
+            const uint profile = uint(gb2.b / (16.0 / 255.0) + 1.0 / 255.0) & 15u;
+            const float leafF0 = profileF0[profile >> 2u][profile & 3u];
+            if (leafF0 > 0.0) f0 = leafF0;
+        }
+    }
+    {
+        // As pt_common's reflection_boost: everything a little glossier, a metal twice that and mirroring more; never rougher
+        // (a mirror stays one).
+        const float top = max(f0.r, max(f0.g, f0.b));
+        const float metal = deferred ? saturate((top - 0.08) / 0.4) : 0.0;
+        const float unboosted = roughness;
+        roughness = lerp(roughness, 0.05, saturate(boost * (1.0 + metal)));
+        roughness = min(roughness, unboosted);
+        f0 = lerp(f0, f0 / max(top, 1e-3), 0.7 * boost * metal);
     }
     float3 diffuse = deferred ? decode(a.rgb) : 0.5;
-    if (deferred) {
-        float3 e = emissionIn.Load(int3(p, 0)).rgb;
-        if (!(abs(e.r - 2048.0) < 1.0 && abs(e.b - 1024.0) < 1.0)) diffuse = stable_mix(diffuse, e);
-    }
     float3 spec = saturate(env_brdf_approx2(f0, roughness * roughness, dot(n, v)));
-    // Never both near 0 (a black cloth, soot): Ray Reconstruction divides the light by them, as NVIDIA's RTXPT keeps
-    // their average above 0.05.
-    if (dot(diffuse + spec, 1.0 / 3.0) < 0.05) diffuse += 0.05;
     diffuseOut[p] = float4(diffuse, 1.0);
     specularOut[p] = float4(spec, 1.0);
     normalOut[p] = float4(n, roughness);
 }
-#elif defined(TGPT_SHADOW_DETAIL) || defined(TGPT_SHADOW_DETAIL_RASTER)
-// Shadow Detail: HDRP's finished HDR image (denoised, upscaled, pre-exposed: before its post-processing and tonemapper)
-// with its dark parts lifted by a bounded curve below a mid tone, log2 0.12, where the traced light's exposure aims its
-// median; everything brighter as it is. Below it the lift grows smoothly (quadratically for the first half stop) and then
-// by 0.4 s EV per stop, so the log-luminance slope there is 1 - 0.4 s, up to 3 s EV at most; one multiplier for all three
-// channels (their ratios kept), black kept black. After every denoiser: a curve before Ray Reconstruction biased it (the
-// average of a lifted noisy pixel is darker than the lifted average). c0.xy: size; c1.x: s, 0 to 1.
-float3 shadow_detail(float3 c) {
-    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
-    if (!(y > 0.0) || !(c1.x > 0.0)) return c;
-    float d = max(0.0, -3.06 - log2(max(y, 1e-12)));
-    float h = d < 0.5 ? d * d : d - 0.25;
-    return c * exp2(c1.x * min(3.0, 0.4 * h));
-}
-#if defined(TGPT_SHADOW_DETAIL)
-RWTexture2D<float4> target : register(u0);
-[numthreads(8, 8, 1)] void main(uint2 p : SV_DispatchThreadID) {
-    if (any(p >= c0.xy)) return;
-    float4 c = target[p];
-    target[p] = float4(shadow_detail(c.rgb), c.a);
-}
-#else
-Texture2D<float4> source : register(t0); // a copy of the image
+#elif defined(TGPT_DEPTH_MOTION)
+// PT-112 (A), on trial: the traced frame's own depth and motion vectors into HDRP's depth buffer and motion vectors
+// (tracer.cpp write_depth_motion), from pt_compose's dm and mv: the device depth (reversed-Z, HDRP's projection with the
+// frame's sub-pixel shift; 0 where the camera's ray met nothing) and the motion (HDRP's kind).
+Texture2D<float> depthIn : register(t0);
+Texture2D<float2> motionIn : register(t1);
+struct DepthMotionOut { float2 motion : SV_Target0; float depth : SV_Depth; };
 float4 vsMain(uint id : SV_VertexID) : SV_Position { float2 uv = float2((id << 1) & 2, id & 2); return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }
-float4 psMain(float4 position : SV_Position) : SV_Target { float4 c = source.Load(int3(position.xy, 0)); return float4(shadow_detail(c.rgb), c.a); }
-#endif
+DepthMotionOut psMain(float4 position : SV_Position) {
+    const int3 p = int3(uint2(position.xy), 0);
+    DepthMotionOut o;
+    o.depth = saturate(depthIn.Load(p));
+    o.motion = motionIn.Load(p);
+    return o;
+}
+// HDRP's depth pyramid's first level, in a draw of its own: the pyramid is a larger texture than the depth buffer and the
+// motion vectors, and D3D11 binds no targets of different sizes together.
+float psPyramid(float4 position : SV_Position) : SV_Target0 { return saturate(depthIn.Load(int3(uint2(position.xy), 0))); }
 #endif

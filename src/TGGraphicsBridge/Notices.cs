@@ -14,7 +14,7 @@ namespace TGGraphicsBridge
     public enum NoticeLevel { Info = 0, Warning = 1, Problem = 2 }
     // The Video rows a notice concerns: the Frame Generation row, the game's upscaling row (Dynamic
     // Resolution, which TG Better Upscaling extends), or both.
-    [Flags] public enum AlertRow { None = 0, FrameGeneration = 1, Upscaling = 2 }
+    [Flags] public enum AlertRow { None = 0, FrameGeneration = 1, Upscaling = 2, NeuralRendering = 4 }
     // Three lengths of the same problem: Label is the row's value in the Video settings and must stay a
     // word or two (the game's value field is narrow); Summary is the row's tooltip, a sentence or two with
     // the fix (the game's tooltip is a narrow column that runs off the screen past a few lines); Detail is
@@ -53,7 +53,8 @@ namespace TGGraphicsBridge
         {
             if (source == "TG Frame Generation") return AlertRow.FrameGeneration;
             if (source == "TG Better Upscaling") return AlertRow.Upscaling;
-            if (source == "TG Graphics Bridge") return AlertRow.FrameGeneration | AlertRow.Upscaling; // the bridge serves both
+            if (source == "TG Neural Rendering") return AlertRow.NeuralRendering;
+            if (source == "TG Graphics Bridge") return AlertRow.FrameGeneration | AlertRow.Upscaling | AlertRow.NeuralRendering;
             switch (id)
             {
                 case "compat.optiscaler": case "compat.dlssenabler": case "compat.specialk": case "compat.vcruntime":
