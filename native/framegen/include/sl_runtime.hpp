@@ -155,6 +155,9 @@ struct State {
     PresentTiming timingSinceRead;
     // TGFG_SetNoTearing: Present without DXGI_PRESENT_ALLOW_TEARING.
     std::atomic<bool> noTearing{false};
+    // TGFG_SetDlssPreset: what the player chose, and what the DLSS-G feature was last created for.
+    std::atomic<uint32_t> dlssPreset{0};
+    uint32_t appliedDlssPreset=0;
     // TGFG_LogNote: end the current summary window at the next present; hold the 5 s cadence until then.
     std::atomic<bool> summaryRequested{false}, summaryHeld{false};
 };

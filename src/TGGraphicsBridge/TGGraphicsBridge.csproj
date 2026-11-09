@@ -8,7 +8,7 @@
   <PropertyGroup>
     <AssemblyName>TGGraphicsBridge</AssemblyName>
     <RootNamespace>TGGraphicsBridge</RootNamespace>
-    <Version>1.2.3</Version>
+    <Version>1.2.4</Version>
     <!-- Its XML documentation ships beside it: the API TG Frame Generation and TG Better Upscaling use. -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>

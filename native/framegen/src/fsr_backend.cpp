@@ -111,8 +111,8 @@ class FsrOutput final : public GeneratorOutput {
         if(result!=FFX_API_RETURN_OK || !generation_) {
             generation_=nullptr; error="ffxCreateContext(frame generation) returned "+std::to_string(result); return false;
         }
-        ffxConfigureDescGlobalDebug1 debug{}; debug.header.type=FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1;
-        debug.fpMessage=&message; debug.debugLevel=FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_WARNINGS;
+        ffxConfigureDescGlobalDebug debug{}; debug.header.type=FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG;
+        debug.effectId=FFX_API_EFFECT_ID_FRAMEGENERATION; debug.fpMessage=&message; debug.debugLevel=FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_WARNINGS;
         fsr.configure(&generation_,&debug.header);
         ffxQueryGetProviderVersion provider{}; provider.header.type=FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
         if(fsr.query(&generation_,&provider.header)==FFX_API_RETURN_OK && provider.versionName)

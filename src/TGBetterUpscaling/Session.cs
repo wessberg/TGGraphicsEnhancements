@@ -82,6 +82,7 @@ namespace TGBetterUpscaling
             {
                 float now = Time.unscaledTime;
                 UpscalerRow.Tick(now); // catches its own failures
+                StpHost.TickDlssSize();
                 if (Settings.DumpNow.Value) { Settings.DumpNow.Value = false; Diagnostics.Write(); }
                 if (now < nextPoll) return;
                 nextPoll = now + 0.25f;

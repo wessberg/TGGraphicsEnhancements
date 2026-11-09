@@ -86,7 +86,9 @@ $encoderProcesses = @('sunshine')
 # The owner's editor, where this work is watched (VS Code: "Code"), holds 370 to 900 MB of video memory for its window
 # at 0 % of the GPU's engines; on 2026-10-10 14:41 its 898 MB stopped a run half way. An editor is not a game: its memory
 # does not count, its use of the engines still does (from 4 %, as for every program).
-$memoryNotCounted = $encoderProcesses + @('Code')
+# NVIDIA Overlay's counter read 28,031 MB at 0 % on a 16 GB card (2026-10-30, after a recording): not real memory, and it
+# held a run back for good. Same rule: its memory does not count, its use of the engines does.
+$memoryNotCounted = $encoderProcesses + @('Code', 'NVIDIA Overlay')
 
 # Every process's share of the GPU and its video memory, from Windows' own counters (one second of them).
 function Get-GpuUse {

@@ -73,6 +73,7 @@ namespace TGBetterUpscaling
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDlssDllFn(out ulong loaded, out ulong requested, out ulong bundled);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDlssOverrideFn(out DlssOverride dlssOverride);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetRrOptimalSettingsFn(uint width, uint height, uint mode, out uint renderWidth, out uint renderHeight);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDlssSizeFn(out uint created, out uint render, out uint creations);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
         private static extern IntPtr GetModuleHandleW(string name);
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
@@ -85,6 +86,7 @@ namespace TGBetterUpscaling
         private GetDlssDllFn getDlssDll;
         private GetDlssOverrideFn getDlssOverride;
         private GetRrOptimalSettingsFn getRrOptimalSettings;
+        private GetDlssSizeFn getDlssSize;
         internal IntPtr RenderEvent { get; private set; }
         internal bool Connected => read != null && submit != null && RenderEvent != IntPtr.Zero;
         internal string Detail { get; private set; } = NativeName + " is not loaded. It starts through TG Graphics Bridge: check BepInEx/TGGraphicsBridge/Autoload.log " +
@@ -118,6 +120,8 @@ namespace TGBetterUpscaling
                 // Additive API: an older native DLL keeps SR/FSR/XeSS, but cannot host RR at unverified dimensions.
                 if (GetProcAddress(module, "TGUP_GetRrOptimalSettings") != IntPtr.Zero)
                     getRrOptimalSettings = Bind<GetRrOptimalSettingsFn>(module, "TGUP_GetRrOptimalSettings");
+                if (GetProcAddress(module, "TGUP_GetDlssSize") != IntPtr.Zero)
+                    getDlssSize = Bind<GetDlssSizeFn>(module, "TGUP_GetDlssSize");
                 var newSubmit = Bind<Submit>(module, "TGUP_SubmitFrame");
                 var newRead = Bind<Read>(module, "TGUP_ReadStatus");
                 RenderEvent = Bind<GetEvent>(module, "TGUP_GetRenderEvent")();
@@ -138,6 +142,12 @@ namespace TGBetterUpscaling
         {
             renderWidth = renderHeight = 0;
             return getRrOptimalSettings != null && getRrOptimalSettings(width, height, mode, out renderWidth, out renderHeight) == 0;
+        }
+        // Whether the game's DLSS feature was created larger than it renders; see TGUP_GetDlssSize.
+        internal bool DlssOversized(out uint created, out uint render, out uint creations)
+        {
+            created = render = creations = 0;
+            return getDlssSize != null && getDlssSize(out created, out render, out creations) == 1;
         }
         internal int SetOutput(uint sequence, IntPtr output) => Connected ? setOutput(sequence, unchecked((ulong)output.ToInt64())) : -100;
         internal const int DlssNone = 0, DlssBundled = 1, DlssKept = 2;

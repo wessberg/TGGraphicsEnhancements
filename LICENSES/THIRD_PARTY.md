@@ -9,7 +9,7 @@ MinHook is fetched separately at v1.3.4 (or supplied locally). Review its licens
 in that checkout and include the applicable notices when distributing a binary
 that incorporates it. No MinHook source or binary is bundled here.
 
-NVIDIA Streamline SDK 2.14.1: this repository contains no NVIDIA headers or binaries. Player
+NVIDIA Streamline SDK 2.14.16: this repository contains no NVIDIA headers or binaries. Player
 packages contain the signed production runtime from the SDK release, unmodified except that
 `sl.interposer.dll` is renamed `TGFG.Streamline.dll`: `sl.common.dll`, `sl.dlss_g.dll`,
 `sl.reflex.dll`, `sl.pcl.dll` and `nvngx_dlssg.dll`. Stage-Runtime.ps1 places the release's
@@ -19,12 +19,18 @@ Reflex license as `LICENSE-NVIDIA-Reflex.txt`. Anyone publishing a package shoul
 terms for their own release; the RTX SDKs license, for example, allows distribution as part of an
 application with material functionality beyond the SDK and not as a stand-alone product.
 
-NVIDIA DLSS SDK 310.9.1: TG Better Upscaling packages carry the signed `nvngx_dlss.dll` from the SDK
+NVIDIA DLSS SDK 310.9.16: TG Better Upscaling packages carry the signed `nvngx_dlss.dll` from the SDK
 release, unmodified, as `Native/DLSS/nvngx_dlss.dll`, with the release's NVIDIA RTX SDKs license next
 to it as `Native/DLSS/LICENSE-NVIDIA-RTX-SDKs.txt`. The terms above apply; the license's trademark
 exhibit (7.1(b)) also asks applications using the DLSS SDK to credit it.
 
-AMD FSR (FidelityFX SDK v2.3.0): TG Frame Generation and TG Better Upscaling compile against the SDK's
+NVIDIA DLSS Neural Rendering 310.9.16: TG Neural Rendering packages carry the signed `nvngx_dlssnr.dll` from NVIDIA's public
+RTX Remix 1.6.1 x64 release, unmodified, as `Native/DLSS/nvngx_dlssnr.dll`, with the NVIDIA RTX SDKs license next to it. NVIDIA
+states "NVIDIA permits modders to build and share mods using NVIDIA technologies/binaries from our RTX Remix's GitHub and the
+DXVK-Remix GitHub" (dxvk-remix `CONTRIBUTING.md`), and RTX Remix's notices name these models under that license. It is never
+distributed by itself. This is a reading of the public terms, not NVIDIA's written clearance (`docs/DLSS5-RESEARCH.md`).
+
+AMD FSR (FidelityFX SDK v2.4.0): TG Frame Generation and TG Better Upscaling compile against the SDK's
 MIT-licensed API headers and load AMD's signed `amd_fidelityfx_loader_dx12.dll` with
 `amd_fidelityfx_framegeneration_dx12.dll` (frame generation) or `amd_fidelityfx_upscaler_dx12.dll`
 (upscaling) at run time. Those binaries are redistributable in binary form under AMD's license,
@@ -58,7 +64,7 @@ AMD Anti-Lag 2 SDK v2.0.0a is a header compiled into TGFG.Native.dll under the M
 include its notice with any distributed binary. MinHook is linked into TGGraphicsBridge.Native.dll.
 
 The SDKs themselves are not part of this repository; the build scripts expect them next to it
-(`FidelityFX-SDK-2.3.0`, `XeSS-SDK-3.0.2`, `AntiLag2-SDK-2.0.0a`, `DLSS-SDK-310.9.1`, `RTXDI-Library-3.1`,
+(`FidelityFX-SDK-2.4.0`, `XeSS-SDK-3.0.2`, `AntiLag2-SDK-2.0.0a`, `DLSS-SDK-310.9.16`, `RTXDI-Library-3.1`,
 `NRD-SDK-4.17.3`, see docs/SOURCES.md).
 
 BepInEx, Il2CppInterop, Unity, TextMeshPro, and game assemblies are referenced from

@@ -24,7 +24,11 @@ namespace TGGraphicsBridge.Internal
         {
             targets.customColorBuffer = CustomColor.GetValue(pipeline) as Lazy<RTHandle>;
             targets.customDepthBuffer = CustomDepth.GetValue(pipeline) as Lazy<RTHandle>;
-            ExecuteInternal.Invoke(pass, new object[] { graph, camera, default(CullingResults), default(CullingResults), targets, volume });
+            // Unity 6.3's HDRP takes the render context as well. It only hands it on to the pass, and these passes record
+            // through ctx.cmd alone, so an empty one serves, as the empty culling results do.
+            ExecuteInternal.Invoke(pass, ExecuteInternal.GetParameters().Length == 7
+                ? new object[] { graph, camera, default(ScriptableRenderContext), default(CullingResults), default(CullingResults), targets, volume }
+                : new object[] { graph, camera, default(CullingResults), default(CullingResults), targets, volume });
         }
 #else
         private static readonly IntPtr ExecuteInternal = FindExecuteInternal();
@@ -44,13 +48,17 @@ namespace TGGraphicsBridge.Internal
             var culling = default(CullingResults);
             // The generated interop passes the boxed `in RenderTargets` header instead of its data.
             // That corrupts graph handles and leaks textures. Keep BU's tested unboxed invocation.
-            void** args = stackalloc void*[6];
-            args[0] = (void*)IL2CPP.Il2CppObjectBaseToPtr(graph);
-            args[1] = (void*)IL2CPP.Il2CppObjectBaseToPtr(camera);
-            args[2] = &culling;
-            args[3] = &culling;
-            args[4] = (void*)IL2CPP.il2cpp_object_unbox(IL2CPP.Il2CppObjectBaseToPtrNotNull(targets));
-            args[5] = (void*)IL2CPP.Il2CppObjectBaseToPtr(volume);
+            // Unity 6.3's HDRP takes the render context as well; see the Mono branch above.
+            var context = default(ScriptableRenderContext);
+            void** args = stackalloc void*[7];
+            int count = 0;
+            args[count++] = (void*)IL2CPP.Il2CppObjectBaseToPtr(graph);
+            args[count++] = (void*)IL2CPP.Il2CppObjectBaseToPtr(camera);
+            if (IL2CPP.il2cpp_method_get_param_count(ExecuteInternal) == 7) args[count++] = &context;
+            args[count++] = &culling;
+            args[count++] = &culling;
+            args[count++] = (void*)IL2CPP.il2cpp_object_unbox(IL2CPP.Il2CppObjectBaseToPtrNotNull(targets));
+            args[count++] = (void*)IL2CPP.Il2CppObjectBaseToPtr(volume);
             IntPtr exception = IntPtr.Zero;
             IL2CPP.il2cpp_runtime_invoke(ExecuteInternal, IL2CPP.Il2CppObjectBaseToPtrNotNull(pass), args, ref exception);
             Il2CppInterop.Runtime.Il2CppException.RaiseExceptionIfNecessary(exception);

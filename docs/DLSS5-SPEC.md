@@ -109,7 +109,7 @@ Validate x64 format, NVIDIA signature and version/hash using the bridge's existi
 establishes file identity, not permission or compatible hardware. Patched community runtimes may fail that policy;
 accepting BYO did not authorize weakening it. Take hardware availability from actual runtime results.
 
-The mod does not bundle, patch, rehost or automatically download the model, extract it from another game, rename
+(Since 2026-10-30 the mod bundles NVIDIA's signed, unmodified DLL from the RTX Remix release: `docs/DLSS5-RESEARCH.md`. Otherwise:) The mod does not patch, rehost or automatically download the model, extract it from another game, rename
 the game executable, or require a ReShade add-on. Existing community download URLs are evidence of availability,
 not an authorized dependency feed. A future authorized redistribution grant can replace BYO packaging separately.
 

@@ -8,6 +8,7 @@
 #   TGBetterUpscaling/XeSS         Intel XeSS Super Resolution
 #   TGBetterUpscaling/DLSS         NVIDIA DLSS Super Resolution, for the game's own DLSS, and DLSS Ray
 #                                  Reconstruction, for TG Path Tracing's frames
+#   TGNeuralRendering/DLSS         NVIDIA DLSS Neural Rendering, unmodified, from the RTX Remix release
 #   TGPathTracing/FidelityFX       AMD FSR API loader and FSR Ray Regeneration (the denoiser, Radeon RX 9000)
 #   TGPathTracing/D3D12            Microsoft's DirectX 12 Agility SDK runtime (D3D12Core.dll), for Shader
 #                                  Model 6.9 and DirectX Raytracing 1.2 where Windows' own runtime is older
@@ -23,12 +24,16 @@ param(
     [string]$XeSSRoot='',
     # NVIDIA DLSS SDK release (github.com/NVIDIA/DLSS): lib/Windows_x86_64/rel/nvngx_dlss.dll and nvngx_dlssd.dll, LICENSE.txt.
     [string]$DlssRoot='',
+    # NVIDIA's signed nvngx_dlssnr.dll: the folder holding it, as it comes in the public RTX Remix x64 release. Its license
+    # notice is the NVIDIA RTX SDKs license, which RTX Remix's notices name for its Neural Rendering models; needs -DlssRoot.
+    [string]$NeuralRoot='',
     # DirectX 12 Agility SDK (the Microsoft.Direct3D.D3D12 NuGet package, unpacked): build/native/bin/x64/D3D12Core.dll
     # or bin/x64/D3D12Core.dll, LICENSE.txt.
     [string]$AgilityRoot=''
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+if($NeuralRoot -and -not $DlssRoot) { throw '-NeuralRoot needs -DlssRoot, for the license notice.' }
 if(-not ($RuntimeDirectory -or $FidelityFXRoot -or $XeSSRoot -or $DlssRoot -or $AgilityRoot)) {
     throw 'Pass -RuntimeDirectory (NVIDIA Streamline), -FidelityFXRoot (AMD FSR), -XeSSRoot (Intel XeSS), -DlssRoot (NVIDIA DLSS) and/or -AgilityRoot (DirectX 12 Agility SDK).'
 }
@@ -116,6 +121,10 @@ if($DlssRoot) {
     $root=(Resolve-Path $DlssRoot).Path
     $vendors+=@{Folder='TGBetterUpscaling\DLSS'; Signer='NVIDIA'; Notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-NVIDIA-RTX-SDKs.txt'};
         Files=@((Join-Path $root 'lib\Windows_x86_64\rel\nvngx_dlss.dll'),(Join-Path $root 'lib\Windows_x86_64\rel\nvngx_dlssd.dll'))}
+    if($NeuralRoot) {
+        $vendors+=@{Folder='TGNeuralRendering\DLSS'; Signer='NVIDIA'; Notice=@{Source=(Join-Path $root 'LICENSE.txt'); Name='LICENSE-NVIDIA-RTX-SDKs.txt'};
+            Files=@((Join-Path (Resolve-Path $NeuralRoot).Path 'nvngx_dlssnr.dll'))}
+    }
 }
 # The Agility SDK runtime TG Graphics Bridge points the game's Direct3D 12 at when Windows' own is older
 # (native/bridge/src/agility.cpp): TG Path Tracing's Shader Model 6.9 passes need it on most Windows builds.

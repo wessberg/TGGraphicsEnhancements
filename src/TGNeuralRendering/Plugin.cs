@@ -9,7 +9,7 @@ using BepInEx.Unity.IL2CPP;
 namespace TGNeuralRendering
 {
     [BepInPlugin(Id, Name, Version)]
-    [BepInDependency("com.wessberg.tggraphicsbridge", "1.2.3")]
+    [BepInDependency("com.wessberg.tggraphicsbridge", "1.2.4")]
     [BepInDependency("kane.tgfoa.mod-manager", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency("com.avalonmodmanager", BepInDependency.DependencyFlags.SoftDependency)]
 #if BEPINEX_IL2CPP
@@ -18,7 +18,7 @@ namespace TGNeuralRendering
     public sealed class Plugin : BaseUnityPlugin
 #endif
     {
-        public const string Id = "com.wessberg.tgneuralrendering", Name = "TG Neural Rendering", Version = "1.2.3";
+        public const string Id = "com.wessberg.tgneuralrendering", Name = "TG Neural Rendering", Version = "1.2.4";
 #if BEPINEX_IL2CPP
         public override void Load()
         {

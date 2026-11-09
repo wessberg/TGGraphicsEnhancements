@@ -4,7 +4,7 @@
   <PropertyGroup>
     <AssemblyName>TGPathTracing</AssemblyName>
     <RootNamespace>TGPathTracing</RootNamespace>
-    <Version>1.2.3</Version>
+    <Version>1.2.4</Version>
     <!-- The Mono version only for now: the scene capture reads the game's ECS world (Awaken's Drake renderer)
          through Unity.Entities' generic API, which the IL2CPP interop does not expose usably. -->
     <TargetFrameworks>net472</TargetFrameworks>

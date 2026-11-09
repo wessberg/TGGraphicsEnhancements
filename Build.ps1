@@ -7,6 +7,8 @@
 param(
     [ValidateSet('Mono','IL2CPP','Both')][string]$Runtime = 'Mono',
     [ValidateSet('All','TGFrameGeneration','TGBetterUpscaling','TGPathTracing','TGNeuralRendering')][string]$Mod = 'All',
+    # Mods left out of this build and stage (TG Path Tracing while it is tabled: it does not compile against Unity 6.3).
+    [ValidateSet('TGFrameGeneration','TGBetterUpscaling','TGPathTracing','TGNeuralRendering')][string[]]$Skip = @(),
     [string]$GameDirMono = '',
     [string]$GameDirIl2Cpp = '',
     [ValidateSet('Release','Debug')][string]$Configuration = 'Release',
@@ -44,7 +46,7 @@ foreach ($target in $targets) {
     $framework = Get-TgFramework $target
     if (-not $StageOnly) {
         foreach ($name in $projects.Keys) {
-            if (-not (Test-TgModRuntime $name $target)) { continue }
+            if (-not (Test-TgModRuntime $name $target) -or $Skip -contains $name) { continue }
             $project = $projects[$name]
             # Limit restore to the requested framework so Mono does not require IL2CPP.
             $arguments = @('build', (Join-Path $PSScriptRoot $project), '-c', $Configuration, '-f', $framework,
@@ -64,7 +66,7 @@ foreach ($target in $targets) {
     if (Test-Path -LiteralPath (Join-Path $stage 'BepInEx')) { Remove-Item -LiteralPath (Join-Path $stage 'BepInEx') -Recurse -Force }
     $managed = [ordered]@{}
     foreach ($name in (Get-TgModNames)) {
-        if (-not (Test-TgModRuntime $name $target)) { continue }
+        if (-not (Test-TgModRuntime $name $target) -or $Skip -contains $name) { continue }
         foreach ($entry in (Get-TgMod $name).Managed) {
             $source = Join-Path $PSScriptRoot ($outputs[$entry.Assembly] -f $Configuration, $framework)
             Assert-TgManagedVersion $source $entry.Assembly "$version.0"

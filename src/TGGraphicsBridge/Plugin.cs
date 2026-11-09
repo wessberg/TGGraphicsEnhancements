@@ -23,7 +23,7 @@ namespace TGGraphicsBridge
     {
         public const string Id = "com.wessberg.tggraphicsbridge";
         public const string Name = "TG Graphics Bridge";
-        public const string Version = "1.2.3";
+        public const string Version = "1.2.4";
 #if BEPINEX_IL2CPP
         public override void Load()
         {

@@ -119,3 +119,6 @@ TGUP_EXPORT int32_t TGUP_CALL TGUP_GetDlssDll(uint64_t* loaded, uint64_t* reques
 // The driver profile's DLSS overrides, read on a thread of its own from the first call on and again
 // every 30 seconds. 0 success.
 TGUP_EXPORT int32_t TGUP_CALL TGUP_GetDlssOverride(TGUP_DlssOverride* dlssOverride);
+// The game's DLSS feature: the width it was created for, the width it renders at, and how many have been created.
+// 1 when it has been larger than what it renders for 30 frames, else 0.
+TGUP_EXPORT int32_t TGUP_CALL TGUP_GetDlssSize(uint32_t* created, uint32_t* render, uint32_t* creations);

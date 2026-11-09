@@ -13,7 +13,7 @@ namespace TGPathTracing
     {
         public const string Id = "com.wessberg.tgpathtracing";
         public const string Name = "TG Path Tracing";
-        public const string Version = "1.2.3";
+        public const string Version = "1.2.4";
         private void Awake()
         {
             ModManagers.KeepOutOfAvalon(Id, Logger);

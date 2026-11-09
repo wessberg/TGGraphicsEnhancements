@@ -19,10 +19,10 @@ if(-not (Get-Command cmake -ErrorAction SilentlyContinue)) { throw 'Install CMak
 $StreamlineRoot=(Resolve-Path $StreamlineRoot).Path
 $NgxIncludeDir=(Resolve-Path $NgxIncludeDir).Path
 # Defaults are the SDK folders next to this script ($PSScriptRoot is not set during parameter binding in Windows PowerShell).
-if(-not $FidelityFXRoot) { $FidelityFXRoot=Join-Path $PSScriptRoot 'FidelityFX-SDK-2.3.0' }
+if(-not $FidelityFXRoot) { $FidelityFXRoot=Join-Path $PSScriptRoot 'FidelityFX-SDK-2.4.0' }
 if(-not $XeSSRoot) { $XeSSRoot=Join-Path $PSScriptRoot 'XeSS-SDK-3.0.2' }
 if(-not $AntiLag2Root) { $AntiLag2Root=Join-Path $PSScriptRoot 'AntiLag2-SDK-2.0.0a' }
-if(-not $DlssRoot) { $DlssRoot=Join-Path $PSScriptRoot 'DLSS-SDK-310.9.1' }
+if(-not $DlssRoot) { $DlssRoot=Join-Path $PSScriptRoot 'DLSS-SDK-310.9.16' }
 $DlssRoot=(Resolve-Path $DlssRoot).Path
 $FidelityFXRoot=(Resolve-Path $FidelityFXRoot).Path
 $XeSSRoot=(Resolve-Path $XeSSRoot).Path

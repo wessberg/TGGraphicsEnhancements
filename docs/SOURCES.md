@@ -1,5 +1,13 @@
 # Primary references
 
+Reviewed 2026-10-30 for 1.2.4 (these versions supersede the ones named below):
+DLSS https://github.com/NVIDIA/DLSS/releases/tag/v310.9.16 (`nvsdk_ngx_defs_dlssg.h`: `DLSSG.LiteCandidateBlendingEnabled`);
+Streamline https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.16;
+FSR SDK https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0 (`docs/techniques/super-resolution-ml.md`: hardware list);
+NVIDIA's own use of Preset C and DLSS-NR https://github.com/NVIDIAGameWorks/dxvk-remix (`rtx_ngx_wrapper.cpp`, `rtx_dlfg.cpp`, `rtx_dlss_neural_rendering.cpp`);
+the signed NR DLL 310.9.16.0 in https://github.com/NVIDIAGameWorks/rtx-remix/releases/tag/remix-1.6.1;
+the model's numbers https://www.nvidia.com/en-us/geforce/news/dlss-5-faster-ai-model-hogwarts-legacy-rtx-spark-laptops/.
+
 TG Neural Rendering (2026-10-07): public DLSS 310.9.1 NGX API, supplied signed NR 310.8.0.0 profile, hashes and
 measured calls in [DLSS5-IMPLEMENTATION.md](DLSS5-IMPLEMENTATION.md). NVIDIA's
 [sample NR integration](https://github.com/nvpro-samples/vk_gltf_renderer/blob/master/src/dlss.cpp) documents the

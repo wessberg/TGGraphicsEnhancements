@@ -45,7 +45,7 @@ public:
     uint32_t needs() noexcept override { return tgb::NeedD3D12; }
     bool bootstrap() noexcept override {
         try {
-            log("TG Path Tracing 1.2.3 extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
+            log("TG Path Tracing 1.2.4 extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
             apply_test_environment();
             return true;
         }

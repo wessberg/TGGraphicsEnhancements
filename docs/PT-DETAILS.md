@@ -427,7 +427,7 @@ release-blocker and HDR-validation notes below are historical. No SDK source has
   choice but None, so NRD serves while RR waits for DLSS upscaling or RRG failed. The tracer's own SVGF-style filters
   serve glass and water under NRD (NRD is for opaque surfaces), and take over if NRD fails. A refused RR frame gives the
   tracer's denoiser back for 0.5 s with fresh history.
-- RR runs in TGBU on shared D3D12 (D3D11 NGX DLSSD crashed). NVIDIA's Default preset, which is F in SDK 310.9.1 (the
+- RR runs in TGBU on shared D3D12 (D3D11 NGX DLSSD crashed). NVIDIA's Default preset, which is F in SDK 310.9.16 (the
   owner, 2026-10-11: "Use NVIDIA's Default, if that is currently preset F. If it's not, use preset F"): recheck on a new DLL.
   PT-127 worker: RGB specular in output C.rgb, hit distance in A (+6 bytes/pixel); exported distance R16, `ReadAs::Depth`.
   Material diffuse, no floor/emission tint; sky 0.5. Required distance survives missing/refused optional transparency.
@@ -450,7 +450,7 @@ release-blocker and HDR-validation notes below are historical. No SDK source has
   two ways on (reflected, seen through): each needs guides and a signal of its own; NVIDIA's two answers (half-resolution
   checkerboard layers; its sample's glass undenoised, lit from the denoised frame on screen) each break a ruling: the
   owner rules. A `_ONLY` mode placed late in `tgpt_gpu_test` runs every check above it: put one after the warm-up.
-- AMD RRG (FidelityFX 2.3 signed DLLs, runtime query; untested): demodulated radiance, sqrt albedos, world oct normals.
+- AMD RRG (FidelityFX 2.4 signed DLLs, runtime query; untested): demodulated radiance, sqrt albedos, world oct normals.
   PT-127: fixed history scale, matching specular factors, reset after gaps; context creation on a retained-device CPU task,
   old GPU work fenced. `TGPT_RRG_DEBUG=1`: debug/validation flags. Previous-depth motion/direct-specular split remain
   open. Supported AMD hardware needed; `docs/agents/vendor-rr.md` has implementation, costs, checks and vendor references.

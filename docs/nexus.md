@@ -17,6 +17,7 @@ All options live in the game's own [i]Video[/i] settings, right below the upscal
 [list]
 [\*][b]Frame Generation:[/b] Off, DLSS, FSR or XeSS, whichever your card supports.[/*]
 [\*][b]Frame Multiplier:[/b] How many frames you see per rendered frame. Up to 6x with DLSS on RTX 50 cards and up to 4x with XeSS on Intel Arc cards. FSR, and XeSS on other cards, add one generated frame per rendered frame (2x). The mod asks each technology what your card supports.[/*]
+[\*][b]Frame Generation Quality:[/b] With DLSS, [i]Quality[/i] is NVIDIA's default. [i]Performance[/i] is NVIDIA's lighter Preset C: a few more frames, a little less exact, most of all around the HUD and at low framerates.[/*]
 [\*][b]Frame Generation Mode:[/b] With DLSS on RTX 50 cards, choose [i]Fixed[/i] for a constant multiplier or [i]Dynamic[/i], which picks the number of generated frames each frame to reach your [i]Target Framerate[/i].[/*]
 [\*][b]Low Latency:[/b] NVIDIA Reflex (with or without Boost), AMD Anti-Lag 2 or Intel XeLL, whichever your card supports. Generating frames adds a little input delay, so low latency can't be turned off while frame generation is on. DLSS always uses Reflex, and XeSS always uses XeLL.[/*]
 [/list]

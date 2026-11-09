@@ -23,7 +23,8 @@ namespace TGBetterUpscaling
                 {
                     var data = new OptimalDLSSSettingsData();
                     if (device.GetOptimalSettings(width, height, (DLSSQuality)id, out data) && data.outRenderWidth > 0 && data.outRenderWidth <= width)
-                        modes.Add(new QualityMode(id, QualityModes.DlssName(id), 100f * data.outRenderWidth / width));
+                        // DLAA is the native size by definition. Since the game's Unity 6000.3 the query answers 33.3 % for it.
+                        modes.Add(new QualityMode(id, QualityModes.DlssName(id), id == QualityModes.DlssDlaa ? 100f : 100f * data.outRenderWidth / width));
                 }
                 detail = modes.Count == 0 ? "NGX reported no render size for any DLSS mode, so DLSS keeps the game's render-scale slider" : "";
             }

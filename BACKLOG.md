@@ -5,11 +5,11 @@ change with its reason in `CHANGELOG.md`. The hard rules are in `AGENTS.md`.
 
 ## Goal and current priority
 
-**TG Path Tracing** (Mono, prototype) is the work now: every pixel on screen lit by the tracer, looking right to the
-owner in game, at a playable frame rate. TG Frame Generation, TG Better Upscaling and TG Neural Rendering: 1.2.3,
-on Nexus since 10-09 (the owner: "shipped"). Keep them working and answer player reports.
+**1.2.4 of TG Frame Generation, TG Better Upscaling and TG Neural Rendering** for the game's Unity 6000.3 is the work now
+(1.2.3 on Nexus since 10-09 has FSR, XeSS and NR broken on that game build). The six zips in `artifacts/Nexus` are tested on both versions. LEFT: the owner's upload.
+TG Path Tracing (Mono, prototype): TABLED 10-30; everything below about it waits for the owner's word.
 
-READ FIRST: the end of `docs/rounds/round-20.md` ("▶ Starter prompt (R21)").
+READ FIRST: the end of `docs/rounds/round-21.md` ("▶ Starter prompt (R22)").
 The in-game harness: `docs/PT-HARNESS.md`. The shortcuts the owner found on 10-07, each ruled on:
 `docs/PT-SHORTCUTS.md`. Uncommitted since d31dff9.
 
@@ -21,6 +21,12 @@ here and its files are not this session's to change.
 
 ## The owner's rulings (newest first)
 
+- 2026-10-30: TG PATH TRACING IS TABLED ("Nevermind the path tracing mod right now - that mod is tabled until further
+  notice, it's the three other mods we want to get updates out for right now"). The work is 1.2.4 of TG Frame
+  Generation, TG Better Upscaling and TG Neural Rendering on the game's Unity 6000.3 (`docs/rounds/round-21.md`).
+  Asked about Preset C: a row that only appears when Frame Generation is set to DLSS. Seen in game on the normal version
+  the same day: "yes FG Performance looks fine too". Quality stays the default, as NVIDIA's. TG Neural Rendering's zips
+  BUNDLE NVIDIA's signed DLL from RTX Remix (the owner's pick, on NVIDIA's public permission for modders: `docs/DLSS5-RESEARCH.md`).
 - 2026-10-12 (AGENTS.md has each): RTX MEGA GEOMETRY ON AND STAYS ON ("Do not turn it off ... there must be
   something we've done wrong if it's not making things faster"; PT-109). The stream stays on: speed is measured
   with it. Our water need not look like the game's, "so long as it looks amazing". "Anything can light the mist -
@@ -95,6 +101,10 @@ The rest:
 
 Frame generation and upscaling:
 
+- 2026-10-30 (the owner: "Switching back and forth is not acceptable"): DLSS is created at the size of the first frame and stayed that large. Fixed: the mod has it made anew by itself, 76 to
+  104 fps as launched on the normal version, about 80 to 112 on Mono (`docs/rounds/round-21.md`, Open 2).
+- 2026-10-30: the new TGFG.Native.dll scans clean in Defender, three builds in a row. Whether Microsoft's false alarm on the
+  released 1.2.3 is settled is still open, below.
 - URGENT 2026-10-09: Defender blocks FG 1.2.3 in BOTH release zips (`83947A2A...143CB73A`).
   R18: exactly SIX bytes differ from the clean October 7 DLL, only build timestamps; all code identical.
   Same Defender scans: old FG, BU, bridge, NR clean; released FG `Wacatac.H!ml`. Owner restored game

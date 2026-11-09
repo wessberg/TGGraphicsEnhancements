@@ -30,6 +30,7 @@ namespace TGFrameGeneration
         private HudlessCall hudlessPacket;
         private FrameCall setDebug;   // optional: SDK debug overlays
         private FrameCall setNoTearing; // optional: present without the tearing flag (HybridVsync)
+        private FrameCall setDlssPreset; // optional: DLSS Frame Generation's preset
         private TextCall readDiagnostics; // optional, the troubleshooting report's: facts, timings, notes
         private TimingCall readTimings;
         private NoteCall logNote;
@@ -62,6 +63,7 @@ namespace TGFrameGeneration
                 try { hudlessPacket=Bind<HudlessCall>(module,"TGFG_SetHudless"); } catch(EntryPointNotFoundException) { hudlessPacket=null; }
                 try { setDebug=Bind<FrameCall>(module,"TGFG_SetDebugFlags"); } catch(EntryPointNotFoundException) { setDebug=null; }
                 try { setNoTearing=Bind<FrameCall>(module,"TGFG_SetNoTearing"); } catch(EntryPointNotFoundException) { setNoTearing=null; }
+                try { setDlssPreset=Bind<FrameCall>(module,"TGFG_SetDlssPreset"); } catch(EntryPointNotFoundException) { setDlssPreset=null; }
                 try { readDiagnostics=Bind<TextCall>(module,"TGFG_ReadDiagnostics"); } catch(EntryPointNotFoundException) { readDiagnostics=null; }
                 try { readTimings=Bind<TimingCall>(module,"TGFG_ReadTimings"); } catch(EntryPointNotFoundException) { readTimings=null; }
                 try { logNote=Bind<NoteCall>(module,"TGFG_LogNote"); } catch(EntryPointNotFoundException) { logNote=null; }
@@ -93,6 +95,7 @@ namespace TGFrameGeneration
         internal int SetHudlessCapture(bool enabled) => Connected && setHudless!=null?setHudless(enabled?1u:0u):-100;
         internal int SetDebugFlags(uint flags) => Connected && setDebug!=null?setDebug(flags):-100;
         internal int SetNoTearing(bool on) => Connected && setNoTearing!=null?setNoTearing(on?1u:0u):-100;
+        internal int SetDlssPreset(uint preset) => Connected && setDlssPreset!=null?setDlssPreset(preset):-100;
         // What the native side learned (key=value): Streamline, DLSS-G, Reflex, FSR, XeSS, Anti-Lag 2, the last failure.
         // Read from the module even when the plugin never bound it, which is when these explain the most.
         internal System.Collections.Generic.Dictionary<string,string> Facts()

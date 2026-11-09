@@ -8,14 +8,14 @@ This is a native integration. It does not use OptiScaler, a driver override or a
 
 [size=4][b]Runtime DLL and RTX support[/b][/size]
 
-I do not include NVIDIA's Neural Rendering runtime or model in this download. You need to supply [code]nvngx_dlssnr.dll[/code].
+This download includes NVIDIA's signed Neural Rendering DLL, version 310.9.16.0, unmodified, from NVIDIA's [url=https://github.com/NVIDIAGameWorks/rtx-remix/releases]RTX Remix release[/url]. It's NVIDIA's faster model. NVIDIA lists RTX 50 cards for it, and I've tested it on my RTX 5080. There's nothing else to install.
 
 [list]
-[*][b]Official DLL:[/b] the original NVIDIA-signed 310.8.0.0 runtime uses the normal NVIDIA loading path.[/*]
+[*][b]Official DLL:[/b] the included 310.9.16.0, or the older NVIDIA-signed 310.8.0.0. Both use the normal NVIDIA loading path.[/*]
 [*][b]Community DLL:[/b] compatible patched runtimes use the mod's separate compatibility adapter. This includes the community patch intended for RTX 2000, 3000 and 4000 cards.[/*]
 [/list]
 
-Close the game and copy your DLL here. Create the [code]DLSS[/code] folder if it does not exist:
+To use another DLL, close the game and copy it over the included one. Do this again after you update the mod, because the update puts NVIDIA's DLL back:
 
 [code]Fall of Avalon/BepInEx/TGNeuralRendering/Native/DLSS/nvngx_dlssnr.dll[/code]
 

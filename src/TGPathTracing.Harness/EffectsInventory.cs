@@ -131,11 +131,21 @@ namespace TGPathTracing.Harness
             }
             return a;
         }
+        // GeometryUtility.TestPlanesAABB, by hand: Unity 6.3 overloads it with a ReadOnlySpan, which net472 does not have.
+        private static bool InFrustum(Plane[] planes, Bounds b)
+        {
+            foreach (var plane in planes)
+            {
+                var n = plane.normal;
+                if (plane.GetDistanceToPoint(b.center) + Mathf.Abs(n.x) * b.extents.x + Mathf.Abs(n.y) * b.extents.y + Mathf.Abs(n.z) * b.extents.z < 0f) return false;
+            }
+            return true;
+        }
         private static JObject Renderer(Renderer r)
         {
             var d = R.Identity(r); if (r == null) { d["state"] = R.Unknown("renderer absent"); return d; }
             d["state"] = R.Members(r, "enabled", "isVisible", "forceRenderingOff", "bounds", "localBounds", "renderingLayerMask", "shadowCastingMode", "receiveShadows", "sortingLayerID", "sortingOrder", "motionVectorGenerationMode");
-            d["cameraFrustumIntersectsBounds"] = R.Try(() => Camera.main != null ? (object)GeometryUtility.TestPlanesAABB(GeometryUtility.CalculateFrustumPlanes(Camera.main), r.bounds) : R.Unknown("no main camera"));
+            d["cameraFrustumIntersectsBounds"] = R.Try(() => Camera.main != null ? (object)InFrustum(GeometryUtility.CalculateFrustumPlanes(Camera.main), r.bounds) : R.Unknown("no main camera"));
             if (r is ParticleSystemRenderer p)
             {
                 d["particleOutput"] = R.Members(p, "renderMode", "alignment", "sortMode", "normalDirection", "cameraVelocityScale", "velocityScale", "lengthScale", "minParticleSize", "maxParticleSize", "pivot", "flip", "allowRoll", "freeformStretching", "rotateWithStretchDirection", "enableGPUInstancing", "meshCount", "trailMaterial");

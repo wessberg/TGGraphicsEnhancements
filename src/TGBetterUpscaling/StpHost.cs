@@ -273,6 +273,8 @@ namespace TGBetterUpscaling
                 var up = __instance.Target;
                 if (up == null) return true;
                 UpscalerRow.OnGameApplied(up);
+                if (dlssRebuilding && dlssCamera != null) dlssCamera.deepLearningSuperSamplingQuality = dlssQuality;
+                dlssRebuilding = false; dlssCamera = null;
                 int index = up.ActiveIndex;
                 // DLSS as Ray Reconstruction while TG Path Tracing traces: STP's pass, taken over like FSR's.
                 if (index == (int)UpscalerSetting.DLSS && UpScaling.IsDLSSAvailable && UpScaling.IsSTPAvailable && !failed &&
@@ -335,6 +337,7 @@ namespace TGBetterUpscaling
             camera.allowDynamicResolution = true;
             camera.allowDeepLearningSuperSampling = true;
             camera.deepLearningSuperSamplingUseCustomQualitySettings = true;
+            dlssCamera = camera; dlssQuality = (uint)mode.Id;
             hostScale = QualityModes.RenderScale(mode);
             SetScaler();
             DynamicResolutionHandler.SetActiveDynamicScalerSlot(DynamicResScalerSlot.User);
@@ -344,6 +347,22 @@ namespace TGBetterUpscaling
                     "; NVIDIA's driver picks the model).");
             configured = now;
             return true;
+        }
+        // HDRP keeps a DLSS feature created at a larger size than it then renders, and such a feature costs 2 to 3 ms a
+        // frame at 4K (native/upscaling/src/extension.cpp). Another quality level for one frame has HDRP create it anew, at
+        // the size the game renders at now; the next frame's level puts the player's mode back. At most once a feature.
+        private static HDAdditionalCameraData dlssCamera;
+        private static uint dlssQuality, dlssRebuiltCreation;
+        private static bool dlssRebuilding;
+        internal static void TickDlssSize()
+        {
+            if (dlssCamera == null) return;
+            if (dlssRebuilding) { dlssCamera.deepLearningSuperSamplingQuality = dlssQuality; dlssRebuilding = false; return; }
+            if (!Session.Upscaler.DlssOversized(out uint created, out uint render, out uint creations) || creations == dlssRebuiltCreation) return;
+            dlssRebuiltCreation = creations;
+            dlssCamera.deepLearningSuperSamplingQuality = dlssQuality == (uint)QualityModes.DlssBalanced ? (uint)QualityModes.DlssPerformance : (uint)QualityModes.DlssBalanced;
+            dlssRebuilding = true;
+            Session.Log.LogInfo("DLSS was created for a width of " + created + " and renders at " + render + ": HDRP creates it anew at that size.");
         }
         private static string configured = "";
         private static uint hostMode;

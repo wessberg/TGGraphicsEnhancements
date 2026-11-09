@@ -74,7 +74,14 @@ void __cdecl observe(tgb::DlssStage stage,const tgb::DlssInputs* in) noexcept {
             auto& s=state(); std::lock_guard<std::recursive_mutex> lock(s.mutex); s.status.flags|=16;
             log("Observed shared DLSS SR feature: render="+std::to_string(in->colorRect.width)+"x"+std::to_string(in->colorRect.height)+
                 " output="+std::to_string(in->outputRect.width)+"x"+std::to_string(in->outputRect.height)+" flags="+std::to_string(in->flags));
-        } else if(stage==tgb::DlssStage::Before) pending=capture(*in);
+        } else if(stage==tgb::DlssStage::Before) {
+            static uint32_t renderWidth=0,renderHeight=0;
+            if(in->colorRect.width!=renderWidth || in->colorRect.height!=renderHeight) {
+                renderWidth=in->colorRect.width; renderHeight=in->colorRect.height;
+                log("DLSS renders at "+std::to_string(renderWidth)+"x"+std::to_string(renderHeight)+" for "+std::to_string(in->outputRect.width)+"x"+std::to_string(in->outputRect.height));
+            }
+            pending=capture(*in);
+        }
         else if(stage==tgb::DlssStage::After) { finish(pending,in->success); pending={}; }
     } catch(const std::exception& e) { log(e.what()); } catch(...) { }
 }

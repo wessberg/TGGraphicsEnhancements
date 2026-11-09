@@ -263,7 +263,7 @@ Start with both mods installed and every setting as the previous session left it
 
 1. `TGBetterUpscaling.Native.log`: the FSR versions and the XeSS version the runtimes report, and
    `Upscaler interop ready` on the first frame with FSR or XeSS. With FSR: `AMD FSR upscaler <v>
-   (AMD's default, the newest this GPU offers)`; FSR 4 on a Radeon RX 9000.
+   (AMD's default, the newest this GPU offers)`; FSR 4 on a Radeon RX 6000 or newer.
 2. Video tab: the Upscaling row offers None, STP, DLSS, FSR, XeSS (unavailable ones skipped). STP
    shows the game's render-scale slider; DLSS and XeSS show Quality Mode; FSR shows Quality Mode and
    FSR Sharpness. No FSR Version row, in the Video tab or in FoA Mod Manager. Apply, Undo and Restore
@@ -290,9 +290,9 @@ Start with both mods installed and every setting as the previous session left it
    shift against STP); with the RenoDX DLSS addon: the game still starts and the addon still works.
 10. Remove TG Better Upscaling (or add `BepInEx/TGBetterUpscaling/disable-autoload.txt`) with FSR selected: the
     game falls back to its own default upscaler.
-11. NVIDIA GPU: the native log has `NVIDIA DLSS 310.9.1.0 bundled in Native/DLSS (NVIDIA-signed)` at
+11. NVIDIA GPU: the native log has `NVIDIA DLSS 310.9.16.0 bundled in Native/DLSS (NVIDIA-signed)` at
     startup, then `NVIDIA's runtime asked for DLSS 3.8.10.0 (<game folder>\nvngx_dlss.dll); it gets the
-    bundled 310.9.1.0 instead`, or `keeps DLSS ...` when a DLSS mod has put the same or a newer file in
+    bundled 310.9.16.0 instead`, or `keeps DLSS ...` when a DLSS mod has put the same or a newer file in
     the game folder, or its own set (DLSS 5: `a DLSS mod's set of DLLs, with DLSS neural rendering
     310.8.0.0 beside it`). DLSS still upscales, and with DLSS 5 on, the frame rate still follows the
     quality mode (Ultra Performance clearly faster than Quality), as with the game's own DLSS DLL.

@@ -15,6 +15,8 @@ namespace TGFrameGeneration
     // Values are the native backend identifiers.
     public enum FrameGenerationSetting { Off = 0, DLSS = 1, FSR = 2, XeSS = 3 }
     public enum FrameGenerationMode { Fixed = 0, Dynamic = 1 }
+    // DLSS Frame Generation's model: Quality is NVIDIA's default, Performance is NVIDIA's Preset C.
+    public enum FrameGenerationQuality { Quality = 0, Performance = 1 }
     // Values are the native latency identifiers.
     public enum LowLatencySetting { Off = 0, Reflex = 1, ReflexBoost = 2, XeLL = 3, AntiLag2 = 4 }
     internal sealed class Settings
@@ -22,14 +24,14 @@ namespace TGFrameGeneration
         // ABI sanity bound only; the rows offer what the selected runtime reports.
         internal const int MaxMultiplierBound = 16;
         private const string VideoSection = "Video", AdvancedSection = "Advanced";
-        private const string FrameGenerationKey = "Frame generation", ModeKey = "Frame generation mode", MultiplierKey = "Frame multiplier",
+        private const string FrameGenerationKey = "Frame generation", QualityKey = "Frame generation quality", ModeKey = "Frame generation mode", MultiplierKey = "Frame multiplier",
             MaxMultiplierKey = "Dynamic max multiplier", TargetKey = "Target framerate", LowLatencyKey = "Low latency";
         internal readonly ConfigFile File;
         // The Video tab's rows, in the plugin config so that mod managers list exactly these rows with the
         // Video tab's choices and rules. Choices are enum names; entries whose choices depend on another
         // row are rebound when those choices change (BepInEx fixes them per entry).
         private ConfigEntry<string> frameGeneration, lowLatency;
-        private readonly ConfigEntry<string> mode;
+        private readonly ConfigEntry<string> mode, quality;
         private ConfigEntry<int> multiplier, maxMultiplier;
         private readonly ConfigEntry<float> targetFps;
         // Not in the Video tab; hidden from mod managers.
@@ -57,16 +59,19 @@ namespace TGFrameGeneration
                 Enum.GetNames(typeof(FrameGenerationSetting)), null,
                 "Generates extra frames between the rendered ones with NVIDIA DLSS, AMD FSR or Intel XeSS, as supported by this GPU, " +
                 "from the game's own motion vectors and depth.");
-            mode = Row(ModeKey, FrameGenerationMode.Fixed.ToString(), "Frame Generation Mode", 1,
+            quality = Row(QualityKey, FrameGenerationQuality.Quality.ToString(), "Frame Generation Quality", 1,
+                Enum.GetNames(typeof(FrameGenerationQuality)), null,
+                "Quality: NVIDIA's default. Performance: NVIDIA's lighter Preset C, a little faster and a little less exact, most of all around the HUD and at low framerates.");
+            mode = Row(ModeKey, FrameGenerationMode.Fixed.ToString(), "Frame Generation Mode", 2,
                 Enum.GetNames(typeof(FrameGenerationMode)), null,
                 "Fixed: a constant multiplier. Dynamic: NVIDIA Multi Frame Generation picks the number of generated frames each frame to reach the target framerate.");
-            multiplier = Row(MultiplierKey, 2, "Frame Multiplier", 2, Range(MaxMultiplierBound), VideoCapabilities.MultiplierLabel,
+            multiplier = Row(MultiplierKey, 2, "Frame Multiplier", 3, Range(MaxMultiplierBound), VideoCapabilities.MultiplierLabel,
                 "Frames shown per rendered frame; 2x is one generated frame per rendered frame. Limited to what the selected technology supports on this GPU.");
-            maxMultiplier = Row(MaxMultiplierKey, MaxMultiplierBound, "Max Frame Multiplier", 3, Range(MaxMultiplierBound), VideoCapabilities.MaxMultiplierLabel,
+            maxMultiplier = Row(MaxMultiplierKey, MaxMultiplierBound, "Max Frame Multiplier", 4, Range(MaxMultiplierBound), VideoCapabilities.MaxMultiplierLabel,
                 "Upper limit for Dynamic mode. NVIDIA's runtime may ignore it in Dynamic mode.");
-            targetFps = Row(TargetKey, 0f, "Target Framerate", 4, Targets, VideoCapabilities.TargetLabel,
+            targetFps = Row(TargetKey, 0f, "Target Framerate", 5, Targets, VideoCapabilities.TargetLabel,
                 "Framerate Dynamic mode aims for. Auto follows the display's refresh rate, as does VSync when it is on.");
-            lowLatency = Row(LowLatencyKey, LowLatencySetting.Reflex.ToString(), "Low Latency", 5,
+            lowLatency = Row(LowLatencyKey, LowLatencySetting.Reflex.ToString(), "Low Latency", 6,
                 Enum.GetNames(typeof(LowLatencySetting)), name => VideoCapabilities.Label(Parse(name, LowLatencySetting.Off)),
                 "Starts each frame just in time, which cuts input delay. DLSS Frame Generation needs NVIDIA Reflex and XeSS Frame Generation always uses Intel XeLL. " +
                 "FSR needs none of them and can run with Off. XeLL on its own needs an Intel GPU, AMD Anti-Lag 2 an AMD GPU.");
@@ -121,6 +126,13 @@ namespace TGFrameGeneration
             get => Parse(mode.Value, FrameGenerationMode.Fixed);
             set => mode.Value = value.ToString();
         }
+        internal FrameGenerationQuality Quality
+        {
+            get => Parse(quality.Value, FrameGenerationQuality.Quality);
+            set => quality.Value = value.ToString();
+        }
+        // NGX's number for the preset: 0 NVIDIA's default, 3 Preset C. DLSS only: the other technologies ignore it.
+        internal uint DlssPreset => Quality == FrameGenerationQuality.Performance ? 3u : 0u;
         internal int Multiplier { get => multiplier.Value; set => multiplier.Value = value; }
         internal int MaxMultiplier { get => maxMultiplier.Value; set => maxMultiplier.Value = value; }
         internal float TargetFps { get => targetFps.Value; set => targetFps.Value = VideoCapabilities.NearestTarget(Targets, value); }
@@ -141,12 +153,13 @@ namespace TGFrameGeneration
         }
         // The Video tab's Apply. The technology goes first: the choices of the rows after it depend on it,
         // and BepInEx replaces a value outside an entry's choices with the first choice.
-        internal void Apply(FrameGenerationSetting frameGeneration, FrameGenerationMode mode, int multiplier, int maxMultiplier, float targetFps,
+        internal void Apply(FrameGenerationSetting frameGeneration, FrameGenerationQuality quality, FrameGenerationMode mode, int multiplier, int maxMultiplier, float targetFps,
             LowLatencySetting lowLatency)
         {
             Batch(() =>
             {
                 FrameGeneration = frameGeneration;
+                Quality = quality;
                 Mode = mode;
                 Refresh();
                 Multiplier = multiplier;
@@ -216,6 +229,7 @@ namespace TGFrameGeneration
             bool hasMode = known && caps.HasMode;
             bool dynamic = backend == FrameGenerationSetting.DLSS && hasMode && Mode == FrameGenerationMode.Dynamic;
             rows[FrameGenerationKey].Visible = usable && backends.Length > 1;
+            rows[QualityKey].Visible = usable && backend == FrameGenerationSetting.DLSS;
             rows[ModeKey].Visible = usable && backend == FrameGenerationSetting.DLSS && hasMode;
             rows[MultiplierKey].Visible = usable && backend != FrameGenerationSetting.Off && max > 2 && !dynamic;
             rows[MaxMultiplierKey].Visible = usable && dynamic;

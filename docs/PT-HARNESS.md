@@ -534,3 +534,7 @@ on this PC should replace it. Measured by the first run (below): 26 to 53 fps wi
 - The pictures the first runs lacked are in the analysis since: each step's whole frame (`frame.jpg`) and the
   region with the game's own beside the traced at full size (`side-by-side.jpg`).
 - The harness never judges how it looks. That stays the owner's.
+
+## The normal version
+
+This harness runs on the Mono version only. `.\tools\harness\Run-Il2CppProbe.ps1` is the normal version's test (2026-10-30): it builds and installs the plugin of `tools\harness\Il2CppProbe`, starts the game through `-LaunchOnly`'s GPU guard, walks Frame Generation, the upscalers, Neural Rendering and the Video tab with saving blocked, quits, and takes the plugin and the configs back out. Results: `artifacts\il2cpp-probe\<time>` (`run.log`, a picture of each step). It does not force the game to the front, and DLSS Frame Generation adds no frames behind another window: read `focused=` in the log. BepInEx writes `BepInEx\interop` at the first start after an install or a game update, so start once with `-LaunchOnly` and close the game before building for that version.

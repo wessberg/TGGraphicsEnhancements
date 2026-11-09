@@ -1,3 +1,20 @@
+# 1.2.4 (in testing, not on Nexus)
+
+For the game's 1.31 on Unity 6000.3.21f1. Every number below: `docs/rounds/round-21.md`.
+
+- All mods: FSR and XeSS upscaling and Neural Rendering work again. HDRP's `CustomPass.ExecuteInternal` takes a render
+  context now, so every 1.2.3 FSR and XeSS frame fell back to STP and Neural Rendering recorded nothing.
+- TG Frame Generation: DLSS 310.9.16 and Streamline 2.14.16; FSR FG 4.0.2 and SDK 2.4.0. A new row, Frame Generation Quality,
+  DLSS only: Quality (NVIDIA's default) or Performance (NVIDIA's Preset C; 76 against 73 rendered fps at 4K, 2x). The real render size of DLSS in the log.
+- TG Better Upscaling: DLSS 310.9.16, FSR upscaler 4.1.2 (FSR 4 on RX 6000 and newer and some Ryzen chips, AMD's list). DLAA is
+  held at 100 % where the query now answers 33.3 %.
+- TG Better Upscaling: DLSS runs at full speed from launch. HDRP created it at the size of the first frame, before the render scale took effect, and kept that for the session (76 against 104 fps at 4K, DLSS Performance). The mod now has it made anew at the real size, half a second after start.
+- TG Neural Rendering: takes the signed 310.9.16.0 DLL as well as 310.8.0.0 and asks for NVIDIA's lightweight network, Preset B:
+  6.4 ms of GPU time at 4K against 11.3 to 11.6 ms on 310.8 (another scene).
+- TG Neural Rendering: the download now includes NVIDIA's signed `nvngx_dlssnr.dll` 310.9.16.0, unmodified, from NVIDIA's RTX Remix release, under NVIDIA's public permission for modders. A patched DLL is copied over it after each update.
+- Build: `Build.ps1 -Skip <mod>`; TG Path Tracing does not compile against Unity 6000.3 and is tabled. Harness: a step's
+  `upscaler`, recipes `release-check` and `dlss-reapply`; NVIDIA Overlay's memory counter no longer holds a run back.
+
 # Unreleased
 
 - Harness (2026-10-12 12:15): a step's `"disableMotionBlur": true` works on any step, not only on Neural

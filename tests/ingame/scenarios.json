@@ -2,6 +2,32 @@
   "about": "TG Path Tracing's in-game scenarios: which save shows what. tools/harness/Run-PtHarness.ps1 reads this; docs/PT-HARNESS.md explains it. save is the name the owner gives the save in the game's save menu; saveFallback is an older save of the owner's that stands in until that one exists (by its ID). where tells the owner where to stand for the save. roi is the part of the screen the scenario is about, as fractions (left, top, right, bottom): its crops and numbers are taken there.",
   "defaults": { "recipe": "quick" },
   "recipes": {
+    "release-check": [
+      { "name": "01-plain", "set": [{ "key": "Mode", "value": "Off" }, { "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "02-fg-dlss-quality", "set": [{ "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation quality", "value": "Quality" }, { "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation", "value": "DLSS" }, { "plugin": "com.wessberg.tgframegeneration", "key": "Frame multiplier", "value": "2" }], "traced": false, "settle": 6, "frames": 4, "perfSeconds": 8 },
+      { "name": "03-fg-dlss-performance", "set": [{ "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation quality", "value": "Performance" }], "traced": false, "settle": 6, "frames": 4, "perfSeconds": 8 },
+      { "name": "04-fg-dlss-quality", "set": [{ "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation quality", "value": "Quality" }], "traced": false, "settle": 6, "frames": 4, "perfSeconds": 8 },
+      { "name": "05-fg-fsr", "set": [{ "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation", "value": "FSR" }], "traced": false, "settle": 6, "frames": 4, "perfSeconds": 8 },
+      { "name": "06-fg-xess", "set": [{ "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation", "value": "XeSS" }], "traced": false, "settle": 6, "frames": 4, "perfSeconds": 8 },
+      { "name": "07-fg-off", "set": [{ "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "08-nr", "neural": true, "set": [{ "plugin": "com.wessberg.tgneuralrendering", "section": "Video", "key": "Neural Rendering", "value": "On" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "09-nr-off", "neural": false, "set": [{ "plugin": "com.wessberg.tgneuralrendering", "section": "Video", "key": "Neural Rendering", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "10-up-fsr", "upscaler": "FSR", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "11-up-xess", "upscaler": "XeSS", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "12-up-dlss", "upscaler": "DLSS", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "13-plain-after", "upscaler": "end", "set": [{ "key": "Mode", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 }
+    ],
+    "dlss-reapply": [
+      { "name": "1-plain", "set": [{ "key": "Mode", "value": "Off" }, { "plugin": "com.wessberg.tgframegeneration", "key": "Frame generation", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "2-plain-again", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "3-dlss-reapplied", "upscaler": "DLSS", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "4-dlss-reapplied-still", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "5-nr", "neural": true, "set": [{ "plugin": "com.wessberg.tgneuralrendering", "section": "Video", "key": "Neural Rendering", "value": "On" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "6-nr-off", "neural": false, "set": [{ "plugin": "com.wessberg.tgneuralrendering", "section": "Video", "key": "Neural Rendering", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "7-stp", "upscaler": "STP", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "8-dlss", "upscaler": "DLSS", "set": [], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 },
+      { "name": "9-end", "upscaler": "end", "set": [{ "key": "Mode", "value": "Off" }], "traced": false, "settle": 4, "frames": 4, "perfSeconds": 8 }
+    ],
     "nrd-motion": [{"name": "1-game", "set": [{"key": "Mode", "value": "Off"}, {"key": "Debug view", "value": "None"}], "traced": false, "settle": 3, "frames": 4}, {"name": "2-none-moving", "disableMotionBlur": true, "turn": 12, "slide": 0.4, "slidePeriod": 5, "set": [{"key": "Mode", "value": "On"}, {"key": "Debug view", "value": "None"}, {"key": "Denoising", "value": "None"}, {"section": "Advanced", "key": "NRD trial", "value": "0"}], "traced": true, "settle": 20, "settleFrames": 240, "frames": 60}, {"name": "3-relax-moving", "disableMotionBlur": true, "turn": 12, "slide": 0.4, "slidePeriod": 5, "set": [{"key": "Denoising", "value": "NRD"}, {"section": "Advanced", "key": "NRD trial", "value": "0"}], "traced": true, "settle": 20, "settleFrames": 240, "frames": 60}, {"name": "4-reblur-moving", "disableMotionBlur": true, "turn": 12, "slide": 0.4, "slidePeriod": 5, "set": [{"section": "Advanced", "key": "NRD trial", "value": "2"}], "traced": true, "settle": 20, "settleFrames": 240, "frames": 60}, {"name": "9-off", "set": [{"key": "Mode", "value": "Off"}, {"key": "Denoising", "value": "None"}, {"section": "Advanced", "key": "NRD trial", "value": "0"}], "traced": false, "settle": 1, "frames": 0}],
     "fog-turn": [
       { "name": "0-game-turn", "turn": 20, "slidePeriod": 4, "set": [ { "key": "Mode", "value": "Off" }, { "key": "Debug view", "value": "None" } ], "traced": false, "settle": 3, "frames": 16 },

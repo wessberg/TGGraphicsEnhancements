@@ -158,10 +158,39 @@ void set_reflex(bool active,bool boost,float limit) {
     if(result==sl::Result::eOk) { s.lastReflex=options; s.haveReflex=true; }
     else { s.status.lastSetOptionsResult=static_cast<int32_t>(result); s.fatal=true; log("slReflexSetOptions failed"); }
 }
+// DLSS Frame Generation's Preset C is one create-time NGX parameter (nvsdk_ngx_defs_dlssg.h, DLSS 310.9.16), and
+// sl::DLSSGOptions has no field for it, so it goes onto the parameters as Streamline creates the feature. A session
+// that never asks for a preset gets no hook.
+using CreateFeatureFn=NVSDK_NGX_Result(NVSDK_CONV*)(ID3D12GraphicsCommandList*,NVSDK_NGX_Feature,NVSDK_NGX_Parameter*,NVSDK_NGX_Handle**);
+CreateFeatureFn originalCreateFeature=nullptr;
+NVSDK_NGX_Result NVSDK_CONV create_feature_hook(ID3D12GraphicsCommandList* list,NVSDK_NGX_Feature feature,NVSDK_NGX_Parameter* parameters,NVSDK_NGX_Handle** handle) {
+    if(feature==NVSDK_NGX_Feature_FrameGeneration && parameters) {
+        const uint32_t lite=state().dlssPreset.load()==3u?1u:0u;
+        parameters->Set("DLSSG.LiteCandidateBlendingEnabled",lite);
+        log("DLSS-G feature created with LiteCandidateBlendingEnabled="+std::to_string(lite));
+    }
+    return originalCreateFeature(list,feature,parameters,handle);
+}
+void ensure_preset_hook() {
+    if(originalCreateFeature) return;
+    const auto module=GetModuleHandleW(L"_nvngx.dll");
+    const auto target=module?GetProcAddress(module,"NVSDK_NGX_D3D12_CreateFeature"):nullptr;
+    if(!target) { log("DLSS-G preset: _nvngx.dll's CreateFeature was not found; the preset is not applied"); return; }
+    if(!add_hook(reinterpret_cast<void*>(target),reinterpret_cast<void*>(&create_feature_hook),reinterpret_cast<void**>(&originalCreateFeature))) {
+        originalCreateFeature=nullptr; log("DLSS-G preset: the hook could not be placed; the preset is not applied");
+    }
+}
 void apply_options(Frame* frame,Reason why,const DXGI_SWAP_CHAIN_DESC& description) {
     auto& s=state();
     bool enabled=why==Reason::Ready;
     if(s.fatal) { enabled=false; why=Reason::NativeError; }
+    const auto preset=s.dlssPreset.load();
+    if(enabled && s.dlssReady && preset!=s.appliedDlssPreset) {
+        ensure_preset_hook();
+        s.appliedDlssPreset=preset;
+        // The parameter is read at creation: one frame Off, so the feature is made again with it.
+        if(s.haveOptions && s.applied.mode!=sl::DLSSGMode::eOff) enabled=false;
+    }
     if(!s.dlssReady) { // standard swapchain without DLSS-G: nothing to switch, only the reason to report
         s.status.reason=static_cast<uint32_t>(why); s.status.lastAcceptedMode=0;
         if(s.request.mode==0) s.status.appliedSequence=s.request.sequence;
@@ -170,7 +199,7 @@ void apply_options(Frame* frame,Reason why,const DXGI_SWAP_CHAIN_DESC& descripti
     sl::DLSSGOptions options{};
     options.mode=!enabled?sl::DLSSGMode::eOff:s.request.mode==2?sl::DLSSGMode::eDynamic:sl::DLSSGMode::eOn;
     // Streamline requires a positive frame count even while the mode is eOff. In Dynamic mode the
-    // SDK 2.14.1 guide documents numFramesToGenerate as ignored; it is still sent as the user's
+    // SDK 2.14.16 guide documents numFramesToGenerate as ignored; it is still sent as the user's
     // "up to Nx" bound so a runtime that honours it caps generation there. Either way the request
     // is clamped to the maximum the runtime reports.
     options.numFramesToGenerate=enabled?generated_frames(s.request,s.status.maxGeneratedFrames):1;
@@ -536,6 +565,11 @@ static int32_t ReadTimingsBody(TGFG_Timing* out,uint32_t reset) {
     if(reset) s.timingSinceRead=tgfg::PresentTiming{};
     return 0;
 }
+TGFG_EXPORT int32_t TGFG_CALL TGFG_SetDlssPreset(uint32_t preset) {
+    if(preset!=0u && preset!=3u) return -1;
+    if(tgfg::state().dlssPreset.exchange(preset)!=preset) tgfg::log("DLSS-G preset requested: "+std::to_string(preset));
+    return 0;
+}
 static int32_t SetNoTearingBody(uint32_t enabled) {
     auto& s=tgfg::state();
     const bool want=enabled!=0;
@@ -601,7 +635,7 @@ bool bootstrap_extension() {
     s.bootstrapAttempted=true;
     try {
         s.root=std::filesystem::path(module_path(s.self)).parent_path().wstring();
-        log("TGFG 1.2.3 frame generation extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
+        log("TGFG 1.2.4 frame generation extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
         if(!load_runtime()) {
             if(s.status.reason==uint32_t(Reason::ExistingStreamline)) return false; // never a second Streamline owner
             log("Continuing without NVIDIA Streamline: DLSS Frame Generation and Reflex are unavailable in this session");

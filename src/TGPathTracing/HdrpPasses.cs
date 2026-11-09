@@ -35,7 +35,7 @@ namespace TGPathTracing
 {
     internal sealed class CapturePass : CustomPass
     {
-        protected override void SetupBeforeExecute(RenderGraph renderGraph, RenderGraphBuilder builder, RenderTargets currentRenderTargets) =>
+        protected override void SetupBeforeExecute(RenderGraph renderGraph, IUnsafeRenderGraphBuilder builder, RenderTargets currentRenderTargets) =>
             HdrpPasses.DeclareExtraReads(builder);
         protected override void Execute(CustomPassContext ctx) => HdrpPasses.Capture(ctx);
     }
@@ -1046,11 +1046,11 @@ namespace TGPathTracing
         }
 
         // Inside the capture pass's recording: GBuffers 2 and 3 are read too, which keeps them alive and in place.
-        internal static void DeclareExtraReads(RenderGraphBuilder builder)
+        internal static void DeclareExtraReads(IUnsafeRenderGraphBuilder builder)
         {
-            if (pendingGBuffer2.IsValid()) builder.ReadTexture(in pendingGBuffer2);
-            if (hasGBuffer3) builder.ReadTexture(in pendingGBuffer3);
-            if (pendingPyramid.IsValid()) builder.ReadTexture(in pendingPyramid); // (PT-112: its pointer, for the frame's own depth)
+            if (pendingGBuffer2.IsValid()) builder.UseTexture(in pendingGBuffer2, AccessFlags.Read);
+            if (hasGBuffer3) builder.UseTexture(in pendingGBuffer3, AccessFlags.Read);
+            if (pendingPyramid.IsValid()) builder.UseTexture(in pendingPyramid, AccessFlags.Read); // (PT-112: its pointer, for the frame's own depth)
         }
 
         // Said once a session, on the first frame HDRP shifts: whether the matrices handed to the tracer hold that shift (the

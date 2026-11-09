@@ -130,7 +130,7 @@ private:
             create.InPerfQualityValue=NVSDK_NGX_PerfQuality_Value(quality_);
             create.InFeatureCreateFlags=int(flags_);
             // NVIDIA's Default preset in every quality mode, as its guide recommends ("we recommend games stick to ..._Default
-            // for all modes", DLSS-RR Integration Guide 3.13). In SDK 310.9.1 Default is preset F (the guide's tables give
+            // for all modes", DLSS-RR Integration Guide 3.13). In SDK 310.9.16 Default is preset F (the guide's tables give
             // memory and speed for "Presets Default, F" together). The owner, 2026-10-11: "Use NVIDIA's Default, if that is
             // currently preset F. If it's not, use preset F." Until then F was pinned. A newer nvngx_dlssd.dll whose Default
             // is no longer F must be looked at again (PT-127).
@@ -142,7 +142,7 @@ private:
             if(NVSDK_NGX_FAILED(r) || !feature_) { feature_=nullptr; error="Ray Reconstruction feature creation failed: "+result_text(r); return false; }
             reset=true; createdInList_=true;
             log("DLSS Ray Reconstruction created: render "+std::to_string(width_)+"x"+std::to_string(height_)+" -> "+
-                std::to_string(outWidth_)+"x"+std::to_string(outHeight_)+", NGX quality "+std::to_string(quality_)+", NVIDIA's Default preset (F in SDK 310.9.1); nvngx_dlssd.dll loaded from "+dlssd_modules());
+                std::to_string(outWidth_)+"x"+std::to_string(outHeight_)+", NGX quality "+std::to_string(quality_)+", NVIDIA's Default preset (F in SDK 310.9.16); nvngx_dlssd.dll loaded from "+dlssd_modules());
         }
         NVSDK_NGX_D3D12_DLSSD_Eval_Params eval{};
         eval.pInDiffuseAlbedo=in.diffuseAlbedo; eval.pInSpecularAlbedo=in.specularAlbedo;

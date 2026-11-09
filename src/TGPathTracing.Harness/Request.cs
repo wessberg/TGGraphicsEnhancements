@@ -34,6 +34,7 @@ namespace TGPathTracing.Harness
         public bool neuralStages = false; // Synchronous NR input/output/exposure capture; invalidates performance timings.
         public string name = "";
         public Pair[] set = new Pair[0];
+        public string upscaler = ""; // TG Better Upscaling's choice for this step (UpscalerStep); "end" puts the player's back.
         // Path tracing goes on and off this many times before the settings above are applied, cycleSeconds each way: what
         // a player does with the row or the hotkey, before the state after it is measured.
         public int cycles = 0;

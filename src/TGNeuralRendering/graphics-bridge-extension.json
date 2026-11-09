@@ -2,5 +2,5 @@
   "name": "TG Neural Rendering",
   "native": "Native/TGNeuralRendering.Native.dll",
   "bridge": "Native/TGGraphicsBridge.Native.dll",
-  "bridgeVersion": "1.2.3"
+  "bridgeVersion": "1.2.4"
 }

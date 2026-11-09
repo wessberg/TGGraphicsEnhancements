@@ -2,7 +2,7 @@
 
 This is original integration code. The Open Shaders implementation was read as an architectural
 precedent, not copied as a Skyrim backend dependency. The frame generation and upscaling backends are
-the vendors' own SDKs: NVIDIA Streamline DLSS-G, the AMD FSR API (FidelityFX SDK 2.3; frame
+the vendors' own SDKs: NVIDIA Streamline DLSS-G, the AMD FSR API (FidelityFX SDK 2.4; frame
 generation and upscaling) and Intel XeSS (XeSS SDK 3.0; XeSS-FG and XeSS Super Resolution). Primary
 references are listed in SOURCES.md. DLSS-G, FSR and XeSS frame generation (with XeLL) have run in
 FoA, with DLSS upscaling and on HDRP's own inputs, and TG Better Upscaling's FSR and XeSS have upscaled in
@@ -137,7 +137,7 @@ The game's own DLSS runs from the `nvngx_dlss.dll` that NVIDIA's runtime (`_nvng
 driver) loads with `LoadLibraryExW` by full path while the game initializes NGX: the one next to the
 game, 3.8.10 as shipped. `native/upscaling/src/dlss_dll.cpp` hooks `kernelbase!LoadLibraryExW` at
 bootstrap. For a path ending in `nvngx_dlss.dll` whose file version is older than the bundled,
-NVIDIA-signed `Native/DLSS/nvngx_dlss.dll` (310.9.1, DLSS SDK), it loads the bundled file instead,
+NVIDIA-signed `Native/DLSS/nvngx_dlss.dll` (310.9.16, DLSS SDK), it loads the bundled file instead,
 data-file loads included, so a version query and the loaded module agree. An equal or newer file (a
 DLSS swap, the driver's own download) and every other load pass through, and so does a file that
 belongs to a DLSS mod's set in its folder (`part_of_dlss_set`): `nvngx_dlssnr.dll` beside it (DLSS 5's

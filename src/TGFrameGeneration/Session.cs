@@ -29,7 +29,7 @@ namespace TGFrameGeneration
         private static int width, height;
         private static NativeRequest last;
         private static ulong sequence;
-        private static uint lastDebugFlags=uint.MaxValue;
+        private static uint lastDebugFlags=uint.MaxValue, lastDlssPreset=uint.MaxValue;
         private static float captureAt=-1f;
         private static string lastReport="";
         internal static void Start(ConfigFile config, ManualLogSource log)
@@ -127,6 +127,8 @@ namespace TGFrameGeneration
                 uint debugFlags=(uint)Settings.FsrDebug.Value;
                 if(captureAt>=0) debugFlags=(debugFlags & ~32u) | (now>=captureAt?32u:0u);
                 if(Bridge.Connected && debugFlags!=lastDebugFlags && Bridge.SetDebugFlags(debugFlags)==0) lastDebugFlags=debugFlags;
+                uint dlssPreset=Settings.DlssPreset;
+                if(Bridge.Connected && dlssPreset!=lastDlssPreset && Bridge.SetDlssPreset(dlssPreset)==0) lastDlssPreset=dlssPreset;
                 DisplayMode.Tick();
                 HybridVsync.Tick(now);
                 ExtraFramerateLimit.Tick();

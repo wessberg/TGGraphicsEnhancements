@@ -1,6 +1,6 @@
 # AGENTS.md - TG Frame Generation, TG Better Upscaling, TG Path Tracing and TG Graphics Bridge
 
-Mods for Tainted Grail: The Fall of Avalon (FoA): Unity 6000.0.64f1, HDRP 17, rendering with Direct3D 11. Two game
+Mods for Tainted Grail: The Fall of Avalon (FoA): Unity 6000.3.21f1 since the game's 1.31 (2026-10-30), HDRP 17, rendering with Direct3D 11. Two game
 versions: the Mono branch with BepInEx 5 (players call it the "Mono version") and the standard IL2CPP one with BepInEx 6
 (the "normal version"). Repo: github.com/wessberg/TGFrameGeneration, working branch `fg-input-orientation`.
 
@@ -39,7 +39,7 @@ A subagent is not cold: it inherits this file.
 |---|---|---|
 | TG Frame Generation (TGFG) | Native DLSS, FSR and XeSS frame generation, with Reflex, XeLL or Anti-Lag 2. No OptiScaler, no wrapper. | 1.2.3, on Nexus since 2026-10-09 (1.2.0 before it) |
 | TG Better Upscaling (TGBU) | FSR 3.1 / 4 and XeSS in the game's own Upscaling row (the game itself has FSR 2 since its 2026-10-06 update), vendor quality modes, a newer DLSS DLL. Hosts DLSS Ray Reconstruction for TGPT. | 1.2.3, on Nexus since 2026-10-09 (1.2.0 was broken by that update) |
-| TG Path Tracing (TGPT) | "Proper ReSTIR path tracing" (owner, 2026-09-25): everything on screen lit by the tracer. Mono only. | Prototype. **The current priority.** |
+| TG Path Tracing (TGPT) | "Proper ReSTIR path tracing" (owner, 2026-09-25): everything on screen lit by the tracer. Mono only. | Prototype. **Tabled until further notice** (owner, 2026-10-30); it does not compile against Unity 6000.3 (`Build.ps1 -Skip TGPathTracing`). |
 | TG Neural Rendering (TGNR) | The DLSS 5 mod (`docs/DLSS5-*.md`, `docs/nexus-neural-rendering.md`). | 1.2.3, done (owner, 2026-10-09: "the mod is done"); on Nexus since 2026-10-09 |
 | TG Graphics Bridge (TGB) | The shared D3D11-to-D3D12 bridge. Bundled inside each mod, never a download of its own. | 1.2.3 |
 

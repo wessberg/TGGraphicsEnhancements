@@ -4,7 +4,7 @@ This mod adds AMD FSR and Intel XeSS upscaling to Tainted Grail: The Fall of Ava
 
 It's [i]native[/i] upscaling. FSR and XeSS get the game's own motion vectors and depth, at the exact point where the game would otherwise run STP, like in games with official support. It's not a driver override, and it doesn't go through OptiScaler.
 
-FSR and XeSS run on NVIDIA, AMD and Intel cards alike. FSR uses the version AMD picks for your card: FSR 4 on Radeon RX 9000 cards, FSR 3.1 on everything else. XeSS runs on any card with Shader Model 6.4, and fastest on Intel Arc cards.
+FSR and XeSS run on NVIDIA, AMD and Intel cards alike. FSR uses the version AMD picks for your card: FSR 4 on Radeon RX 6000 and newer cards and some Ryzen processors, FSR 3.1 on everything else. XeSS runs on any card with Shader Model 6.4, and fastest on Intel Arc cards.
 
 [size=4][b]Part of the game's own graphics settings[/b][/size]
 

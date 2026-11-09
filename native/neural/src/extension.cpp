@@ -343,6 +343,11 @@ struct Runtime {
         release_features();
         havePrevious=false;
         tuning(f); params->Set("CreationNodeMask",1u); params->Set("VisibilityNodeMask",1u);
+        // Preset B is the lightweight network of the October 2026 model (RTX Remix 1.6.1 asks for it: "Preset B
+        // selects the lightweight network independently of the appearance model"; A=1, B=2). A 310.8 DLL lacks
+        // it and falls back to its own default.
+        const int preset=2;
+        params->Set("DLSSNR.Hint.Render.Preset",preset);
         size_t scratchBytes=0;
         const auto scratchQuery=backend.scratch(featureId,params,&scratchBytes);
         if(NVSDK_NGX_FAILED(scratchQuery)) {
@@ -368,7 +373,7 @@ struct Runtime {
         }
         featureWidth=f.width; featureHeight=f.height;
         log(std::string("NR created through ")+(runtimeKind==RuntimeKind::Community ? "community adapter: ":"public NGX: ")+
-            std::to_string(f.width)+"x"+std::to_string(f.height)+", strength="+std::to_string(f.strength)+", passes="+std::to_string(f.passes));
+            std::to_string(f.width)+"x"+std::to_string(f.height)+", strength="+std::to_string(f.strength)+", passes="+std::to_string(f.passes)+", network preset="+std::to_string(preset));
     }
     void transition(ID3D12Resource* resource,D3D12_RESOURCE_STATES before,D3D12_RESOURCE_STATES after) {
         D3D12_RESOURCE_BARRIER b{}; b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -618,10 +623,11 @@ public:
                 VS_FIXEDFILEINFO* info=nullptr; UINT length=0;
                 if(VerQueryValueW(version.data(),L"\\",reinterpret_cast<void**>(&info),&length) && length>=sizeof(*info)) {
                     log("Runtime version="+std::to_string(HIWORD(info->dwFileVersionMS))+"."+std::to_string(LOWORD(info->dwFileVersionMS))+"."+std::to_string(HIWORD(info->dwFileVersionLS)));
-                    profileKnown=info->dwFileVersionMS==MAKELONG(8,310) && info->dwFileVersionLS==0;
+                    profileKnown=(info->dwFileVersionMS==MAKELONG(8,310) && info->dwFileVersionLS==0) ||
+                        (info->dwFileVersionMS==MAKELONG(9,310) && info->dwFileVersionLS==MAKELONG(0,16));
                 }
             }
-            if(runtimeKind==RuntimeKind::Nvidia && !profileKnown) unavailable(TGNR_REJECTED,"This Neural Rendering DLL version has no validated input profile in this build (310.8.0.0 required).");
+            if(runtimeKind==RuntimeKind::Nvidia && !profileKnown) unavailable(TGNR_REJECTED,"This Neural Rendering DLL version has no validated input profile in this build (310.9.16.0 or 310.8.0.0 required).");
             return true;
         } catch(const std::exception& e) { unavailable(TGNR_REJECTED,e.what()); return true; } catch(...) { return false; }
     }

@@ -16,7 +16,7 @@ namespace TGPathTracing.Harness
     {
         public const string Id = "com.wessberg.tgpathtracing.harness";
         public const string Name = "TG Path Tracing Harness";
-        public const string Version = "1.2.3";
+        public const string Version = "1.2.4";
         private void Awake()
         {
             try

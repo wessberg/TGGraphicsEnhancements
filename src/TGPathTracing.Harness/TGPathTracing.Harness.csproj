@@ -4,7 +4,7 @@
   <PropertyGroup>
     <AssemblyName>TGPathTracing.Harness</AssemblyName>
     <RootNamespace>TGPathTracing.Harness</RootNamespace>
-    <Version>1.2.3</Version>
+    <Version>1.2.4</Version>
     <!-- A developer's tool for the Mono version, where TG Path Tracing runs. It is in no release zip
          (tools/Package.Common.ps1 does not name it): tools/harness/Run-PtHarness.ps1 builds and installs it. -->
     <TargetFrameworks>net472</TargetFrameworks>
@@ -12,6 +12,8 @@
   <!-- No reference to TG Path Tracing or the bridge: the runner drives whatever build is installed through its
        BepInEx config entries and reads its state by name (Traced.cs), so an older build can be measured too. -->
   <ItemGroup>
+    <!-- Unity 6.3's assemblies are built against netstandard 2.1, newer than net472's own facade. -->
+    <Reference Include="netstandard"><HintPath>$(UnityReferenceDir)\netstandard.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(UnityReferenceDir)\UnityEngine.ParticleSystemModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.ScreenCaptureModule"><HintPath>$(UnityReferenceDir)\UnityEngine.ScreenCaptureModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(UnityReferenceDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>

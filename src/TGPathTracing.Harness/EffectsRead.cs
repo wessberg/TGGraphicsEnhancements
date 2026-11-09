@@ -60,7 +60,7 @@ namespace TGPathTracing.Harness
                 for (var t = c.transform; t != null; t = t.parent) names.Add(t.name + "[" + t.GetSiblingIndex() + "]");
                 names.Reverse();
                 r["path"] = string.Join("/", names); r["scene"] = c.gameObject.scene.name; r["scenePath"] = c.gameObject.scene.path;
-                r["sceneHandle"] = c.gameObject.scene.handle; r["activeSelf"] = c.gameObject.activeSelf; r["activeInHierarchy"] = c.gameObject.activeInHierarchy;
+                r["sceneHandle"] = c.gameObject.scene.handle.ToString(); r["activeSelf"] = c.gameObject.activeSelf; r["activeInHierarchy"] = c.gameObject.activeInHierarchy;
                 r["enabled"] = c is Renderer rr ? (JToken)rr.enabled : c is Behaviour b ? (JToken)b.enabled : Unknown("component has no enabled property");
                 r["transform"] = Members(c.transform, "position", "rotation", "lossyScale", "localToWorldMatrix");
                 r["cameraDistance"] = Camera.main != null ? (JToken)Vector3.Distance(Camera.main.transform.position, c.transform.position) : Unknown("no main camera");

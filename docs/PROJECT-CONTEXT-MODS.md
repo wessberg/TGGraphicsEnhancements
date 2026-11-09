@@ -20,7 +20,16 @@ DEAD ENDS in `docs/PROJECT-CONTEXT.md` too; newest release state is in BACKLOG a
   output is off, so event 2 copies a back buffer without the HUD, for DLSS-G, FSR and XeSS. `TGFG_HUDCHECK` compares
   every 4th pixel at Present (3-deep staging ring): <= 50 % differing for 30 checks = verified; still frames are
   skipped, since menus reset the streak.
-- Backends. Streamline 2.14.1 (the newest release, 2026-09): eDynamic ignores `numFramesToGenerate`;
+- Preset C (2026-10-30, DLSS 310.9.16, Streamline 2.14.16; row Frame Generation Quality): one create-time NGX parameter,
+  `DLSSG.LiteCandidateBlendingEnabled` (`nvsdk_ngx_defs_dlssg.h`; NVIDIA's RTX Remix sets it the same way). `sl::DLSSGOptions`
+  has no field for it, so `control.cpp` hooks `_nvngx.dll`'s D3D12 CreateFeature, only once a preset was asked for, and
+  turns DLSS-G off for one frame so the feature is made again. It cannot run with UI recomposition (we keep that off).
+  Run 20261030-124931, 4K, DLSS Performance, 2x, game in front, stream on: Quality 73.2 / 73.5 / 73.1, Performance
+  76.0 / 76.1 rendered fps, 13.65 against 13.13 ms a frame. The guide `DLSS-FG Programming Guide.pdf` in that SDK says 310.7.0 and
+  does not mention it; NVIDIA App's route is the driver profile (`NGX_DLSS_FG_OVERRIDE_RENDER_PRESET_SELECTION_ID`).
+- DLSS-G generates nothing while the game's window is behind another (status 0, fgOn counts on, "80 on screen from 80
+  rendered"; the No FPS gain alert fires). In front the same build shows 147 from 73. Judge frame generation only in front.
+- Backends. Streamline 2.14.16 (the newest release, 2026-10): eDynamic ignores `numFramesToGenerate`;
   `dynamicTargetFrameRate` 0 = refresh, ignored with VSync. FSR SDK 2.3.0: the loader finds effect DLLs by bare name, so
   preload `amd_fidelityfx_framegeneration_dx12.dll` by full path; 1 generated frame, no dynamic mode; FSR 4 ML FG on RX
   9000 only; maxRenderSize is fixed at create (the context is rebuilt per render size); FSR 3.1.6 wants >= 60 fps input.
@@ -49,6 +58,13 @@ DEAD ENDS in `docs/PROJECT-CONTEXT.md` too; newest release state is in BACKLOG a
 
 ## 6. TG Better Upscaling
 
+- Unity 6000.3 (the game's 1.31, Steam build 26298687): HDRP's `CustomPass.ExecuteInternal` gained a `ScriptableRenderContext` (7 arguments), so FSR and XeSS fell
+  back to STP with a `TargetParameterCountException` and NR recorded nothing until `Shared/CustomPassRecorder.cs` passed an
+  empty one (it is only handed on to the pass; ours use `ctx.cmd`). NGX's optimal-settings query answers 33.3 % for DLAA:
+  `DlssModes.cs` holds DLAA at 100 %. FSR SDK 2.4.0's upscaler 4.1.2 offers FSR 4 on RX 6000 and newer and some Ryzen chips, not
+  on the Ryzen 9950X3D's built-in Radeon (device 13C0, driver 2026-04: offered 3.1.6 and 2.3.4 only; 3.1.6 ran there, 10.7 ms for 720p to
+  1080p). Our inputs stay as they are: the SDK's input list did not change.
+- HDRP's DLSS feature is created at the first frame's size, grows but never shrinks (`DLSSPass.UpdateViewState`), and a too-large one costs 2 to 3 ms a frame at 4K. `TGUP_GetDlssSize` and `StpHost.TickDlssSize` rebuild it once by a one-frame change of quality level. Render size alone hides this: both states render 1924x1084.
 - The game's update of 2026-10-06 (Steam build 25629220) ships Unity's FSR 2: `AMDUnityPlugin.dll`, a fourth row entry
   `UpScalingType_FSR` at index 3 (this mod's index and ID), `UpScalingController.EnableFSR` (the camera's
   `allowFidelityFX2SuperResolution`, scale from the game's slider). HDRP's FSR2Pass, a stub before, takes the same

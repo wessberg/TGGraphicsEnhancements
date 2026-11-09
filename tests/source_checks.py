@@ -139,8 +139,8 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(token, self.text("src/Game.References.props"))
         for project in ["TGGraphicsBridge", "TGFrameGeneration", "TGBetterUpscaling", "TGPathTracing", "TGNeuralRendering"]:
             tree = ET.fromstring(self.text(f"src/{project}/{project}.csproj"))
-            self.assertEqual(tree.find(".//Version").text, "1.2.3", project)
-        self.assertEqual(ET.fromstring(self.text("src/TGGraphicsBridge.Autoload/Autoload.props")).find(".//Version").text, "1.2.3")
+            self.assertEqual(tree.find(".//Version").text, "1.2.4", project)
+        self.assertEqual(ET.fromstring(self.text("src/TGGraphicsBridge.Autoload/Autoload.props")).find(".//Version").text, "1.2.4")
         # The mods built on the bridge reference it without copying it (Build.ps1 bundles it), and build
         # their own copy of its preloader.
         for project in ["TGFrameGeneration", "TGBetterUpscaling", "TGPathTracing", "TGNeuralRendering"]:
@@ -196,8 +196,9 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("sizeof(TGFG_HdrpInputs)==48", header)
         native = self.text(FG + "src/control.cpp")
         symbols = re.findall(r"TGFG_CALL\s+(TGFG_\w+)\(", header)
-        # 12, plus the troubleshooting report's diagnostics, timings and notes, and presenting without tearing.
-        self.assertEqual(len(symbols), 16)
+        # 12, plus the troubleshooting report's diagnostics, timings and notes, presenting without tearing,
+        # and DLSS Frame Generation's preset.
+        self.assertEqual(len(symbols), 17)
         self.assertIn("sizeof(TGFG_Timing)==72", header)
         self.assertIn("internal const int SizeBytes = 72;", managed)
         for symbol in symbols:
@@ -377,7 +378,7 @@ class SourceConsistency(unittest.TestCase):
         recorder = self.text("src/Shared/CustomPassRecorder.cs")
         il2cpp = re.sub(r"//.*", "", compiled_for(recorder, True))
         self.assertNotIn(".ExecuteInternal(", il2cpp)
-        self.assertIn("args[4] = (void*)IL2CPP.il2cpp_object_unbox(IL2CPP.Il2CppObjectBaseToPtrNotNull(targets));", il2cpp)
+        self.assertIn("args[count++] = (void*)IL2CPP.il2cpp_object_unbox(IL2CPP.Il2CppObjectBaseToPtrNotNull(targets));", il2cpp)
         self.assertIn('field.Name.StartsWith("NativeMethodInfoPtr_ExecuteInternal_", StringComparison.Ordinal)', il2cpp)
         self.assertIn("CustomPassRecorder.Record(pass, volume, __instance, renderGraph, hdCamera, targets)", host)
         for project in ("TGBetterUpscaling", "TGNeuralRendering"):
@@ -481,7 +482,7 @@ class SourceConsistency(unittest.TestCase):
                 self.assertNotIn(token, text, token)
 
     def test_settings_rows_are_listed_without_an_il2cpp_enumerator(self):
-        # The normal version's first run of 1.2.3 (2026-10-06), and both of its troubleshooting reports of 2026-09-25:
+        # The normal version's first run of 1.2.4 (2026-10-06), and both of its troubleshooting reports of 2026-09-25:
         # walking the settings screen's own set of views (Model.Views, a HashSet behind an IEnumerable) through the
         # interop's enumerator threw "Collection was modified" the first time the settings opened, RowAlerts gave up
         # for the session, and no row ever got its alert icon. Unity lists the row views instead; no mod steps an
@@ -784,10 +785,10 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn('Name = "TG Graphics Bridge"', bridge)
         for mod, text in (("TGFrameGeneration", plugin), ("TGBetterUpscaling", up)):
             if mod == "TGFrameGeneration":
-                self.assertIn('[BepInDependency(BridgePlugin.Id, "1.2.3")]', text)
+                self.assertIn('[BepInDependency(BridgePlugin.Id, "1.2.4")]', text)
             else:
                 self.assertIn("[BepInDependency(BridgePlugin.Id, BepInDependency.DependencyFlags.HardDependency)]", text)
-            self.assertIn('Version = "1.2.3"', text)
+            self.assertIn('Version = "1.2.4"', text)
             self.assertIn('BepInDependency("com.avalonmodmanager", BepInDependency.DependencyFlags.SoftDependency)', text)
             self.assertLess(text.index("ModManagers.KeepOutOfAvalon(Id, Logger);"), text.index("Session.Start(Config, Logger);"))
         self.assertIn("ModManagers.Tick();", bridge)
@@ -796,9 +797,9 @@ class SourceConsistency(unittest.TestCase):
         settings = self.text("src/TGFrameGeneration/Settings.cs")
         rows = self.text("src/TGFrameGeneration/NativeVideoSettings.cs")
         names = re.findall(r'Row\(\w+Key, [^,]+, "([^"]+)", (\d)', settings)
-        self.assertEqual([n for n, _ in names], ["Frame Generation", "Frame Generation Mode", "Frame Multiplier",
+        self.assertEqual([n for n, _ in names], ["Frame Generation", "Frame Generation Quality", "Frame Generation Mode", "Frame Multiplier",
                                                   "Max Frame Multiplier", "Target Framerate", "Low Latency"])
-        self.assertEqual([int(o) for _, o in names], list(range(6)))
+        self.assertEqual([int(o) for _, o in names], list(range(7)))
         for name, _ in names:
             self.assertIn('"' + name + '"', rows)
         self.assertEqual(len(re.findall(r"file\.Bind\(AdvancedSection", settings)), 11)
@@ -4240,7 +4241,7 @@ class SourceConsistency(unittest.TestCase):
 
     def test_cmake_inputs_exist_and_shader_test_is_windows_only(self):
         cmake = self.text("CMakeLists.txt")
-        self.assertIn("VERSION 1.2.3", cmake)
+        self.assertIn("VERSION 1.2.4", cmake)
         for path in re.findall(r"(?:native|tests)/[\w/.-]+\.(?:cpp|hpp|hlsl|in)", cmake):
             self.assertTrue((ROOT / path).is_file(), path)
         self.assertNotIn("resource_tracker.cpp", cmake)

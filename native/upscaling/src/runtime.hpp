@@ -52,7 +52,7 @@ public:
     virtual void describe(TGUP_Status&) const {}
 };
 
-// AMD FSR upscaling through the FSR API (FidelityFX SDK 2.x): FSR 4 on Radeon RX 9000, FSR 3.1 elsewhere.
+// AMD FSR upscaling through the FSR API (FidelityFX SDK 2.x): FSR 4 on Radeon RX 6000 and newer and some Ryzen processors, FSR 3.1 elsewhere.
 bool load_fsr_runtime(const std::wstring& folder);
 void probe_fsr(ID3D12Device* device);
 bool fsr_available();

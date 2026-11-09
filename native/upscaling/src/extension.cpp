@@ -2,7 +2,9 @@
 // TG Better Upscaling as a TG Graphics Bridge extension. It needs the bridge's shared D3D12 device and the
 // game's real D3D11 device, and never touches the game's swapchain.
 #include "runtime.hpp"
+#include <tgb/dlss_inputs.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -15,14 +17,31 @@ tgb::Host* bridgeHost=nullptr;
 HMODULE self=nullptr;
 std::wstring root; // BepInEx/TGBetterUpscaling/Native
 
+// HDRP creates the game's DLSS feature at the size of the frame it first sees and makes it again only when the input
+// grows, so a feature made before the render scale took effect stays that large (DLSSPass.UpdateViewState). The game then
+// runs 2 to 3 ms a frame slower at 4K than with one made at the real size. This tells the plugin, which has it made again.
+std::atomic<uint32_t> dlssCreatedWidth{0},dlssCreatedHeight{0},dlssRenderWidth{0},dlssRenderHeight{0},dlssSteadyFrames{0},dlssCreations{0};
+void __cdecl observe_dlss(tgb::DlssStage stage,const tgb::DlssInputs* in) noexcept {
+    if(!in || in->source!=tgb::DlssSource::SuperResolution) return;
+    if(stage==tgb::DlssStage::Created) {
+        dlssCreatedWidth=in->colorRect.width; dlssCreatedHeight=in->colorRect.height;
+        dlssSteadyFrames=0; ++dlssCreations;
+    } else if(stage==tgb::DlssStage::Before) {
+        if(in->colorRect.width!=dlssRenderWidth || in->colorRect.height!=dlssRenderHeight) {
+            dlssRenderWidth=in->colorRect.width; dlssRenderHeight=in->colorRect.height; dlssSteadyFrames=0;
+        } else ++dlssSteadyFrames;
+    }
+}
+
 class UpscalingExtension final : public tgb::Extension {
 public:
     const char* name() noexcept override { return "TG Better Upscaling"; }
     uint32_t needs() noexcept override { return tgb::NeedD3D12; }
     bool bootstrap() noexcept override {
         try {
-            log("TG Better Upscaling 1.2.3 extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
+            log("TG Better Upscaling 1.2.4 extension bootstrap (TG Graphics Bridge); PID="+std::to_string(GetCurrentProcessId()));
             install_dlss_dll(root);
+            if(!tgb::subscribe_dlss(&observe_dlss)) log("The shared DLSS observer is not available: the size of the game's DLSS feature is not checked");
             const bool fsr=load_fsr_runtime(root), xess=load_xess_runtime(root);
             if(!fsr && !xess) { log("Neither AMD FSR nor Intel XeSS could be loaded; upscaling stays off"); return false; }
             return true;
@@ -115,6 +134,12 @@ TGUP_EXPORT int32_t TGUP_CALL TGUP_GetDlssDll(uint64_t* loaded, uint64_t* reques
     if(requested) *requested=r;
     if(bundled) *bundled=b;
     return int32_t(source);
+}
+TGUP_EXPORT int32_t TGUP_CALL TGUP_GetDlssSize(uint32_t* created, uint32_t* render, uint32_t* creations) {
+    if(!created || !render || !creations) return -1;
+    using namespace tgup;
+    *created=dlssCreatedWidth; *render=dlssRenderWidth; *creations=dlssCreations;
+    return dlssCreatedWidth>0 && dlssRenderWidth>0 && dlssSteadyFrames>=30 && (dlssCreatedWidth>dlssRenderWidth || dlssCreatedHeight>dlssRenderHeight) ? 1 : 0;
 }
 TGUP_EXPORT int32_t TGUP_CALL TGUP_GetDlssOverride(TGUP_DlssOverride* out) {
     if(!out) return -1;

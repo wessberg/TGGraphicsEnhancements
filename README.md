@@ -6,7 +6,7 @@ Four mods for Tainted Grail: The Fall of Avalon, built from this repository, and
 |---|---|
 | **TG Frame Generation** | Frame generation with NVIDIA DLSS, AMD FSR or Intel XeSS, plus NVIDIA Reflex, Intel XeLL or AMD Anti-Lag 2. |
 | **TG Neural Rendering** | DLSS 5 Neural Rendering before the camera effects, interface and frame generation capture, with a choice of before or after upscaling. Supports official and compatible community runtime DLLs, supplied by the player. Starts Off and requires DLSS upscaling. |
-| **TG Better Upscaling** | AMD FSR (FSR 4 on Radeon RX 9000, FSR 3.1 elsewhere) and Intel XeSS upscaling, as two more choices of the game's own Upscaling row next to STP and DLSS, and a newer DLSS DLL for the game's own DLSS. |
+| **TG Better Upscaling** | AMD FSR (FSR 4 on Radeon RX 6000 and newer and some Ryzen processors, FSR 3.1 elsewhere) and Intel XeSS upscaling, as two more choices of the game's own Upscaling row next to STP and DLSS, and a newer DLSS DLL for the game's own DLSS. |
 | **TG Path Tracing** | A prototype of ReSTIR path traced lighting (the sun, every lamp, bounced light and reflections) for the Mono version, traced with DirectX Raytracing on the bridge's Direct3D 12 device, denoised by DLSS Ray Reconstruction (with TG Better Upscaling), AMD FSR Ray Regeneration or its own denoiser. In testing. |
 | **TG Graphics Bridge** | Bundled with each mod, not a download of its own. Hooks the game's Direct3D 11 device and swapchain from a BepInEx preloader, creates one private Direct3D 12 device on the same GPU, and loads the native part of every mod built on it. Also carries what both mods share in game: the Video-tab plumbing, the mod-manager integration and two fixes to the game's motion vectors. With both mods installed, one copy runs. |
 
@@ -16,7 +16,7 @@ or other wrapper in between. Their settings are rows in the game's own Video tab
 
 The game renders with Direct3D 11. The bridge shares the game's textures with its Direct3D 12
 device through GPU fences on the same adapter; frame generation presents there with NVIDIA
-Streamline, AMD's FSR API (FidelityFX SDK 2.3) or Intel XeSS-FG (XeSS SDK 3.0), and upscaling runs
+Streamline, AMD's FSR API (FidelityFX SDK 2.4) or Intel XeSS-FG (XeSS SDK 3.0), and upscaling runs
 FSR or XeSS Super Resolution there and hands the result back to the game's frame before
 post-processing.
 
@@ -38,10 +38,11 @@ I default to one pass. Extra passes feed the result back through NR, using the s
 They cost more GPU time and memory and can exaggerate colour changes or artifacts. Two passes at half
 Strength are not the same as one at full Strength; Strength is not a final opacity blend.
 The main row greys out unless DLSS and the other requirements are available, with the reason in its tooltip.
-The runtime is not bundled. Close the game and put your `nvngx_dlssnr.dll` at
-`BepInEx/TGNeuralRendering/Native/DLSS/nvngx_dlssnr.dll` (create the `DLSS` folder if needed), then restart.
+The download includes NVIDIA's signed `nvngx_dlssnr.dll` 310.9.16.0, NVIDIA's faster model of October 2026, unmodified, from
+NVIDIA's public RTX Remix release. To use another DLL, close the game and copy it over
+`BepInEx/TGNeuralRendering/Native/DLSS/nvngx_dlssnr.dll`, then restart. Do that again after updating the mod.
 
-The original NVIDIA-signed 310.8.0.0 DLL uses the normal NVIDIA path. Compatible patched DLLs use a separate
+The NVIDIA-signed 310.9.16.0 and 310.8.0.0 DLLs use the normal NVIDIA path. Compatible patched DLLs use a separate
 adapter included with the mod. Selection is automatic: no extra setting, separate adapter download or list of
 approved community files. Compatible new patches can be swapped in without updating the mod; a change to
 the runtime's interface may still need a mod update.
@@ -50,8 +51,8 @@ This includes the community patch intended for RTX 2000, 3000 and 4000 cards. I 
 on my RTX 5080, but have not confirmed it on those older cards. [DLL guidance](docs/nexus-neural-rendering.md).
 [Test results and remaining checks](docs/DLSS5-COMPATIBILITY.md). [Implementation](docs/DLSS5-IMPLEMENTATION.md).
 
-Version 1.2.3 of TG Frame Generation, TG Better Upscaling, TG Neural Rendering and the bridge, the numbers they have on Nexus
-Mods (bridge and frame generation ABI 0x00010100, upscaling 0x00010400), for both versions of the game: the
+Version 1.2.4 of TG Frame Generation, TG Better Upscaling, TG Neural Rendering and the bridge, for the game's Unity 6000.3
+(1.2.3 is what is on Nexus Mods until it is uploaded) (bridge and frame generation ABI 0x00010100, upscaling 0x00010400), for both versions of the game: the
 standard version (IL2CPP) with BepInEx 6 and the Mono modding branch with BepInEx 5. TG Path Tracing
 (1.2.0, ABI 0x00011300) is a prototype for the Mono version only.
 
@@ -98,11 +99,11 @@ Performance renders at 50%. A config without a mode yet starts each upscaler on 
 mode at or below the game's render scale, so the change never costs frames; the game's graphics
 presets set the modes by the same rule.
 
-FSR runs AMD's default version for the GPU: FSR 4 on a Radeon RX 9000, the newest FSR 3.1 elsewhere.
+FSR runs AMD's default version for the GPU: FSR 4 on a Radeon RX 6000 or newer and some Ryzen processors, the newest FSR 3.1 elsewhere.
 AMD asks that the version is left to that default or chosen by the player, so there is no version
 row; the native log names the version AMD chose.
 
-The game's own DLSS gets a newer DLSS DLL: NVIDIA's `nvngx_dlss.dll` 310.9.1 from the DLSS SDK,
+The game's own DLSS gets a newer DLSS DLL: NVIDIA's `nvngx_dlss.dll` 310.9.16 from the DLSS SDK,
 bundled in `Native/DLSS`, where the game ships 3.8.10. NVIDIA's runtime loads `nvngx_dlss.dll` from
 the game folder when the game starts DLSS; when that file is older than the bundled one, the load
 gets the bundled one instead (`native/upscaling/src/dlss_dll.cpp`). An equal or newer file, from a
@@ -302,6 +303,7 @@ second from the first time the overlay shows (`native/bridge/src/performance.cpp
 | Video tab row | Choices |
 |---|---|
 | Frame Generation | Off, plus each of DLSS, FSR and XeSS whose runtime reports support on this GPU. |
+| Frame Generation Quality | DLSS only: Quality (NVIDIA's default) or Performance (NVIDIA's Preset C, a little faster and a little less exact). |
 | Frame Generation Mode | DLSS only: Fixed or Dynamic, when the runtime reports Multi Frame Generation and Dynamic support. |
 | Frame Multiplier | 2x up to the selected technology's maximum. Switching technology clamps the value. |
 | Max Frame Multiplier, Target Framerate | DLSS Dynamic only: the upper limit and the framerate to aim for. |
@@ -379,10 +381,10 @@ so either works without the other.
 | Area | Implementation and limits |
 |---|---|
 | Managed | `net472` for Mono, `net6.0` for IL2CPP. One set of native x64 DLLs serves both. |
-| DLSS-G | Streamline 2.14.1 DLSS-G: fixed multipliers, `eDynamic` with `dynamicTargetFrameRate`, Reflex required. |
-| FSR | AMD's signed loader, frame generation and upscaler DLLs: FSR 4 on Radeon RX 9000, FSR 3.1 elsewhere; the version list comes from the runtime. |
+| DLSS-G | Streamline 2.14.16 DLSS-G: fixed multipliers, `eDynamic` with `dynamicTargetFrameRate`, Reflex required. |
+| FSR | AMD's signed loader, frame generation and upscaler DLLs: FSR 4 on Radeon RX 6000 and newer and some Ryzen processors, FSR 3.1 elsewhere; the version list comes from the runtime. |
 | XeSS | Intel's signed `libxess.dll` (upscaling), `libxess_fg.dll` and `libxell.dll` (frame generation). |
-| DLSS DLL | NVIDIA's signed `nvngx_dlss.dll` 310.9.1 from the DLSS SDK, for the game's own DLSS when the game folder's is older. |
+| DLSS DLL | NVIDIA's signed `nvngx_dlss.dll` 310.9.16 from the DLSS SDK, for the game's own DLSS when the game folder's is older. |
 | Upscaling inputs | HDRP's STP inputs: pre-exposed linear color, reversed-Z depth, motion vectors scaled to render pixels, HDRP's jitter negated as the SDKs expect, HDRP's own history reset. FSR gets HDRP's exposure as its pre-exposure and exposure, as HDRP's DLSS pass takes it. Texture mip bias as each vendor asks: HDRP's `log2(render / output)` for XeSS, one mip more for FSR. |
 | Synchronization | GPU fences between the D3D11 and D3D12 queues; every wait has a matching signal. The CPU never reads an image back. |
 | HDR | FSR and XeSS upscale HDR color before tonemapping. Frame generation encodes FP16 scRGB to RGB10A2 PQ/BT.2020 for its swapchain. |
@@ -395,12 +397,12 @@ are git-ignored):
 
 | Folder | Contents |
 |---|---|
-| `Streamline-2.14.1` | NVIDIA Streamline 2.14.1 source: headers and `external/ngx-sdk/include` |
-| `Streamline-2.14.1-bin` | `bin/x64` and `license.txt` from the `streamline-sdk-v2.14.1.zip` release |
-| `FidelityFX-SDK-2.3.0` | AMD FSR SDK 2.3.0 headers and, in `bin/`, the signed `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_framegeneration_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll` |
+| `Streamline-2.14.16` | NVIDIA Streamline 2.14.16 source: headers and `external/ngx-sdk/include` |
+| `Streamline-2.14.16-bin` | `bin/x64` and `license.txt` from the `streamline-sdk-v2.14.16.zip` release |
+| `FidelityFX-SDK-2.4.0` | AMD FSR SDK 2.4.0 headers and, in `bin/`, the signed `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_framegeneration_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll` |
 | `XeSS-SDK-3.0.2` | Intel XeSS SDK 3.0.2 release archive |
 | `AntiLag2-SDK-2.0.0a` | AMD Anti-Lag 2 SDK 2.0.0a release archive |
-| `DLSS-SDK-310.9.1` | `lib/Windows_x86_64/rel/nvngx_dlss.dll` and `LICENSE.txt` from NVIDIA's DLSS SDK 310.9.1 |
+| `DLSS-SDK-310.9.16` | `lib/Windows_x86_64/rel/nvngx_dlss.dll` and `LICENSE.txt` from NVIDIA's DLSS SDK 310.9.16 |
 | `RTXDI-Library-3.1` | NVIDIA's RTXDI runtime library 3.1 (`git clone https://github.com/NVIDIA-RTX/RTXDI-Library`), compiled into TG Path Tracing |
 | `NVAPI-R615` | NVIDIA's NVAPI R615 (`git clone https://github.com/NVIDIA/nvapi`): its header and `amd64/nvapi64.lib`. Needed only for a build with `-DTGPT_MEGA_GEOMETRY=ON` (TG Path Tracing's RTX Mega Geometry path, in testing); a build without that switch does not look for it |
 
@@ -409,12 +411,12 @@ already installed. `docs/SOURCES.md` links every SDK release.
 
 ```powershell
 # Native DLLs: TGGraphicsBridge.Native, TGFG.Native, TGBetterUpscaling.Native, TGPathTracing.Native (VS x64 developer shell)
-.\Build-Native.ps1 -StreamlineRoot Streamline-2.14.1 `
-  -NgxIncludeDir Streamline-2.14.1\external\ngx-sdk\include
+.\Build-Native.ps1 -StreamlineRoot Streamline-2.14.16 `
+  -NgxIncludeDir Streamline-2.14.16\external\ngx-sdk\include
 
 # Signed NVIDIA, AMD and Intel runtimes with their license notices, into each mod's folder
-.\Stage-Runtime.ps1 -RuntimeDirectory Streamline-2.14.1-bin\bin\x64 `
-  -FidelityFXRoot FidelityFX-SDK-2.3.0 -XeSSRoot XeSS-SDK-3.0.2 -DlssRoot DLSS-SDK-310.9.1
+.\Stage-Runtime.ps1 -RuntimeDirectory Streamline-2.14.16-bin\bin\x64 `
+  -FidelityFXRoot FidelityFX-SDK-2.4.0 -XeSSRoot XeSS-SDK-3.0.2 -DlssRoot DLSS-SDK-310.9.16
 
 # Plugins and preloaders, then package and install the mods (game closed)
 .\Build.ps1 -Runtime Mono `

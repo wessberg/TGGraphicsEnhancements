@@ -36,7 +36,8 @@ Upscaling. 7 IL2CPP. 8 Troubleshooting. 9 Path Tracing. 10 DEAD ENDS. 11 Method 
 ## 2. The game and its engine
 
 Build and HDRP's frame
-- Unity 6000.0.64f1, HDRP 17 (Graphics repo branch 6000.0/staging). Renders D3D11; ships `D3D12/D3D12Core.dll`
+- Unity 6000.3.21f1 as of the game's 1.31 (2026-10-30; 6000.0.64f1 before, the exe stub and BepInEx's log line still
+  say 6000.0.41), HDRP 17. Renders D3D11; ships `D3D12/D3D12Core.dll`
   1.611.2 while the exe asks for SDK 610 (section 4). `shader-stripping.json` in the game root: every DXR variant was
   stripped (HDRP/Lit IndirectDXR, GBufferDXR, PathTracingDXR, all to 0). Game code:
   `Fall of Avalon_Data/Managed/TG.Main.dll`. Preferences: `HKCU\Software\Questline\Fall of Avalon`
@@ -371,7 +372,7 @@ moved unchanged to `docs/PT-DETAILS.md` (the dated archive at its end); open wor
   Mirror records allocate about 127 MB at 1924 x 1084 even with no mirror visible. Glass/water options for the owner:
   two complete NRD layers, one denoised layer, or the vendor sample's screen lookup (conflicts with a ruling).
   `docs/agents/psr-2.md` gives costs and gaps. Our reflection filter stays until that choice.
-- RR runs in TGBU on the shared D3D12 device. Preset Default is F in SDK 310.9.1, as the owner requested;
+- RR runs in TGBU on the shared D3D12 device. Preset Default is F in SDK 310.9.16, as the owner requested;
   recheck after a DLL update. RGB specular guides, independent reflection distance, material diffuse guides
   and RR's own optimal render size are in source (`docs/agents/vendor-rr.md`).
   TGBU's part is not yet deployed/tested in game in the 01:25 state; the TGPT half is merged.
@@ -379,7 +380,7 @@ moved unchanged to `docs/PT-DETAILS.md` (the dated archive at its end); open wor
   comparison in psr-2 section (c). Steady hair guides were deliberate. RR highlight hold is still review 17.
   Pre-exposure follows HDRP's 0.2..2 clamp; guide 3.7 does not support exposure inputs.
   A refused RR frame returns to the tracer's denoiser for 0.5 s with fresh history.
-- RRG: FidelityFX 2.3 runtime support query; demodulated radiance, sqrt albedos, world oct normals, 2.5D motion.
+- RRG: FidelityFX 2.4 runtime support query; demodulated radiance, sqrt albedos, world oct normals, 2.5D motion.
   Fixed history scale, matching specular factors, gap resets, background context creation with retained device
   and fences are merged; `TGPT_RRG_DEBUG=1` enables validation. Direct-specular separation remains review 7.
   It still needs supported AMD hardware; do not call it game-tested.
@@ -656,9 +657,9 @@ Frame generation, upscaling, bridge:
   `build/native/_deps`). Configure from the repo root (`<repo>`: its absolute path, forward slashes):
   ```
   cmake -S . -B build\native -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DTGFG_BUILD_NATIVE=ON -DBUILD_TESTING=ON
-    -DSTREAMLINE_ROOT=<repo>/Streamline-2.14.1 -DNGX_INCLUDE_DIR=<repo>/Streamline-2.14.1/external/ngx-sdk/include
-    -DFIDELITYFX_ROOT=<repo>/FidelityFX-SDK-2.3.0 -DXESS_ROOT=<repo>/XeSS-SDK-3.0.2
-    -DANTILAG2_ROOT=<repo>/AntiLag2-SDK-2.0.0a -DDLSS_ROOT=<repo>/DLSS-SDK-310.9.1 -UTG_DXC
+    -DSTREAMLINE_ROOT=<repo>/Streamline-2.14.16 -DNGX_INCLUDE_DIR=<repo>/Streamline-2.14.16/external/ngx-sdk/include
+    -DFIDELITYFX_ROOT=<repo>/FidelityFX-SDK-2.4.0 -DXESS_ROOT=<repo>/XeSS-SDK-3.0.2
+    -DANTILAG2_ROOT=<repo>/AntiLag2-SDK-2.0.0a -DDLSS_ROOT=<repo>/DLSS-SDK-310.9.16 -UTG_DXC
   ```
 - One command (join the lines). Then build, install, ctest and `tools\Write-NativeManifest.ps1` as in AGENTS.md;
   `Build-Native.ps1` does it all (`-Generator "NMake Makefiles"` reuses `build/native`); runtimes: `Stage-Runtime.ps1`.

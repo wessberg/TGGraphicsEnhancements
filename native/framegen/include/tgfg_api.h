@@ -114,3 +114,5 @@ TGFG_EXPORT int TGFG_CALL TGFG_LogNote(const char* text, uint32_t flags);
 // latency NVIDIA warns of where Windows composes the frames, and keeps a laptop that flips them directly
 // (hybrid independent flip, cross-adapter scan-out) from tearing.
 TGFG_EXPORT int TGFG_CALL TGFG_SetNoTearing(uint32_t enabled);
+// DLSS Frame Generation's preset: 0 NVIDIA's default, 3 Preset C (lighter, a little less exact).
+TGFG_EXPORT int TGFG_CALL TGFG_SetDlssPreset(uint32_t preset);

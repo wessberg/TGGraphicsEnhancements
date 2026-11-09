@@ -4,7 +4,7 @@
   <PropertyGroup>
     <AssemblyName>TGBetterUpscaling</AssemblyName>
     <RootNamespace>TGBetterUpscaling</RootNamespace>
-    <Version>1.2.3</Version>
+    <Version>1.2.4</Version>
   </PropertyGroup>
   <!-- TG Graphics Bridge, bundled in this mod's package by Build.ps1 (the build does not copy it), and
        this mod's copy of the bridge's preloader, built alongside but never loaded as a dependency. -->

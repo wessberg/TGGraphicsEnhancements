@@ -512,6 +512,13 @@ namespace TGPathTracing.Harness
                 applied.Add((took ? "" : "NOT APPLIED: ") + detail);
                 if (!took && step.neural.HasValue) r.error += "Setting not applied: " + detail + ". ";
             }
+            if (!string.IsNullOrEmpty(step.upscaler))
+            {
+                string detail; bool took = false;
+                try { took = UpscalerStep.Set(step.upscaler, out detail); } catch (Exception ex) { detail = "upscaler " + step.upscaler + ": " + ex.Message; }
+                applied.Add((took ? "" : "NOT APPLIED: ") + detail);
+                if (!took) r.error += detail + ". ";
+            }
             r.applied = applied.ToArray(); r.expectedTraced = step.traced;
             // The traced light on screen with nothing left to register, or gone: the native side counts the frames it
             // composited, read by the plugin four times a second.

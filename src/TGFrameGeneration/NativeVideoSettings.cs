@@ -68,7 +68,7 @@ namespace TGFrameGeneration
         private readonly Settings settings;
         private readonly VideoCapabilities caps;
         private readonly UpScaling upscaling; // the game's upscaler row
-        private readonly EnumArrowsOption fg, mode, multiplier, maxMultiplierOption, target, latency;
+        private readonly EnumArrowsOption fg, quality, mode, multiplier, maxMultiplierOption, target, latency;
         private readonly ToggleOption[] multiplierChoices, latencyChoices;
         private readonly FrameGenerationSetting[] backends; // Frame Generation row index -> technology
         private readonly LowLatencySetting[] latencies;     // Low Latency row index -> technology
@@ -122,6 +122,13 @@ namespace TGFrameGeneration
                     : new PrefOption[] { mode, new DependentOption(multiplier, (Func<bool>)(() => mode.OptionInt == 1), dynamicRows) }; // older game builds
             }
             else if (dlssMax > 2) dlssRows = new PrefOption[] { multiplier };
+            if (backends.Contains(FrameGenerationSetting.DLSS))
+            {
+                quality = Enum("Quality", "Frame Generation Quality", 0, out _, "Quality", "Performance");
+                Tooltip(quality, () => "Quality: NVIDIA's default. Performance: NVIDIA's lighter Preset C, a little faster and a little less exact, most of all around the HUD and at low framerates.");
+                quality.SetInteractabilityFunction((Func<bool>)Usable);
+                dlssRows = new PrefOption[] { quality }.Concat(dlssRows).ToArray();
+            }
             var multiplierOnly = multiplier != null ? new PrefOption[] { multiplier } : new PrefOption[0];
             PrefOption[] RowsFor(int index)
             {
@@ -242,6 +249,7 @@ namespace TGFrameGeneration
         private IEnumerable<EnumArrowsOption> Leaves()
         {
             yield return fg;
+            if (quality != null) yield return quality;
             if (mode != null) yield return mode;
             if (multiplier != null) yield return multiplier;
             if (maxMultiplierOption != null) yield return maxMultiplierOption;
@@ -269,6 +277,7 @@ namespace TGFrameGeneration
         internal void SyncFromConfig()
         {
             fg.OptionInt = Math.Max(0, Array.IndexOf(backends, settings.FrameGeneration));
+            if (quality != null) quality.OptionInt = settings.Quality == FrameGenerationQuality.Performance ? 1 : 0;
             if (mode != null) mode.OptionInt = settings.Mode == FrameGenerationMode.Dynamic ? 1 : 0;
             if (multiplier != null) multiplier.OptionInt = Mathf.Clamp(settings.Multiplier - 2, 0, multiplierRows - 2);
             if (maxMultiplierOption != null) maxMultiplierOption.OptionInt = Mathf.Clamp(settings.MaxMultiplier - 2, 0, dlssMax - 2);
@@ -285,6 +294,7 @@ namespace TGFrameGeneration
             // The row already blocks other choices; this keeps a hand-edited state consistent as well.
             if (!caps.AllowedLatencies(backend).Contains(chosen)) chosen = caps.PreferredLatency(backend);
             settings.Apply(backend,
+                quality != null && quality.OptionInt == 1 ? FrameGenerationQuality.Performance : FrameGenerationQuality.Quality,
                 mode != null && mode.OptionInt == 1 ? FrameGenerationMode.Dynamic : FrameGenerationMode.Fixed,
                 multiplier != null ? multiplier.OptionInt + 2 : 2,
                 maxMultiplierOption != null ? maxMultiplierOption.OptionInt + 2 : settings.MaxMultiplier,
@@ -292,7 +302,7 @@ namespace TGFrameGeneration
                 chosen);
             DisplayMode.ArmFromVideoApply();
             HybridVsync.ArmFromVideoApply();
-            Session.Log.LogInfo("Video settings applied: FG=" + settings.FrameGeneration + " mode=" + settings.Mode +
+            Session.Log.LogInfo("Video settings applied: FG=" + settings.FrameGeneration + " quality=" + settings.Quality + " mode=" + settings.Mode +
                 " multiplier=" + settings.Multiplier + "x dynamicMax=" + settings.MaxMultiplier + "x target=" + settings.TargetFps +
                 " lowLatency=" + settings.LowLatency);
         }

@@ -31,7 +31,7 @@ namespace TGGraphicsBridge.Autoload
     internal static class Bootstrap
     {
         // The version of the bridge bundled with this copy, and the interface this preloader speaks.
-        internal const string BridgeVersion = "1.2.3";
+        internal const string BridgeVersion = "1.2.4";
         private const uint ExpectedAbi = 0x00010100;
         private const string ManifestName = "graphics-bridge-extension.json";
         private const string StartedKey = "TGGraphicsBridge.Autoload.StartedBy";

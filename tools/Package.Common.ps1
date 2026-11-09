@@ -7,7 +7,7 @@
 # Each mod bundles TG Graphics Bridge (the DX11-to-DX12 bridge, its preloader and the shared gameplay
 # library) under its own folders, so a player installs one download and two mods never deploy the
 # same file; at run time one copy starts (see src/TGGraphicsBridge.Autoload/Bootstrap.cs).
-$script:TgVersion = '1.2.3'
+$script:TgVersion = '1.2.4'
 $script:TgAbi = '0x00010100'
 function Get-TgVersion { $script:TgVersion }
 function Get-TgAbi { $script:TgAbi }
@@ -49,8 +49,9 @@ function Get-TgMod([string]$Name) {
               Managed=@(@{Relative='BepInEx/plugins/TGNeuralRendering/TGNeuralRendering.dll'; Assembly='TGNeuralRendering'}) + (Get-TgBridgeManaged $Name)
               Natives=@(@{Component=$Name; Relative='BepInEx/TGNeuralRendering/Native/TGNeuralRendering.Native.dll'},
                         @{Component='TGNeuralRenderingCommunity'; Relative='BepInEx/TGNeuralRendering/Native/TGNeuralRendering.nvngx.dll'}, (Get-TgBridgeNative $Name))
-              # The player-supplied model is deliberately outside the package's allow-list.
-              Signed=@(@{Folder='Notices'; Signer=$null; Optional=@(); Files=@(); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
+              # NVIDIA's signed DLL, unmodified, from the public RTX Remix release (docs/DLSS5-RESEARCH.md; the owner, 2026-10-30).
+              Signed=@(@{Folder='Notices'; Signer=$null; Optional=@(); Files=@(); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')},
+                       @{Folder='DLSS'; Signer='NVIDIA'; Optional=@(); Files=@('nvngx_dlssnr.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
               Extension='src/TGNeuralRendering/graphics-bridge-extension.json'
               Obsolete=@(Get-TgStandaloneBridge)}
         }

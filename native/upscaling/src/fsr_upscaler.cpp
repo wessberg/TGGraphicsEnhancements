@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // AMD FSR upscaling through the FSR API (FidelityFX SDK 2.x): AMD's signed loader and upscaler DLLs.
-// The context takes AMD's default upscaler for this GPU, which is how FSR 4 reaches a Radeon RX 9000
+// The context takes AMD's default upscaler for this GPU, which is how FSR 4 reaches a Radeon RX 6000 or newer
 // and FSR 3.1 every other GPU. AMD's rule for versions: an override only ever with an ID its query
 // returned, and the choice either left to that default or made by the player in the options, never by
 // the application. The log names the version AMD chose and the newest one it offers.

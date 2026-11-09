@@ -142,7 +142,7 @@ namespace TGBetterUpscaling
                 name => Capabilities.Label(Parse(name, UpscalerSetting.None)),
                 "The game's Upscaling row, with AMD FSR and Intel XeSS added. They render at the game's upscaling quality and " +
                 "upscale from the game's own depth and motion vectors where the game would run STP. FSR runs AMD's own choice " +
-                "for this GPU: FSR 4 on an AMD Radeon RX 9000, FSR 3.1 elsewhere. XeSS runs on any GPU with Shader Model 6.4 " +
+                "for this GPU: FSR 4 on an AMD Radeon RX 6000 or newer and some Ryzen processors, FSR 3.1 elsewhere. XeSS runs on any GPU with Shader Model 6.4 " +
                 "and fastest on Intel Arc.");
             var orphans = OrphanedEntries();
             ModeRow(UpscalerSetting.DLSS, DlssModeKey, QualityModes.DlssNames, orphans,
