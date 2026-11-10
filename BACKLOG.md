@@ -8,6 +8,7 @@ Updated 2026-11-10. Source preparation is complete; publication is pending. Path
 - Done: PT baseline, pending validation and unavailable worker changes reconciled.
 - Done: scratch trees, logs, prompts and generated images excluded from public source.
 - Done: superseded SDKs/downloads and two regenerable build trees retired privately.
+- Done: README renamed to TGGraphicsEnhancements and shortened to a project overview. Installation, settings and build instructions now have linked guides; the docs received an editorial pass.
 - Passed: archive integrity, 121 source checks, eight tool tests and documentation links; the standalone snapshot passes without local SDKs/private history.
 - Publishing and Git history rewriting are separate. Existing commits retain earlier private material.
 

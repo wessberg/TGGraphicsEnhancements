@@ -6,7 +6,7 @@ Reconciled 2026-11-10 from the final active 2026-10-12 handoff, the 2026-10-30 c
 
 PT is a Mono-only prototype, tabled since 2026-10-30. Maintained release work is version 1.2.4 of FG, BU, NR and the bridge. PT does not compile against Unity 6000.3: `SetupBeforeExecute` now takes `IUnsafeRenderGraphBuilder`, and net472 references conflict with netstandard 2.1 (CS1705). Referencing the game's facade alone lost `ReadOnlySpan`. Compiling against the game's own mscorlib was proposed, not completed. Use `Build.ps1 -Skip TGPathTracing` for maintained mods.
 
-The old installed PT plugin last loaded with Mode Off. That is historical evidence, not proof of today's files or a working trace. Recheck branch/configuration/hashes before future runs.
+The old installed PT plugin last loaded with Mode Off. Recheck the installed branch, configuration and file hashes before future runs.
 
 ## Implemented baseline
 
@@ -22,7 +22,7 @@ The old installed PT plugin last loaded with Mode Off. That is historical eviden
 | Acceleration | Plant micromaps (grass/leaves level 6), material-key GI SER, Mega Geometry trial 7 | Grouped plants unmerged, trial-transition bug |
 | Stability | Stale plant ranges, decal BLAS addresses, emitter identities corrected | Regression suite red, second-load hang unresolved |
 
-Mega Geometry's fresh CMake default is OFF; local cache is ON and managed trial default 7. Requirement: ON where supported. This fresh-build mismatch is a configuration gap, not a decision reversal. Renderer behaviour is unchanged by this cleanup.
+Mega Geometry's fresh CMake default is OFF; local cache is ON and managed trial default 7. Requirement: ON where supported. PT-149 tracks the fresh-build default that needs correcting. Renderer behaviour is unchanged by this cleanup.
 
 ## Final active handoff: 2026-10-12 12:30
 

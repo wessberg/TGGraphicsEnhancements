@@ -1,7 +1,7 @@
 # Path Tracing issue register
 
 Reconciled 2026-11-10. PT remains tabled. States distinguish historical evidence from completed validation.
-Review means the detailed historical discussion has not been independently revalidated; it is not a closure.
+Review marks historical evidence that still needs independent validation. The issue remains open.
 The full original requirement, observations, measurements and next steps remain indexed by the same ID in the
 local archived docs/PT-REQUESTS.md; see [DEVELOPMENT.md](DEVELOPMENT.md). [PT-STATE.md](PT-STATE.md) resolves later supersessions.
 
@@ -16,7 +16,7 @@ The two new entries concern existing configuration/build defects; no renderer be
 | PT-04 | Round things look low-poly (stepped) when traced: cups, jars, cloth folds, shoulders | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-05 | The traced picture looks bloomey outdoors | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-06 | The air above candles boils | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
-| PT-07 | Fog lighting migration | Superseded by PT-37 | Continue PT-37, not the earlier HDRP-only route. |
+| PT-07 | Fog lighting migration | Superseded by PT-37 | Continue the traced-fog work in PT-37. |
 | PT-08 | Rendering performance target | Superseded by PT-99 | Use PT-99. |
 | PT-09 | Boiling on thin bars and elsewhere | Partial | Inspect remaining scenes under NRD after restart. |
 | PT-10 | Terrain blending in the game itself | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
@@ -33,9 +33,9 @@ The two new entries concern existing configuration/build defects; no renderer be
 | PT-21 | Armour and metal reflections | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-22 | Outstanding appearance comparisons | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-23 | Known gaps in the tracer | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
-| PT-24 | Other-mod coverage in harness runs | Coverage recorded | List actual Loading lines and combinations before compatibility claims. |
+| PT-24 | Other-mod coverage in test runner runs | Coverage recorded | List actual Loading lines and combinations before compatibility claims. |
 | PT-25 | Missing scenario saves | Review historical evidence | Use stable named saves; do not overwrite personal saves. |
-| PT-26 | The harness itself | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
+| PT-26 | The test runner itself | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-27 | Black spots that flicker on floors | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-28 | Parallax occlusion mapping with self-shadows for bricks and walls | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-29 | Traced rain | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
@@ -106,7 +106,7 @@ The two new entries concern existing configuration/build defects; no renderer be
 | PT-94 | The sun's light under water is only written where the camera looks (2026-10-09) | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-95 | A guard's helmet has none of its textures: plain chrome where the game's is dark hammered iron | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-96 | One start without memory, and every later start traces without DirectX Raytracing 1.2: a frame of 2 s, and no word (2026-10-09) | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
-| PT-97 | A harness run can be steered by real input: the game in third person, menus opened, outfits saved | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
+| PT-97 | A test runner run can be steered by real input: the game in third person, menus opened, outfits saved | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-98 | Things pop in over time while tracing, and a patch of grass was not there at all when the pictures were taken | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-99 | Playable performance and CPU/GPU accounting | Open; target not met | Rebaseline streamed foreground A/B/A before claiming later savings. |
 | PT-100 | With NRD everything seen through glass is a blur (2026-10-09) | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
@@ -123,7 +123,7 @@ The two new entries concern existing configuration/build defects; no renderer be
 | PT-112 | Remove duplicate HDRP rendering; migrate sky and VFX | Opaque done; sky/VFX open | Capture simulation buffers for off-screen VFX; trace sky/transparents. |
 | PT-113 | 44 unresolved historical GPU-test failures | Open; baseline failures | Reconcile each historical failure against a recovered buildable baseline. |
 | PT-114 | The caustics cost a room 4 ms a frame and make nothing there | Merged; cleanup pending | Remove obsolete caustic path after preserving the merged grid result. |
-| PT-115 | Rough surfaces' highlights from the bounced light's own sample, not a ray of their own | Proposal | Compare traced rough-highlight estimators and their speed/appearance. |
+| PT-115 | Reuse bounced-light samples for rough-surface highlights | Proposal | Compare traced rough-highlight estimators and their speed/appearance. |
 | PT-116 | At most 4 water surfaces are traced; the rest stay HDRP's | Open capacity limit | Support all loaded water surfaces without a fixed four-slot picture limit. |
 | PT-117 | The performance review's findings | Review historical evidence | Reconcile the archived evidence and inspect the relevant scene after compatibility is restored. |
 | PT-118 | Volumetric noise and motion history | Grid merged; coverage gaps | Motion validation, complete cache coverage and secondary-ray candidates. |

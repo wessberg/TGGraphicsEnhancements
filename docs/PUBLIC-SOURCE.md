@@ -18,7 +18,7 @@ game/runtime binaries, build output, scratch trees, generated test images, the p
 Each included file has a SHA-256 entry in SOURCE-MANIFEST.json. Output goes under artifacts/public-source and
 an existing export is never overwritten.
 
-This is a source snapshot, not a tested player package. Rendering behaviour and released packages are unchanged.
+The export contains source files and documentation. Rendering behaviour and released player packages are unchanged.
 Personal attributions were removed from code comments; three mutation tools now reference the current DLSS SDK.
 Dependencies remain separate: [BUILD-DEPENDENCIES.md](BUILD-DEPENDENCIES.md).
 

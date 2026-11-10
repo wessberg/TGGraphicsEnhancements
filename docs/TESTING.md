@@ -1,17 +1,17 @@
 # Local test sequence
 
-This is a test plan, not a list of passed game tests. Use a normal single-player
-session and close the game before rebuilding. Do not test multiple new renderer
+Run these checks in a normal single-player session and close the game before rebuilding.
+Record completed tests and remaining limits in the relevant validation notes. Do not test multiple new renderer
 changes simultaneously or infer success from the in-game FPS counter alone.
 
 ## Build boundary
 
 TG Neural Rendering: [build evidence and pending game checks](DLSS5-IMPLEMENTATION.md), plus the
 [A/B/C and placement tuning run](DLSS5-TUNING.md). Its GPU probe
-actually evaluates the supplied signed model; the existing PT offline test does not. `neural_plan.py` creates NR
-scene plans for the same in-game harness. NR acceptance requires real evaluation counts, neutral/Off restoration,
+evaluates the supplied signed model; the existing PT offline test does not. `neural_plan.py` creates NR
+scene plans for the same in-game test runner. NR acceptance requires real evaluation counts, neutral/Off restoration,
 moving scenes, unchanged HUD, shared FG/RR operation and the test setup's appearance verdict. NR deployment/testing is
-authorized while FoA and Starfield are closed; preserve the parallel PT build and respect the shared harness lock.
+authorized while FoA and Starfield are closed; preserve the parallel PT build and respect the shared test runner lock.
 Menu acceptance for NR-20/21: Video and FoA order is Neural Rendering, Placement, Strength, Local Tone,
 Advanced, then (Advanced On) Model, Passes, Detail, Automatic Mask, and (mask On) Skin Detail. Toggling Advanced
 only changes visibility; values and model history stay. Confirm Apply/Cancel/Restore Defaults also reach
@@ -20,7 +20,7 @@ menu update deployed10-08 10:31; Passes1-4 deployed11:22 and tavern7 takes pass,
 
 Repeated-pass correctness: in a VS x64 shell, run `python tests/neural_multipass_mutations.py
 build/nr/probe/BepInEx build/nr/tgnr_gpu_smoke.exe build/nr/multipass-check` with both games closed and the
-shared harness free. It builds an isolated adapter copy with a test-only raw-output readback export, then
+shared test runner free. It builds an isolated adapter copy with a test-only raw-output readback export, then
 checks 1-4 passes at Strength0.5/1 against separate single-pass evaluations, exact neutral SDR/HDR, alpha,
 Off, invocation counts and history retention. Three broken chains are rejected. The export is not shipped.
 The oracle must feed exact encoded pixels: decode/encode rounding below1e-6 changes this model's output
@@ -36,7 +36,7 @@ input/output, restored scene output, absolute motion, depth and signed motion in
 also reads HDRP's exposure texture. Model RGB is reported in 0–255 levels; scene RGB remains linear HDR.
 The records include resets, tuning, scales and jitter. Missing exposure, mismatched frame IDs, invalid pixels or
 camera movement during the hold invalidate the evidence. These synchronous readbacks are off in normal play and
-invalidate performance measurements; the harness turns them off and restores settings when it ends.
+invalidate performance measurements; the test runner turns them off and restores settings when it ends.
 
 Use `--replay` instead of `--stages` to compare Model A with ordinary inputs, retained inputs and retained inputs
 with one history reset, at both placements in both scenes. After camera movement ends, the diagnostic retains
@@ -119,7 +119,7 @@ dotnet build tests/LightRules.Tests.csproj -c Release
 & ./tests/bin/Release/net472/LightRules.Tests.exe
 ```
 
-Its cloth rules (which of the game's materials are thin cloth: the census of the harness's scenes, PT-49), the same way:
+Its cloth rules (which of the game's materials are thin cloth: the census of the test runner's scenes, PT-49), the same way:
 
 ```powershell
 dotnet build tests/ClothRules.Tests.csproj -c Release
@@ -295,7 +295,7 @@ Start with both mods installed and every setting as the previous session left it
     bundled 310.9.16.0 instead`, or `keeps DLSS ...` when a DLSS mod has put the same or a newer file in
     the game folder, or its own set (DLSS 5: `a DLSS mod's set of DLLs, with DLSS neural rendering
     310.8.0.0 beside it`). DLSS still upscales, and with DLSS 5 on, the frame rate still follows the
-    quality mode (Ultra Performance clearly faster than Quality), as with the game's own DLSS DLL.
+    quality mode (Ultra Performance faster than Quality), as with the game's own DLSS DLL.
 12. Quality modes: `AMD FSR quality modes: Native AA 1.00x, ... Ultra Performance 3.00x` and `Intel XeSS
     upscaling available; quality presets: ...` in the native log, and BepInEx's `quality modes DLSS: ...;
     FSR: ...; XeSS: ...` status. The Video tab shows the slider under STP, Quality Mode under DLSS, FSR
@@ -369,7 +369,7 @@ reaches them, so their radiance is exactly 1. The `furnace` lines give the paths
 four), one and two bounces ending on the cache (1, within 4%), and the reflections of the walls, twice as bright with the
 cache as without (the reflected wall's glow and the light it reflects). The `radiance cache` lines compare one and four
 bounces under the room's ceiling with and without it, and check that a camera cut keeps its light while a new start
-empties it (every case in the harness starts with an empty cache: its first frame runs without it). Checks that sum
+empties it (every case in the test runner starts with an empty cache: its first frame runs without it). Checks that sum
 every pixel an object darkens (the characters' shadows through cut-outs and glass) run without the cache, since a green
 cube with holes traps light in a way that grows with every bounce followed.
 
@@ -447,7 +447,7 @@ the exe keeps a rebuild from failing while a long run goes):
    flicker along silhouettes worse than a few pixels. Fast travel or load a save: the scene rebuilds
    (meshes to register rises, then falls) without errors.
 6. Performance: note the frame rate with Off and On, and the F8 report's GPU time by stage; Bounces 2 and
-   Spatial Samples 8 should cost clearly more bounced light than the defaults (1 and 4).
+   Spatial Samples 8 should cost more bounced light than the defaults (1 and 4).
 7. With TG Frame Generation and TG Better Upscaling on: all three still work; frame generation's
    pipeline line unchanged.
 8. DirectX Raytracing 1.2 (GeForce RTX 40/50 with a current driver): the bridge log's `Direct3D 12:`

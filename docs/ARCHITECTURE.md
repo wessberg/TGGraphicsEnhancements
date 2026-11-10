@@ -1,8 +1,6 @@
-# Native architecture and ownership (v1.1.0)
+# Bridge, frame generation and upscaling architecture
 
-This is original integration code. The Open Shaders implementation was read as an architectural
-precedent, not copied as a Skyrim backend dependency. The frame generation and upscaling backends are
-the vendors' own SDKs: NVIDIA Streamline DLSS-G, the AMD FSR API (FidelityFX SDK 2.4; frame
+The frame generation and upscaling backends call the vendor SDKs directly: NVIDIA Streamline DLSS-G, the AMD FSR API (FidelityFX SDK 2.4; frame
 generation and upscaling) and Intel XeSS (XeSS SDK 3.0; XeSS-FG and XeSS Super Resolution). Primary
 references are listed in SOURCES.md. DLSS-G, FSR and XeSS frame generation (with XeLL) have run in
 FoA, with DLSS upscaling and on HDRP's own inputs, and TG Better Upscaling's FSR and XeSS have upscaled in
@@ -324,9 +322,8 @@ encoded with ST 2084 PQ, then stored in RGB10A2. Output color-space support is
 queried and PQ/BT.2020 is set explicitly. Unsupported source color spaces are
 rejected. Existing SDR/HDR10 color can use direct GPU copies.
 
-This is a real encoding conversion, not an FP16 texture relabelled as HDR10.
-It is nevertheless not lossless or colorimetrically validated on the user's
-monitor; out-of-range/gamut values are clipped and a 10-bit output is used.
+The conversion clips out-of-range and out-of-gamut values to 10-bit output.
+Colour accuracy on the test monitor remains unvalidated.
 
 ## BepInEx and frame identity
 

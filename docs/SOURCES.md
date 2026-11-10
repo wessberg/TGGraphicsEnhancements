@@ -18,9 +18,9 @@ declares camera resources read-write for render-graph lifetime even with no auto
 and [post-processing](https://github.com/Unity-Technologies/Graphics/blob/6000.0/staging/Packages/com.unity.render-pipelines.high-definition/Runtime/RenderPipeline/HDRenderPipeline.PostProcess.cs)
 establish the chosen hook after tone mapping. Model controls beyond Strength remain unvalidated and unexposed.
 
-Reviewed 2026-09-18. The source targets Streamline 2.14.1, rather than assuming
-older DLSS-G headers include Dynamic MFG. These links are documentation/source
-references, not bundled dependencies or evidence of successful game testing.
+The 2026-09-18 integration used Streamline 2.14.1 for Dynamic MFG support. The links below record that
+investigation. Current SDK versions are listed in [BUILD-DEPENDENCIES.md](BUILD-DEPENDENCIES.md);
+game validation is recorded separately in [TESTING.md](TESTING.md).
 
 - NVIDIA Streamline DLSS-G integration guide (required/optional inputs, API and HDR restrictions, resource lifetime, dynamic targets):
   https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/docs/ProgrammingGuideDLSS_G.md
@@ -48,7 +48,7 @@ references, not bundled dependencies or evidence of successful game testing.
   https://docs.unity3d.com/ScriptReference/Rendering.ScriptableRenderContext.ExecuteCommandBuffer.html
 - Unity CommandBuffer.IssuePluginEventAndData:
   https://docs.unity3d.com/ScriptReference/Rendering.CommandBuffer.IssuePluginEventAndData.html
-- The user's linked DLSS 5 addon (documents Mono/BepInEx 5 + D3D11):
+- The DLSS 5 add-on (documents Mono/BepInEx 5 + D3D11):
   https://www.nexusmods.com/taintedgrailthefallofavalon/mods/320
 - FoA Mod Manager (optional, separate configuration UI; not a native-menu API dependency):
   https://www.nexusmods.com/taintedgrailthefallofavalon/mods/167

@@ -2,24 +2,22 @@
 
 This mod adds native frame generation to Tainted Grail: The Fall of Avalon, with NVIDIA DLSS, AMD FSR and Intel XeSS. It also adds the matching low latency modes: NVIDIA Reflex, AMD Anti-Lag 2 and Intel XeLL.
 
-It supports the latest features, like DLSS Dynamic Multi-Frame Generation, and is integrated cleanly into the game's existing graphics settings menus. You would never guess it was a mod if you didn't already know!
+DLSS Dynamic Multi-Frame Generation can adjust the multiplier to a target framerate. Its controls appear in the game's Video menu.
 
 [img]https://i.imgur.com/QqHVCZZ.jpeg[/img]
 
-Again, it's [i]native[/i] frame generation that generates frames based on the game's own motion vectors and depth, like you know from other games with an official implementation. It's not a driver hack, and it's not going through OptiScaler.
-
-And, it is fully compatible with both RenoDX HDR and RenoDX DLSS 5!
+The mod passes the game's own motion vectors and depth directly to NVIDIA's, AMD's or Intel's runtime.
 
 [size=4][b]Part of the game's own graphics settings[/b][/size]
 
 All options live in the game's own [i]Video[/i] settings, right below the upscaler. The menu only offers what your graphics card supports, and rows only show up when they apply to your current choices.
 
 [list]
-[\*][b]Frame Generation:[/b] Off, DLSS, FSR or XeSS, whichever your card supports.[/*]
-[\*][b]Frame Multiplier:[/b] How many frames you see per rendered frame. Up to 6x with DLSS on RTX 50 cards and up to 4x with XeSS on Intel Arc cards. FSR, and XeSS on other cards, add one generated frame per rendered frame (2x). The mod asks each technology what your card supports.[/*]
-[\*][b]Frame Generation Quality:[/b] With DLSS, [i]Quality[/i] is NVIDIA's default. [i]Performance[/i] is NVIDIA's lighter Preset C: a few more frames, a little less exact, most of all around the HUD and at low framerates.[/*]
-[\*][b]Frame Generation Mode:[/b] With DLSS on RTX 50 cards, choose [i]Fixed[/i] for a constant multiplier or [i]Dynamic[/i], which picks the number of generated frames each frame to reach your [i]Target Framerate[/i].[/*]
-[\*][b]Low Latency:[/b] NVIDIA Reflex (with or without Boost), AMD Anti-Lag 2 or Intel XeLL, whichever your card supports. Generating frames adds a little input delay, so low latency can't be turned off while frame generation is on. DLSS always uses Reflex, and XeSS always uses XeLL.[/*]
+[*][b]Frame Generation:[/b] Off, DLSS, FSR or XeSS, whichever your card supports.[/*]
+[*][b]Frame Multiplier:[/b] How many frames you see per rendered frame. Up to 6x with DLSS on RTX 50 cards and up to 4x with XeSS on Intel Arc cards. FSR, and XeSS on other cards, add one generated frame per rendered frame (2x). The mod asks each technology what your card supports.[/*]
+[*][b]Frame Generation Quality:[/b] With DLSS, [i]Quality[/i] is NVIDIA's default. [i]Performance[/i] is NVIDIA's lighter Preset C: a few more frames, a little less exact, most of all around the HUD and at low framerates.[/*]
+[*][b]Frame Generation Mode:[/b] With DLSS on RTX 50 cards, choose [i]Fixed[/i] for a constant multiplier or [i]Dynamic[/i], which picks the number of generated frames each frame to reach your [i]Target Framerate[/i].[/*]
+[*][b]Low Latency:[/b] NVIDIA Reflex (with or without Boost), AMD Anti-Lag 2 or Intel XeLL, whichever your card supports. DLSS requires Reflex and XeSS requires XeLL. FSR also allows Off.[/*]
 [/list]
 
 If you use [i]FoA Mod Manager[/i], it shows the same options with the same choices, and a change in one place shows up in the other.
@@ -33,7 +31,7 @@ If you'd like FSR or XeSS upscaling too, my [url=https://www.nexusmods.com/taint
 [size=4][b]Compatibility[/b][/size]
 
 [list]
-[*]Fully compatible with [b]RenoDX HDR[/b] and the [b]RenoDX DLSS 5[/b] addon.[/*]
+[*]Works with [b]RenoDX HDR[/b] and the [b]RenoDX DLSS 5[/b] add-on.[/*]
 [*]Works with ReShade.[/*]
 [*]Works with FoA Mod Manager (see above). Avalon Mod Manager doesn't list the mod, since its options are in the Video settings.[/*]
 [*]OptiScaler isn't supported (see below).[/*]
@@ -53,10 +51,7 @@ If you used OptiScaler before, remove it completely from your game folder before
 
 [size=4][b]Installation[/b][/size]
 
-This mod supports both the standard version of the game, as well as the special 'modding' version built for the special 'mono' branch of the game, that you can opt into via Steam.
-
-Make sure to download the version of the mod that matches your game.
-As a rule of thumb, if you just installed the game and aren't sure, you're going to want to use the [i]BepInEx 6 (Normal/IL2CPP branch)[/i] version, as that matches the default game version.
+Download the archive for your game version. The normal version uses BepInEx 6. Use the Mono archive if you switched to the game's Mono modding branch in Steam; that version uses BepInEx 5.
 
 You can use this mod on its own. If you also use my [url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/UPSCALING-ID]FSR and XeSS Upscaling[/url] mod, install both the same way: they share the part they have in common, and neither needs anything else. Vortex won't report a conflict between them.
 
@@ -65,26 +60,26 @@ You can use this mod on its own. If you also use my [url=https://www.nexusmods.c
 [size=2][b]Requirements[/b][/size]
 
 [list]
-[*]First, install [url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/50]BepInEx 5.4 (Mono/modding branch)[/url] if you haven't already. To install it, you simply need to extract the contents of the file inside your game directory.[/*]
+[*]First, install [url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/50]BepInEx 5.4 (Mono/modding branch)[/url] if you haven't already. Extract it into your game folder.[/*]
 [*]Download the [i]TGFrameGeneration - Mono branch[/i] version of this mod from the 'Files' page, and extract the .zip archive in the root of your game directory.[/*]
 [/list]
 
-[size=3][b]Installation for the standard game version[/b][/size]
+[size=3][b]Installation for the normal game version[/b][/size]
 
 [size=2][b]Requirements[/b][/size]
 
 [list]
-[*]First, install [url=https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755%2B3fab71a.zip]BepInEx 6 (Normal/IL2CPP branch)[/url] if you haven't already. To install it, you simply need to extract the contents of the file inside your game directory.[/*]
+[*]First, install [url=https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755%2B3fab71a.zip]BepInEx 6 (normal version)[/url] if you haven't already. Extract it into your game folder.[/*]
 [*]Download the [i]TGFrameGeneration[/i] version of this mod from the 'Files' page, and extract the .zip archive in the root of your game directory.[/*]
 [/list]
 
-[quote][b]NOTE[/b]: BepInEx 6 (running IL2CPP) is still experimental, and the latest build that is available on nexusmods can crash during story moments or scene transitions. However, there are more recent, more stable builds that I recommend, which is why I've linked to the most recent build as a requirement here instead. I haven't experienced any crashes with that build yet. You can always find the most recent nightly build [url=https://builds.bepinex.dev/projects/bepinex_be/755/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.755%2B3fab71a.zip]here[/url]. Always pick the [i]BepInEx Unity (IL2CPP) for Windows (x64) games[/i] build for whatever version you select.[/quote]
+[quote]I linked the BepInEx 6 build I've used without crashes. For the normal game version, choose [i]BepInEx Unity (IL2CPP) for Windows (x64) games[/i].[/quote]
 
 [quote]Note: If you install via Vortex, make sure the mod type is set to 'Engine Injector' to make sure it is applied from the root of the game directory.[/quote]
 
 You don't need to download any DLL files yourself. The NVIDIA, AMD and Intel files the mod needs are included in the download, together with their licenses.
 
-For both versions of the mod, this is how the directory should end up looking:
+The installed folders should look like this:
 
 [code]Fall of Avalon.exe
 ...
@@ -127,16 +122,16 @@ Frame generation pauses in menus and while the cursor is visible. You can press 
 
 [size=4][b]Recommended mods[/b][/size]
 
-I maintain other graphics enhancing mods that work nicely together with this one:
+I also maintain these graphics mods:
 
 [list]
 [*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/UPSCALING-ID]FSR and XeSS Upscaling[/url]: [i]Adds AMD FSR and Intel XeSS upscaling to the game's own Upscaling setting, next to STP and DLSS.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/134]Global Illumination[/url]: [i]Fully customizable and hot-reloadable mod that injects HDRP Screen-Space Global Illumination into the game.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/133]All Lights Cast Shadows[/url]: [i]Fully customizable and hot-reloadable mod that allows you to make every light in the game cast real-time shadows! The mod comes with a smart budget system that prioritizes nearby lights and lets you define a max amount of lights to upgrade to keep performance in check.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/135]Contact Shadows[/url]: [i]Fully customizable and hot-reloadable mod that adds Contact Shadows to the game, which is a screen-space effect that creates small, detailed shadows at the contact points between objects, greatly improving visual depth and grounding. Includes a smart budget system that prioritizes nearby lights and lets you control how many are active at once.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/138]Animation Framerate Unlock[/url]: [i]A mod that most importantly fixes the game's choppy, low-FPS-looking horse animations by moving the affected animators off the 50hz physics tick and onto per rendered frame updates instead so they're linked to the framerate.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/139]Conversation Lighting Overhaul[/url]: [i]A mod that enhances NPC conversations with depth of field, zoom, and a shadow-casting portrait spotlight, giving speakers a more cinematic look.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/136]Film Grain[/url]: [i]Fully customizable and hot-reloadable mod that injects HDRP Film Grain post-processing into the game, adding a cinematic grain overlay that gives the image a filmic, textured look complementing the game's dark atmosphere.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/137]Chromatic Aberration[/url]: [i]Fully customizable and hot-reloadable mod that gives you control over Chromatic Aberration in the game. Adds subtle color fringing toward the edges of the screen, simulating the look of an imperfect camera lens.[/i][/*]
-[\*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/145]Better Volumetric Fog[/url]: [i]A mod that fixes the game’s grainy, blocky, low-resolution volumetric fog by increasing the internal volumetric VBuffer quality. Preserves the vanilla look and intensity, while making them much cleaner and higher resolution. Includes simple quality presets and a configurable toggle hotkey. Supports all game versions.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/134]Global Illumination[/url]: [i]Adds HDRP screen-space global illumination. Settings reload while the game runs.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/133]All Lights Cast Shadows[/url]: [i]Makes lights cast real-time shadows. You can limit how many lights are upgraded, with nearby lights taking priority.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/135]Contact Shadows[/url]: [i]Adds screen-space shadows where objects meet. Nearby lights take priority, and you can limit how many are active.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/138]Animation Framerate Unlock[/url]: [i]Updates affected animations with each rendered frame, removing the 50 Hz limit that makes horse movement look choppy.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/139]Conversation Lighting Overhaul[/url]: [i]Adds depth of field, zoom and a shadow-casting portrait light to NPC conversations.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/136]Film Grain[/url]: [i]Adds adjustable HDRP film grain, with settings that reload while the game runs.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/137]Chromatic Aberration[/url]: [i]Controls colour fringing near the edges of the screen. Settings reload while the game runs.[/i][/*]
+[*][url=https://www.nexusmods.com/taintedgrailthefallofavalon/mods/145]Better Volumetric Fog[/url]: [i]A mod that fixes the game’s grainy, blocky, low-resolution volumetric fog by increasing the internal volumetric VBuffer quality. Preserves the vanilla look and intensity, while making them much cleaner and higher resolution. Includes simple quality presets and a configurable toggle hotkey. Supports all game versions.[/i][/*]
 [/list]

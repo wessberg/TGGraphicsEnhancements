@@ -11,9 +11,9 @@ Skin/solid subsurface transport uses traced walks with the authored diffusion pr
 Burley filtering. Human skin is authored Thin; do not assume all scattering profiles are thick solids.
 Shading normals go to NRD; shadow origins and geometric normals have separate jobs.
 
-Hair, brows and lashes are own-camera surfaces with remapped stochastic coverage and motion, not an overlay.
+Camera rays hit hair, brows and lashes directly, using remapped stochastic coverage and their own motion.
 Every opacity reader may use different mip/anisotropic footprints; micromap coverage must conservatively bound
-them all. Eye/cornea shaders need their own texture/refraction model; an opaque sclera texture is not the whole eye.
+them all. Eye and cornea shaders need separate texture and refraction handling, including the layers over the sclera.
 
 Original textures/material programs are the main route. Atlas readers, fallback leaf/cloth terms, terrain blending
 and original-resolution reflection fidelity remain open. Do not infer a complete material migration from a matching

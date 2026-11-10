@@ -12,7 +12,7 @@ transmission; remaining fixed leaf 0.5 / cloth 0.3 terms are fidelity gaps. Do n
 
 Plant opacity micromaps classify only proven coverage. Grass/leaves use level 6; covered pieces are opaque to
 ordinary rays while separate light-ray traversal retains stochastic transmission. Cloth/hair can require unknown
-coverage. Top-mip alpha is not proof for anisotropic or changing-mip readers.
+coverage. Coverage bounds must hold across every mip and anisotropic reader.
 
 Keep stable plant identity across frame-buffer rebuilds. PT-125 fixed retained ranges indexing another frame's
 plant data and survived 40 walks. PT-148 still affects retained planning when leaving Mega Geometry trials 4/5/6.

@@ -4270,7 +4270,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertNotIn("TGFG-PLAYER-INSTALL", helpers + self.text("Package.ps1"))
 
     def test_testing_limits_disclosed(self):
-        readme = " ".join(self.text("README.md").replace("**", "").split())
+        # Build details live in the linked guide; the README keeps the project overview and test limits.
+        readme = " ".join((self.text("README.md") + "\n" + self.text("docs/BUILDING.md")).replace("**", "").split())
         for token in ["not yet been confirmed in game", "IL2CPP build", "HDRP's own depth and motion vectors", "TG Graphics Bridge",
                       "TG Better Upscaling", "TG Frame Generation"]:
             self.assertIn(token, readme)

@@ -15,5 +15,4 @@ Model binaries, proprietary headers and game assemblies are not included in publ
 do not replace vendor terms. [LICENSES/THIRD_PARTY.md](../LICENSES/THIRD_PARTY.md) retains the existing notices,
 release-policy reasoning and outstanding licensing correspondence status; this cleanup makes no new clearance claim.
 
-A runtime found in another product is not proof that it loaded/evaluated here, nor proof of support on untested
-hardware. Keep signed/community loading, device support, evaluation and accepted appearance separate.
+Verify signed/community loading, device support, evaluation and appearance separately on each tested setup.

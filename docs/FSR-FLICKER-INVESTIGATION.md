@@ -28,10 +28,9 @@ by `HudlessUi`'s flag 1, and then compared against the presented frame at every 
 at 2-6% differing sample points in gameplay. The depth and motion vectors come from the same HDRP
 render targets, so DLSS-G and XeSS-FG were reprojecting the presented frame from mirrored vectors.
 
-Why that reads as a wobble rather than a broken image: on an RTX 5080 DLSS-G blends its own optical
-flow with the supplied vectors, so wrong game vectors degrade the result instead of destroying it,
-and a horizontal pan produces a roughly uniform horizontal vector field whose mirrored rows are
-close to correct. Local and vertical motion, and near geometry, are where it shows. XeSS-FG has less
+On an RTX 5080, DLSS-G blends its own optical flow with the supplied vectors, which partly masks the
+input error. A horizontal pan produces a roughly uniform horizontal vector field whose mirrored rows are
+close to correct. Local and vertical motion, and near geometry, expose the error. XeSS-FG has less
 to fall back on, which matches the reporter putting FSR ahead of it too.
 
 **Change:** depth and motion copies are flipped for all three backends, the vertical motion scale and
@@ -82,8 +81,7 @@ Mono and the hand-history/rendering fixes are unchanged.
 The managed IL2CPP build and stand-in Harmony regression tests pass, covering owned
 and unowned rows, native-pointer aliases, changing/nested conditions, exception isolation,
 GC retention, clearing and unpatch/reinstall. These tests do not exercise the native
-IL2CPP detour. After deployment, the reporter replied "Works great! Zip it!" to the
-requested upscaling on, Pause, Options retest. This confirms the reported menu failure
+IL2CPP detour. After deployment, the reporter confirmed the upscaling on, Pause, Options retest passed. This confirms the reported menu failure
 is resolved in that tested setup, without establishing the original corruption cause.
 
 All 33 source/integration checks pass. Candidate deployed and IL2CPP installed file,
@@ -123,8 +121,7 @@ The IL2CPP package is deployed, with installed file/version/hash verification pa
 
 ## Visual success and runtime confirmation (2026-09-20)
 
-Reporter: "You nailed it! It worked with DLSS 5 and Reshade too! And with and without
-upscaling. Checked the other upscalers too. Everything's perfect!"
+The reporter confirmed the fix with DLSS 5 and ReShade, with upscaling on and off, and with the other tested upscalers.
 
 The successful logs identify the previously missed pass conclusively:
 `Observed RenoDX final-output draw: kind=1 count=6 instances=1 contextType=0 capturePending=0`.
@@ -362,11 +359,11 @@ The guard logs installation and duplicate copies prevented (first occurrence, th
 once every ten seconds). It is not enabled for the uninspected IL2CPP implementation.
 This necessarily preserves history for all characters sharing the manager, not just hands.
 
-The production Harmony hook passes a standalone net472 regression harness using the installed
+The production Harmony hook passes a standalone net472 regression test runner using the installed
 Harmony runtime and a stand-in skinning manager: all three backends, two cameras, two managers,
 frame gaps, Off/on, copy failure/retry, unpatch and reinstall. This does not validate Unity's
 GPU scheduling. Mono build has zero warnings/errors; 33 source/integration checks pass.
-Native code is unchanged. See `docs/TESTING.md` for the harness command.
+Native code is unchanged. See `docs/TESTING.md` for the test runner command.
 Installed into Mono; installed file/version/hash checks passed. Backup:
 `BepInEx/TGFrameGeneration/Backups/20260920-135845-760-a80b20f9-Mono`.
 Persistent capture configuration remains F6 / debug flags 2.
@@ -635,7 +632,7 @@ All deployed, none committed. `git diff` shows the full set.
    presented frame and the previously presented one. One 16-byte readback through a three-deep
    staging ring with `D3D11_MAP_FLAG_DO_NOT_WAIT`. Thirty consecutive good results verify the
    capture, thirty bad ones withhold it, and still frames are skipped.
-3. **FSR max render size** now follows the resolution the game actually renders at. The context is
+3. **FSR max render size** now follows the resolution the game renders at. The context is
    rebuilt on the first frame with inputs and whenever the render resolution changes.
 4. **Diagnostics.** An `AMD FSR inputs:` log line; an advanced setting `FSR debug flags` wired to
    `TGFG_SetDebugFlags` (1 tear lines, 2 reset indicators, 4 debug view, 8 pacing lines, 16 FSR's own
@@ -709,7 +706,7 @@ cheapest next action.
 
 - The swapchain is FP16 with ReShade disabled, so the game is in HDR, yet the
   `HDROutputSettings.main.active` check in `HudlessUi` returned false, since the capture turned on.
-  Establish what Unity actually reports. If Unity's HDR output is active, HDRP renders the UI into a
+  Check what Unity reports. If Unity's HDR output is active, HDRP renders the UI into a
   separate offscreen buffer with alpha (`RenderTransparentUI`, composited in `BlitFinalCameraTexture`).
   That buffer would be the ideal UI texture for all three SDKs, better than a HUD-less image alone,
   and the `rendersUIOverlay` override may be suppressing that path.

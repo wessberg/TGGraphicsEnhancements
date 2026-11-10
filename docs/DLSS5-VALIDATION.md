@@ -23,8 +23,7 @@ scRGB, with no invalid/fallback pixels; neutral closely matched Off.
 - Full-strength temporal/movement instability remains; neutral/range fixes do not close it.
 - Community runtimes on RTX 20/30/40-series remain unverified.
 - AMD/Intel-specific FG/upscaling/latency capabilities require actual runtime/hardware evidence.
-- Some historical reports describe narrower earlier states. Use the dated baseline and archived run evidence,
-  not a single old success sentence, when assessing a feature.
+- Use the dated test matrix and archived runs to assess coverage; earlier reports describe narrower states.
 - Current source preparation is CPU/document validation only. No new game/hardware claim is made.
 
 See [DLSS5-TUNING.md](DLSS5-TUNING.md) for measured hypotheses and [DLSS5-FEEDBACK.md](DLSS5-FEEDBACK.md) for IDs.

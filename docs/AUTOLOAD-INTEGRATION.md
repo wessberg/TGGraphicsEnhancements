@@ -4,9 +4,8 @@ TG Graphics Bridge starts with the game, and with it the native side of TG Frame
 TG Better Upscaling. There is no launcher, no replaced `dxgi.dll`/`winhttp.dll`/`version.dll` and no Steam
 launch option.
 
-The bridge is not a download of its own: each mod bundles all of it under the mod's own folders. A
-player installs one mod, or both, and Vortex never sees the two deploy the same file. At run time one
-copy starts, as below.
+Each mod bundles the bridge in its own folders, so Vortex can install the mods together without file
+conflicts. At runtime, one bridge copy starts for the process.
 
 ## Assemblies
 
@@ -20,8 +19,8 @@ enough to see the game create its swapchain, registers the native DLL of every m
 bridge, and calls the bridge's bootstrap synchronously, before Unity starts the game. It has no Unity
 or gameplay reference.
 
-Before any extension loads, the bridge hooks the swapchain methods every DXGI factory shares, on a
-factory of its own, rather than waiting for the game to create one. Two reasons:
+Before loading extensions, the bridge creates a DXGI factory and hooks the shared swapchain methods.
+The hooks must be installed early for two reasons:
 
 - A factory created before the hooks, or one another hook forwards past them, is never seen. ReShade
   (installed as `dxgi.dll`) hooks `dxgi.dll`'s exports the moment it loads and forwards the game's

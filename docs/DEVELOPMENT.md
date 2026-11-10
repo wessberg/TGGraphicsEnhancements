@@ -35,6 +35,5 @@ caches do not define current dependencies. The original 1,185-file history archi
 
 ## Public source
 
-See [PUBLIC-SOURCE.md](PUBLIC-SOURCE.md) for export and Git-history limitations. A public clone contains
-concise engineering notes, not the archive. Keep essential constraints in public notes so new contributors
+See [PUBLIC-SOURCE.md](PUBLIC-SOURCE.md) for export and Git-history limitations. A public clone contains the concise engineering notes; the archive stays local. Keep essential constraints in public notes so new contributors
 can work without private history. New issue entries need a symptom/requirement, evidence, status and next action.

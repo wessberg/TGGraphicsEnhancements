@@ -4,7 +4,7 @@ This mod adds NVIDIA DLSS 5 Neural Rendering to Tainted Grail: The Fall of Avalo
 
 It runs on the game's own scene colour, depth and motion data and is placed before the game's camera effects and interface. It can run after DLSS upscaling for the best image, or before upscaling for lower GPU cost. The setting is part of the game's own Video menu, so it works like a built-in graphics option.
 
-This is a native integration. It does not use OptiScaler, a driver override or a second graphics device.
+It calls NVIDIA's runtime directly on the shared TG Graphics Bridge device.
 
 [size=4][b]Runtime DLL and RTX support[/b][/size]
 
@@ -21,7 +21,7 @@ To use another DLL, close the game and copy it over the included one. Do this ag
 
 Restart the game. The mod automatically selects the right loading path. There is no extra compatibility setting, and compatible community patches can be swapped in without updating the mod. A patch that changes the runtime's interface may still need a mod update.
 
-The community DLL passes standalone checks on my RTX 5080 for rendering, SDR/HDR, Ray Reconstruction compatibility and multiple NR passes. Its in-game check is still pending. I have not yet tested it on RTX 2000, 3000 or 4000 hardware, so support for those cards is not confirmed. Passing on a 5080 cannot establish that it works on an older card.
+The community DLL passes standalone checks on my RTX 5080 for rendering, SDR/HDR, Ray Reconstruction compatibility and multiple NR passes. Its in-game check is still pending. I have not yet tested it on RTX 2000, 3000 or 4000 hardware, so support for those cards is not confirmed. Those older cards still need their own hardware tests.
 
 The [url=https://discord.com/invite/F6AUTeWJHM]RenoDX Discord[/url] is a community source for DLSS 5 files. It is separate from NVIDIA's official distribution. Follow the terms that come with your copy; the mod does not download the DLL for you. [code]nvngx_dlss.dll[/code] and [code]nvngx_dlssg.dll[/code] are different runtimes and cannot be renamed to replace it.
 
@@ -37,7 +37,7 @@ Open [i]Options > Video[/i]. The rows appear in the game's own Video settings an
 [*][b]Local Tone (under Advanced):[/b] Controls the model's lighting and colour changes. Lower values keep the game's original grading closer while retaining detail work.[/*]
 [/list]
 
-The default profile is NVIDIA's [i]Default[/i] style with one pass, full Strength, full Local Tone, full Detail, full Skin Detail and Automatic Mask Off. The advanced Style choices use NVIDIA's names: Default, A, B and C. Passes run Neural Rendering again on the previous result. Each pass uses the same controls, so extra passes cost more GPU time and memory and can exaggerate colour changes or artifacts. Strength is applied within each pass. It is not a final opacity slider.
+The default profile is NVIDIA's [i]Default[/i] style with one pass, full Strength, full Local Tone, full Detail, full Skin Detail and Automatic Mask Off. The advanced Style choices use NVIDIA's names: Default, A, B and C. Passes run Neural Rendering again on the previous result. Each pass uses the same controls, so extra passes cost more GPU time and memory and can exaggerate colour changes or artifacts. Strength is applied within each model pass.
 
 Ray Reconstruction requires the Quality placement, so the Performance choice is disabled while that denoiser needs to run after upscaling. Changing to FSR, XeSS, STP or None disables Neural Rendering until DLSS is selected again. Your saved choices are kept.
 

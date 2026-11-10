@@ -9,8 +9,7 @@ caller-name requirement. No driver/model/Windows trust modification is applied. 
 their trust policy. Acceptance checks exports, x64/API and runtime support; hashes are diagnostics, not allowlists.
 
 310.9.16 and310.8 are known signed profiles. Current model requests lightweight preset B, independently of
-appearance selection. No control mask is supplied. The model's guide/exposure/colour-domain assumptions remain
-important; a successful evaluation alone does not establish image quality.
+appearance selection. No control mask is supplied. Check the model's geometry guides, exposure and colour domain alongside evaluation success and image quality.
 
 Unity 6000.3 reflected CustomPass invocation is handled in Shared/CustomPassRecorder.cs for both branches.
 Retained native child-row arrays prevent the normal-version Options lifetime crash. Managed/native build,

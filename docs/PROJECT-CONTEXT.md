@@ -2,6 +2,12 @@
 
 Read the relevant section and DEAD ENDS before changing rendering code. Current work is in [BACKLOG.md](../BACKLOG.md), PT boundaries in [PT-STATE.md](PT-STATE.md), released-mod lessons in [PROJECT-CONTEXT-MODS.md](PROJECT-CONTEXT-MODS.md). Complete earlier evidence remains in the [local archive](DEVELOPMENT.md).
 
+## Documentation
+
+The README names the project TGGraphicsEnhancements and gives a short overview of all four mods. Status covers
+the whole project. Keep detailed setup, settings and build steps in INSTALLING.md, SETTINGS.md and BUILDING.md.
+Preserve commands, measurements, issue IDs and validation limits when editing prose.
+
 ## Engine and frame
 
 - Unity 6000.3.21f1 since game 1.31, previously 6000.0.64f1; some executable/log metadata still names 6000.0.41. HDRP 17, D3D11. Shipped DXR shader variants are stripped. The bridge owns one shared D3D12 device.
@@ -31,7 +37,7 @@ Read the relevant section and DEAD ENDS before changing rendering code. Current 
 
 - All extensions share device/queue ownership through the bridge; fences have one signalling queue each. Raw pointers/COM/plain values cross the ABI, not C++ runtime objects.
 - Static MSVC runtime avoids dependence on missing/older game MSVC DLLs. Use the matching SDK static NGX library.
-- Runtime capabilities determine available choices. Video/Mod Manager rows match exactly; grey incompatible game settings with reasons instead of adding player chores.
+- Runtime capabilities determine available choices. Video and Mod Manager rows match exactly. Apply documented safe fixes to game settings, then grey those settings with an explanation.
 - Build.Local.props is local and ignored. Verify current game branch/assemblies before building/deploying. Vortex can restore older binaries; replace symlinks with real files, then hash build/stage/game.
 - Native fixtures load artifacts/Native, updated only by cmake --install. Package.ps1 packages existing builds and requires the build manifest. Packaging overwrites release zips.
 - Generated build caches are disposable, not dependency requirements. Retire stale caches with superseded SDKs; check current source and build scripts for actual consumers.
@@ -40,14 +46,14 @@ Read the relevant section and DEAD ENDS before changing rendering code. Current 
 
 ## PT integration
 
-- ABI 0x00012700 in the last active baseline. Validate managed/native sizes from tgpt_api.h and NativeTracer.Validate; old size/bit tables are not allocation authority.
+- The last active baseline used ABI 0x00012700. Validate managed/native sizes against tgpt_api.h and NativeTracer.Validate. Read current headers and writers before allocating fields or flag bits.
 - Prepare uses primary_all for own camera hits. The old GBUFFER_SURFACES route and atlas/surface-offset readers remain PT-60 cleanup.
 - GamePasses empties opaque draw lists and suppresses duplicate decals/shading. Traced depth/motion also populate the HDRP depth pyramid, read by fog/transparency. Sky/VFX remain incomplete.
 - Same-frame trace/composite with parity buffers and async compute; no merged one-frame-late path.
 - SM6.6 inline rays; DXR1.2/SM6.9 via Agility/DXC for SER/micromaps. SER GI regrouping is keyed by first-hit material after minimizing live state; reuse is separate. Plain twins are measuring references.
 - Plant micromaps settle only proven coverage. Grass/leaves level 6; covered foliage is opaque except separate light-ray transmission. Character micromaps were removed after clean off/on/off tests found no gain.
 - Retained records must name stable identities, never positions in rebuilt frame buffers or moved BLAS allocations. PT-125/134/135 corrected plant ranges, mesh-decal addresses and emitter indices.
-- Light candidates include near/far strata and a lamp search tree; NO_RANGE is a sampling boundary, not a light cutoff. Original emissive surfaces must not double-count kept physical lights.
+- Light candidates include near/far strata and a lamp search tree. NO_RANGE limits candidate sampling; emitted light continues beyond that boundary. Avoid counting an emissive surface and its associated light twice.
 - DI history 4, Basic spatial reuse, permutation each frame, final visibility traced; spatial feedback off. GI history 8/max age30, reprojection search/Jacobian/NaN checks; fallback sampling off. Departures remain vendor-audit work.
 - NRD receives all demodulated diffuse/specular, shading normals, real distances, 2.5D motion and strand IDs. RELAX/confidence default. Static flat mirrors use reflected virtual surface guides. Moving/curved/nested cases, glass/water and SH recovery remain gaps.
 - RR runs through BU on the shared D3D12 device, Default/F policy; hair/reflection-distance proposals need game comparisons. RRG uses runtime query, sqrt albedos, oct normals and 2.5D motion; AMD validation pending.
@@ -57,9 +63,9 @@ Read the relevant section and DEAD ENDS before changing rendering code. Current 
 - Fog: /16 screen grid, 96 slices, full ray distance; exact per-ray extinction, cached light interpolated between centres, per-pixel near-lamp residual. Fog follows surface denoising; NRD does not denoise it. Secondary-ray candidates/cache coverage remain open.
 - Traced gain uses 4x4 block means to avoid noise depressing the median. Compare denoisers at equal gain. Brighten=min((-3.06-p50)*DarkAdaptation,0.5-p98), bounded by authored EV/darkest EV7 and 12 stops; exposure -3..3; ease up1.5/down3 EV/s.
 - FP16 storage reference is eased from sun/lamps. PT-136 bounds outlier contribution to storage scale without cutting physical emitted light. Read reference/gain logs before diagnosing dark ends.
-- Radiance cache: own world hash, 2^20 slots, buckets8, incoming E/pi, distance-scaled 0.1m cells, dominant-normal sides. Remaining limits: 512 samples/cell/frame, cap2000/channel, EMA>=1/16, expiry240. These are audit gaps, not accepted picture-changing budgets.
+- The radiance cache uses a world hash with 2^20 slots, eight slots per bucket and distance-scaled 0.1 m cells keyed by dominant normal. It stores incoming E/pi. Remaining limits are 512 samples per cell per frame, a cap of 2,000 per channel, EMA >= 1/16 and expiry after 240 frames. Track these limits in the correctness audit.
 - Capacity gaps include 256 skinned renderers, 8 materials/skinned mesh, 256 cloth, 4096 wind records, four water slots and atlas limits. Check source before changing them.
-- Mega Geometry is required on supported hardware; managed default7/local cacheON but fresh CMakeOFF is inconsistent. PT-148 trial-transition bug and missing grouped-plant work are documented in PT-STATE.
+- Mega Geometry is required on supported hardware. The managed default is 7 and the local build cache has it enabled; fresh CMake configuration defaults to OFF (PT-149). PT-STATE records the trial-transition bug (PT-148) and missing grouped-plant work.
 
 ## DEAD ENDS
 
@@ -68,13 +74,13 @@ Do not retry without new evidence and a written reason.
 - HDRP OpaqueObjects=false causes repeated ECS uploads (~800 ms frames). Empty opaque lists instead. D3D11 differently sized MRT/depth attachments silently lose writes; populate the depth pyramid separately.
 - HDRP's built-in ray tracing cannot run stripped variants. GI/hybrid mode, excluding hair/eyes, post-denoiser hair layers and borrowed screen reflections violate renderer requirements.
 - Fog Add<Fog>(true) resets its state. Scaling volumetricDimmer sticks through LightWithOverride. Undimmed sky ambient reproduces HDRP's shortcut, not physical fog.
-- Character micromaps: tavern 36.20/36.25/36.20 ms, town67.81/68.17/67.40, no gain. Hair top-mip opacity does not bound anisotropic/mip readers.
-- Higher DI history 20 boiled thin geometry. Visibility reuse widened lamp shadow edge0.8 ->14px (Basic), or4.4px with correction, for7-13% noise gain. Spatial feedback added6-10% error. Keep defaults unless new game evidence.
+- Character micromaps showed no gain: tavern 36.20/36.25/36.20 ms, town 67.81/68.17/67.40. Hair opacity bounds must cover every mip and anisotropic reader.
+- DI history 20 boiled thin geometry. Visibility reuse widened a lamp's shadow edge from 0.8 to 14 px (Basic), or 4.4 px with correction, for a 7-13% noise reduction. Spatial feedback added 6-10% error. Keep defaults until new game evidence supports a change.
 - Rejected NRD bounced-light-only setup used wrong normals and distance 1. Correct vendor inputs take all light. Do not revive that conclusion. Denoised references rewarded blur; use raw convergence references.
 - Raw 3x3 variance mistakes shadow edges for noise. Uniform light selection produced fireflies. HDRP range cutoffs darkened rooms; a 10 cm light-radius floor widened penumbrae.
 - Shadow-only/cluster exclusions removed roofs. Name-only light blacklists removed real candle light. Un-zeroing baked indirect filled shadows and made skin glow.
-- Caustic shadow-ray cut: 4.20/4.30/4.05 ms off/on/off, no gain. Water split/regrouping runs had contention: no clean speed conclusion. Mega Geometry is not a rejected feature.
-- The reported 3 FPS camp camera was inside a hill; it was not proof of underwater cost. Ground-ray changes did not cure it.
+- The caustic shadow-ray cut measured 4.20/4.30/4.05 ms off/on/off, with no gain. Water split/regrouping runs had GPU contention and need a clean comparison.
+- The reported 3 FPS camp run placed the camera inside a hill. Ground-ray changes left its cost unchanged; use a grounded camera for water measurements.
 - D3D11 NGX RR crashed; RR uses shared D3D12. Do not change QualitySettings.maxQueuedFrames mid-run: restoring it hung the game.
 
 ## Measurement traps
@@ -85,7 +91,7 @@ Do not retry without new evidence and a written reason.
 - Time combines game D3D11 work, traced D3D12 work and waits. Never subtract an old trace from a new frame. Foreground/stream conditions and scene-load order must match.
 - Town lamp state depends on previously loaded scenes (PT-147). Running steps advance game time; compare light in frozen steps. Moving frames need disableMotionBlur:true.
 - Harness step pictures are at walk start; walk-end.png is the endpoint. @recipe applies to its one scene. Exit 1 with flagged metrics can still mean completed capture.
-- Whole-test failures predate the latest PT changes. Offline fixtures do not run RR; a no-op/missing path is not a passing result. Mutation checks must actually reach their target.
+- Whole-test failures predate the latest PT changes. Offline fixtures do not run RR. Confirm the target path ran before interpreting a passing result; mutation checks must reach the code they break.
 - JsonUtility silently loses nested request classes/arrays; use game Json.NET. Get-Counter failure means unknown, not idle. CopyFromScreen can capture a DPI-scaled corner.
 - Editing embedded HLSL needs CMake reconfigure. Restoring mutant files with old timestamps can retain mutated objects. Preserve line endings.
 - Check BepInEx Loading lines, not folders. Reflection-only API failures evade compile checks. Do not reuse expired launch requests or infer game appearance from successful native evaluation.

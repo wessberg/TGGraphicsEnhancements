@@ -28,8 +28,7 @@ DLSS 310.9.1, Streamline 2.14.1 source/runtime and FidelityFX 2.3.0 were moved o
 the ignored `.development/retired/2026-11-10/` archive. Two obsolete build trees (`build/nr`, `build/native-nrd`)
 and five extracted SDK ZIP downloads were moved with them. The current SDKs and `build/native` remain in place.
 
-Generated caches are disposable output, not dependency requirements. Their references do not justify keeping
-an obsolete SDK. Three NR mutation scripts still named the old DLSS SDK; they now use 310.9.16. The inventory
+Retire stale generated caches with superseded SDKs. Check current source and build scripts for actual consumers. Three NR mutation scripts still named the old DLSS SDK; they now use 310.9.16. The inventory
 reports cache references as information only. No rendering build or GPU mutation run was performed.
 
 RTXDI/NRD/NVAPI/DXC/Agility are not obsolete merely because managed PT is tabled: the native CMake graph

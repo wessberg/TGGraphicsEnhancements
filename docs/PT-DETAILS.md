@@ -1,6 +1,6 @@
 # Path Tracing integration reference
 
-This is the concise companion to [PROJECT-CONTEXT.md](PROJECT-CONTEXT.md) and [PT-STATE.md](PT-STATE.md).
+Source map and supporting evidence for [PROJECT-CONTEXT.md](PROJECT-CONTEXT.md) and [PT-STATE.md](PT-STATE.md).
 Detailed shader decodes, measured alternatives and historical implementation notes remain in the local
 archive under this same path; [DEVELOPMENT.md](DEVELOPMENT.md) describes access.
 

@@ -1,5 +1,8 @@
 # Caustics for TG Path Tracing: research
 
+Historical investigation from September 2026. The renderer has since moved to traced wave geometry.
+See [PT-STATE.md](PT-STATE.md) for the current implementation and [PT-DESIGN.md](PT-DESIGN.md) for requirements.
+
 2026-09-28. Research only: no code was changed, nothing was built or run. Line numbers are as of this date; the working
 tree was being edited while this was written, so trust the function names over the numbers.
 
@@ -9,7 +12,7 @@ that zeroes a surface's intensity while HDRP writes its constants (not a postfix
 the pixel's footprint plus HDRP's blur, and steep crossings (waterfalls) are passed. Section 7 was not answered; the
 defaults taken: all water with caustics on, the game's strength, one row, the light shafts keep HDRP's pattern.
 
-## In short
+## Findings from September 2026
 
 - Caustics are the bright, moving patterns light makes after water or glass bends it. The net of light on a sunny
   river bed. The bright spot next to a bottle's shadow.
@@ -35,8 +38,7 @@ defaults taken: all water with caustics on, the game's strength, one row, the li
 - Not now: shooting "photons" (rays traced from the light instead of from the camera) and splatting them on screen,
   the way NVIDIA's published glass caustics work. It makes blotchy noise, the kind Ray Reconstruction handles worst,
   and costs more.
-- I need your call on a few things (section 7): caustics from above in the open world's lakes, the game's brightness
-  or physically correct, cave pools (they will shimmer less), and the underwater light shafts.
+- Section 7 records the open questions from this investigation. The later decisions are in [PT-DESIGN.md](PT-DESIGN.md).
 
 ## 1. Which caustics players would see
 
@@ -328,7 +330,7 @@ Native side:
 - `tests/source_checks.py`: the row in both menus, the mask rule.
 
 Cost (estimate): one short water-only ray per lit pixel below the highest water surface near the camera, three
-texture reads, and the copies: under 0.1 ms. Measure it with the new stage timing, not in the harness alone.
+texture reads, and the copies: under 0.1 ms. Measure it with the new stage timing, not in the test runner alone.
 
 In game, check: a Horns of the South lake shore at noon (new caustics from above), the same place while diving (the
 same pattern), a bridge's shadow on a river bed (none), a Redhat Cave or Sarras Chapel pool against the game's own look

@@ -1,11 +1,12 @@
 # Development history
 
-Current handoff: [2026-11-10 public-source preparation](docs/rounds/round-22.md).
+Current handoff: [2026-11-10 documentation edit](docs/rounds/round-23.md).
 Earlier complete sessions are in the local archive described in [DEVELOPMENT.md](docs/DEVELOPMENT.md).
 Current baseline: [PROJECT-CONTEXT.md](docs/PROJECT-CONTEXT.md) and [PT-STATE.md](docs/PT-STATE.md).
 
 | Sessions | Dates | Milestone |
 |---|---|---|
+| R23 | 2026-11-10 | Short project README; separate installation/settings/build guides; documentation prose edit |
 | R22 | 2026-11-10 | Public/private documentation split, PT reconciliation, source/dependency audit |
 | R21 | 2026-10-30 | 1.2.4, Unity fixes, SDK updates, DLSS sizing; PT tabled |
 | R20 | 2026-10-11–12 | Full NRD inputs, froxel fog, stale-record fixes, caustic grid, Mega Geometry trial 7 |
