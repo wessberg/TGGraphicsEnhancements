@@ -21,12 +21,6 @@ here and its files are not this session's to change.
 
 ## The owner's rulings (newest first)
 
-- 2026-10-30: TG PATH TRACING IS TABLED ("Nevermind the path tracing mod right now - that mod is tabled until further
-  notice, it's the three other mods we want to get updates out for right now"). The work is 1.2.4 of TG Frame
-  Generation, TG Better Upscaling and TG Neural Rendering on the game's Unity 6000.3 (`docs/rounds/round-21.md`).
-  Asked about Preset C: a row that only appears when Frame Generation is set to DLSS. Seen in game on the normal version
-  the same day: "yes FG Performance looks fine too". Quality stays the default, as NVIDIA's. TG Neural Rendering's zips
-  BUNDLE NVIDIA's signed DLL from RTX Remix (the owner's pick, on NVIDIA's public permission for modders: `docs/DLSS5-RESEARCH.md`).
 - 2026-10-12 (AGENTS.md has each): RTX MEGA GEOMETRY ON AND STAYS ON ("Do not turn it off ... there must be
   something we've done wrong if it's not making things faster"; PT-109). The stream stays on: speed is measured
   with it. Our water need not look like the game's, "so long as it looks amazing". "Anything can light the mist -
