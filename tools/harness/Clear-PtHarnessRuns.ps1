@@ -1,33 +1,29 @@
-# SPDX-License-Identifier: MIT
-# Frees disk space: the in-game runs of artifacts\harness (307 GB after three days, 2026-10-08; 92 % of it raw
-# frames), the old packages of artifacts\Packages (62 GB: at every run Package.ps1 leaves a folder and a zip per mod
-# there, and reads neither again) and the workers' old builds in %TEMP%\tgb (145 GB in 1,523 folders after six days,
-# 2026-10-12, with 8 GB left on the disk). It says what it would do and deletes nothing until -Apply.
-#   .\tools\harness\Clear-PtHarnessRuns.ps1                 what would go, and how much space that frees
-#   .\tools\harness\Clear-PtHarnessRuns.ps1 -List           the same, with a line for every run and kind of package
-#   .\tools\harness\Clear-PtHarnessRuns.ps1 -Apply          does it
-#   .\tools\harness\Clear-PtHarnessRuns.ps1 -KeepWhole 3 -Keep 'nr-*','20261008-130029' -Apply
-# Runs. A run's age counts from the last time anything in it was written, so a run somebody still works in stays new.
-#   - The newest -KeepWhole runs (10) stay as they are.
-#   - Older runs lose their raw frames (.raw, .hdrraw, .bin): what analyze.py itself deletes without -KeepFrames, and
-#     the buffers the neural rendering captures dump. Pictures, reports, JSON and logs stay, so what the docs point at
-#     still opens. The tools that read raw frames (flicker.py, edges_shift.py, mean_colour.py, neural_*.py) can no
-#     longer be run on such a run.
-#   - Runs older than -DeleteAfterDays (14; 0: never) are deleted whole, unless a doc names them (*.md in the repo's
-#     root and under docs\): those are evidence and only lose their raw frames.
-# Packages. Of each mod, version and game version the newest -KeepPackages (1; 0: none) stay, folder and zip; the
-# older ones are deleted. The zips for Nexus are the copies in artifacts\Nexus, which this never touches. What is not
-# named like a package (<mod>-<version>-<Mono or IL2CPP>-<time>-<id>) is left alone.
-# Workers' builds (the owner, 2026-10-12: "delete all the old ones, and make sure our Clear-PtHarnessRuns.ps1 tool
-# also does that"). %TEMP%\tgb is where the workers' build trees, install folders, test pictures and logs go
-# (docs/AGENT-WORKERS.md); nothing reads them again once a job is merged. A folder or a loose file there goes when
-# nothing in it was written for -WorkerDays days (2; 0: never). A link found inside one is unlinked, never followed
-# (a tree copy's junctions lead to the real SDK folders). The tree copies themselves (%TEMP%\tg-agents\wt) are
-# sources, some never merged: this never touches them.
-# -Keep names runs, packages and workers' folders that are never touched (wildcards allowed).
-# Never touched: harness\builds (Deploy-PtBuild.ps1's records and the files it can put back), harness\_config-backup
-# (the owner's configs while a run lasts), the RUNNING and STOP files, and a run or package written to in the last 15
-# minutes. While a harness run is going (RUNNING names a live process) -Apply deletes nothing and exits 3: deleting
+# SPDX-License-Identifier: MIT Frees disk space: the in-game runs of artifacts\harness (307 GB after three
+# days, 2026-10-08; 92 % of it raw frames), the old packages of artifacts\Packages (62 GB: at every run
+# Package.ps1 leaves a folder and a zip per mod there, and reads neither again) and the workers' old builds in
+# %TEMP%\tgb (145 GB in 1,523 folders after six days, 2026-10-12, with 8 GB left on the disk). It says what it
+# would do and deletes nothing until -Apply..\tools\harness\Clear-PtHarnessRuns.ps1 what would go, and how
+# much space that frees.\tools\harness\Clear-PtHarnessRuns.ps1 -List the same, with a line for every run and
+# kind of package.\tools\harness\Clear-PtHarnessRuns.ps1 -Apply does it.\tools\harness\Clear-PtHarnessRuns.ps1
+# -KeepWhole 3 -Keep 'nr-*','20261008-130029' -Apply Runs. A run's age counts from the last time anything in
+# it was written, so a run somebody still works in stays new. - The newest -KeepWhole runs (10) stay as they
+# are. - Older runs lose their raw frames (.raw,.hdrraw,.bin): what analyze.py itself deletes without
+# -KeepFrames, and the buffers the neural rendering captures dump. Pictures, reports, JSON and logs stay, so
+# what the docs point at still opens. The tools that read raw frames (flicker.py, edges_shift.py,
+# mean_colour.py, neural_*.py) can no longer be run on such a run. - Runs older than -DeleteAfterDays (14; 0:
+# never) are deleted whole, unless a doc names them (*.md in the repo's root and under docs\): those are
+# evidence and only lose their raw frames. Packages. Of each mod, version and game version the newest
+# -KeepPackages (1; 0: none) stay, folder and zip; the older ones are deleted. The zips for Nexus are the
+# copies in artifacts\Nexus, which this never touches. What is not named like a package (<mod>-<version>-<Mono
+# or IL2CPP>-<time>-<id>) is left alone. Workers' builds. %TEMP%\tgb is where the workers' build trees,
+# install folders, test pictures and logs go (docs/AGENT-WORKERS.md); nothing reads them again once a job is
+# merged. A folder or a loose file there goes when nothing in it was written for -WorkerDays days (2; 0:
+# never). A link found inside one is unlinked, never followed (a tree copy's junctions lead to the real SDK
+# folders). The tree copies themselves (%TEMP%\tg-agents\wt) are sources, some never merged: this never
+# touches them. -Keep names runs, packages and workers' folders that are never touched (wildcards allowed).
+# Never touched: harness\builds (Deploy-PtBuild.ps1's records and the files it can put back),
+# harness\_config-backup, the RUNNING and STOP files, and a run or package written to in the last 15 minutes.
+# While a harness run is going (RUNNING names a live process) -Apply deletes nothing and exits 3: deleting
 # this much disturbs the disk the run measures its frame times on.
 [CmdletBinding()]
 param(

@@ -1,21 +1,6 @@
-# A QUEUED run of the game: waits for a free card while it holds the harness's lock, then runs, then says what the run's
-# report and the tracer's log hold. For a coordinator who has other work meanwhile (start it in the background).
-#
-#   .\tools\harness\Queue-PtRun.ps1 -Scenario forest@camp-walks                     the build that is in the game folder
-#   .\tools\harness\Queue-PtRun.ps1 -Scenario forest@camp -TrialDll <a worker's DLL>  a trial or measuring build
-#
-# Why a script of its own (2026-10-12):
-# - It takes artifacts/harness/RUNNING BEFORE it waits. Run-PtHarness.ps1 -GpuCheck exits 1 while a live process holds
-#   that file, so workers start no new offline GPU test and the run gets the next gap (two workers' chains of tests kept
-#   a run of the first priority waiting that night).
-# - A trial build is put into the game folder only AFTER the card is free, and main's build (build\native) is put back
-#   when the run has ended: "a measuring build is never left in the game", and a wait of unknown length (the owner's
-#   game is open) is "left".
-# - Without -TrialDll it refuses when the game folder's native DLL is not build\native's.
-# - It reads the tracer's log from the LAST start on: the log runs on across starts, and an old "The GPU stopped" line
-#   was once read as the run's own.
-# -Measure brings the game to the front (frame times that may be quoted): it takes the owner's screen.
-# -KeepFrames keeps the run's raw frames (33 MB each at 4K): for a moving picture made from them afterwards.
+# Queue one scenario run while holding artifacts/harness/RUNNING. Wait for the GPU gate before installing a
+# trial DLL or starting the game, then summarize the completed report. Example: Queue-PtRun.ps1 -Scenario
+# forest@camp-walks. Use -TrialDll for a reviewed trial build.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Scenario,
@@ -46,9 +31,8 @@ function Clear-OwnLock { if ((Test-Path -LiteralPath $lock) -and ((Get-Content -
 
 $harness = Join-Path $PSScriptRoot 'Run-PtHarness.ps1'
 $deadline = (Get-Date).AddHours($WaitHours)
-# Tried again when the card was taken between this script's wait and the harness's own (the owner's game opened in
-# those seconds, 2026-10-12 07:08: a trial build then sat in the game folder for the harness's whole wait): the harness
-# gives up after three minutes, main's build goes back, and the wait starts anew.
+# Tried again when the card was taken between this script's wait and the harness's own: the harness gives up
+# after three minutes, main's build goes back, and the wait starts anew.
 while ($true) {
 "== $Scenario : waiting for a free card $(Get-Date -Format HH:mm:ss)"
 $quiet = 0
@@ -59,8 +43,8 @@ for ($i = 0; (Get-Date) -lt $deadline -and $quiet -lt 3; $i++) {
     if (Test-Path -LiteralPath $lock) { [int]::TryParse(((Get-Content -LiteralPath $lock -ErrorAction SilentlyContinue | Select-Object -First 1) -split ' ')[0], [ref]$holder) | Out-Null }
     $held = $holder -ne 0 -and $holder -ne $PID -and (Get-Process -Id $holder -ErrorAction SilentlyContinue)
     if (-not $held -and $holder -ne $PID) { Set-Content -LiteralPath $lock -Value "$PID $Tag-waiting $([DateTime]::Now.ToString('s'))" -Encoding ASCII }
-    # Our game, an offline test (one that is still making its passes shows no GPU use) or a game of the owner's: wait.
-    # Run-PtHarness.ps1's own gate watches every other program afterwards.
+    # Wait while the game, an offline shader-startup test or another listed game is open. The harness GPU gate
+    # then checks remaining applications.
     $busy = @(Get-Process -Name tgpt_gpu_test, Starfield, 'Fall of Avalon' -ErrorAction SilentlyContinue).Count
     if ($busy -eq 0 -and -not $held) { $quiet++ } else { $quiet = 0 }
     Start-Sleep -Seconds 3

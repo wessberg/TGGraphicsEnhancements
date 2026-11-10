@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: MIT
-// PT-53's yardstick: "When the player character moves, the hair on NPC peoples heads move too ... especially noticeable,
-// when the player moves to the sides via A and D on their keyboard" (the owner, 2026-10-07). In a frozen world the camera
-// swings left and right as a player strafing does, while the step's frames are taken: anything on a head that moves in
-// them moved because the camera did, not by the wind or an animation. The game's own picture is the reference.
+// SPDX-License-Identifier: MIT PT-53's yardstick: "When the player character moves, the hair on NPC peoples
+// heads move too... especially noticeable, when the player moves to the sides via A and D on their
+// keyboard". In a frozen world the camera swings left and right as a player strafing does, while the step's
+// frames are taken: anything on a head that moves in them moved because the camera did, not by the wind or
+// an animation. The game's own picture is the reference.
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;

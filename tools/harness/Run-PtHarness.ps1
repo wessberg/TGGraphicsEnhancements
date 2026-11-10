@@ -1,20 +1,18 @@
-# SPDX-License-Identifier: MIT
-# TG Path Tracing's in-game test run, from start to report: builds and installs the runner plugin (a developer's
-# tool, in no release zip), asks it for the scenarios of tests/ingame/scenarios.json, starts the game through Steam,
-# waits for the run to finish, puts the configs back, and has tools/harness/analyze.py write the report.
-#   .\tools\harness\Run-PtHarness.ps1 -Inventory            lists the saves (with their pictures) and stops
-#   .\tools\harness\Run-PtHarness.ps1                       every scenario whose save exists
-#   .\tools\harness\Run-PtHarness.ps1 -Scenario tavern-room,npc-day  only these
-#   .\tools\harness\Run-PtHarness.ps1 -Scenario refract-jar@views,mirror-tavern   one game session, a recipe per scene
-#   .\tools\harness\Run-PtHarness.ps1 -Calibrate            finds the view each save was made with (tests/ingame/camera.json)
-#   .\tools\harness\Run-PtHarness.ps1 -GpuCheck             only says who uses the GPU now; exit 0: an offline GPU test
-#                                                           (tgpt_gpu_test) may start, up to -TestsAtOnce side by side
-# The game is never started while another program uses the GPU (the owner, 2026-10-06: "check if another process is
-# using the GPU, and if it is, monitor it, and launch once it settles"): the script watches the GPU, starts the game
-# once it has been quiet for -QuietSeconds (5: "90 quiet seconds are too long. Just 5 quiet seconds"), and gives up
-# after -GpuWaitMinutes. A file named STOP in artifacts/harness
-# ends the wait. While a run lasts nothing is saved (the runner stops every save), path tracing starts Off (so the
-# first frames are the game's own, never traced) and frame generation is Off (frame times are real frames).
+# SPDX-License-Identifier: MIT TG Path Tracing's in-game test run, from start to report: builds and installs
+# the runner plugin (a developer's tool, in no release zip), asks it for the scenarios of
+# tests/ingame/scenarios.json, starts the game through Steam, waits for the run to finish, puts the configs
+# back, and has tools/harness/analyze.py write the report..\tools\harness\Run-PtHarness.ps1 -Inventory lists
+# the saves (with their pictures) and stops.\tools\harness\Run-PtHarness.ps1 every scenario whose save
+# exists.\tools\harness\Run-PtHarness.ps1 -Scenario tavern-room,npc-day only
+# these.\tools\harness\Run-PtHarness.ps1 -Scenario refract-jar@views,mirror-tavern one game session, a recipe
+# per scene.\tools\harness\Run-PtHarness.ps1 -Calibrate finds the view each save was made with
+# (tests/ingame/camera.json).\tools\harness\Run-PtHarness.ps1 -GpuCheck only says who uses the GPU now; exit
+# 0: an offline GPU test (tgpt_gpu_test) may start, up to -TestsAtOnce side by side The game is never started
+# while another program uses the GPU: the script watches the GPU, starts the game once it has been quiet for
+# -QuietSeconds (5: "90 quiet seconds are too long. Just 5 quiet seconds"), and gives up after
+# -GpuWaitMinutes. A file named STOP in artifacts/harness ends the wait. While a run lasts nothing is saved
+# (the runner stops every save), path tracing starts Off (so the first frames are the game's own, never
+# traced) and frame generation is Off (frame times are real frames).
 [CmdletBinding()]
 param(
     [switch]$Inventory,
@@ -34,7 +32,7 @@ param(
     [int]$GpuWaitMinutes = 240,
     [int]$TestsAtOnce = 4,
     [switch]$TestsYield,
-    # Explicit owner-authorized NR comparisons (2026-10-07): GPU tests may overlap, but never another game.
+    # The optional NR overlap mode never permits another open game; ordinary PT runs keep the stricter GPU gate.
     [switch]$AllowGpuContention,
     # Explicit NR/ReShade compatibility investigations; ordinary PT image comparisons keep the guard.
     [switch]$AllowReShade,
@@ -45,17 +43,13 @@ param(
     # A caller that stages a temporary installation keeps this same-process lock until it restores the files.
     [switch]$KeepLock,
     [switch]$KeepRunning,
-    # FOR ONE MEASUREMENT ONLY (2026-10-10, the owner's question "Does the frametimes depend on whether the game has the
-    # foreground or not?"): the game is kept MINIMIZED instead of in front, so that one run can be held against one in
-    # front. Its frame rates are not the player's; the report says so.
+    # FOR ONE MEASUREMENT ONLY: the game is kept MINIMIZED instead of in front, so that one run can be
+    # held against one in front. Its frame rates are not the player's; the report says so.
     [switch]$KeepMinimized,
-    # A run whose frame times are to be measured exactly (the owner, 2026-10-11: "Please only force the game to the
-    # foreground in runs where you want to exactly measure frametimes"): the game is brought back to the front whenever
-    # another window takes it. Without it the run only writes down when the game was not in front (the report says so
-    # and its frame rates are not quoted), and leaves the owner's screen alone.
+    # Force foreground only with -Measure. Other runs record foreground intervals without taking focus;
+    # background intervals cannot support frame-time claims.
     [switch]$Measure,
-    # FOR ONE MEASUREMENT (R19, PT-107): TG Frame Generation's "Low latency" row for this run only (Off, Reflex, ...: the
-    # row's own values), where a run otherwise keeps the owner's. The configs come back after the run as always.
+    # PT-107: Override the game Low Latency row for this measurement only, then restore the saved configuration.
     [string]$LowLatency = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -64,30 +58,21 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repo 'tools\Package.Common.ps1')
 $gameProcess = 'Fall of Avalon'
 $testProcess = 'tgpt_gpu_test'
-# A program counts as using the GPU from this share of its 3D or compute engines (a game, a render, an AI job), or when
-# it holds this much video memory (a game left paused in the background). The desktop itself stays well under both.
-# The video encoder and decoder do not hold a start back (the owner, 2026-10-06: Sunshine, which streams the owner's
-# screen, encodes whenever the screen changes); what they take is still written down, as it costs a little frame rate.
-# Lowered 2026-10-09 (from 10 % and 2000 MB): a run began beside Starfield, which sat nearly idle at 7.5 % and
-# 1,323 MB, and went on for 8 minutes while the owner played.
+# Gate startup on 3D/compute use and memory occupancy. Encoding/decoding alone does not block streaming, but its
+# cost is recorded. Open listed games remain blocked even below utilization thresholds.
 $busyPercent = 4.0
 $busyVideoMemoryMB = 800
-# The owner's other games: while one of these is OPEN no run starts, whatever it uses just then (a game at its
-# menu or paused uses next to nothing and is still the owner's to play the next second). Add a name when the owner
-# plays something else on this PC; the limits above catch what is not listed once it draws.
+# Any listed open game blocks starts, including menus/paused states. Add newly used games to this list;
+# utilization checks cover unlisted active applications.
 $ownerGames = @('Starfield')
 function Get-OwnerGame { foreach ($name in $ownerGames) { if (Get-Process -Name $name -ErrorAction SilentlyContinue) { return $name } }; return $null }
 # Windows' own processes (the kernel's display and capture work shows under System) are not another program using the
 # GPU: they hold no start back and do not spoil a run's frame rates in the report; what they took is written down.
 $osProcesses = @('System', 'Idle', 'dwm')
-# A streaming encoder holds video memory for its frames (Sunshine: 2.4 GB at 4K, seen 2026-10-06 16:46, which held a
-# run back though the owner had said to ignore the encoder). Its memory does not count; its 3D use still does.
+# A streaming encoder holds video memory for its frames. Its memory does not count; its 3D use still does.
 $encoderProcesses = @('sunshine')
-# The owner's editor, where this work is watched (VS Code: "Code"), holds 370 to 900 MB of video memory for its window
-# at 0 % of the GPU's engines; on 2026-10-10 14:41 its 898 MB stopped a run half way. An editor is not a game: its memory
-# does not count, its use of the engines still does (from 4 %, as for every program).
-# NVIDIA Overlay's counter read 28,031 MB at 0 % on a 16 GB card (2026-10-30, after a recording): not real memory, and it
-# held a run back for good. Same rule: its memory does not count, its use of the engines does.
+# Ignore editor and NVIDIA Overlay memory counters when their GPU engines are idle. Editor windows can retain
+# VRAM, and Overlay once reported more memory than the card contained; their actual engine use still counts.
 $memoryNotCounted = $encoderProcesses + @('Code', 'NVIDIA Overlay')
 
 # Every process's share of the GPU and its video memory, from Windows' own counters (one second of them).
@@ -141,13 +126,8 @@ function Format-GpuUse($rows) {
 # The programs that only encode or decode video now: they hold nothing back, the report names them.
 function Get-GpuVideoOnly($all) { @(@($all) | Where-Object { $_ -and $_.Name -ne $gameProcess -and $_.VideoPercent -ge 5 }) }
 
-# The game in the foreground (the owner, 2026-10-10 15:40: "let's make sure the game always has the foreground and only
-# respect our frametimes when we know it was"; narrowed 2026-10-11: "Please only force the game to the foreground in runs
-# where you want to exactly measure frametimes"). Windows treats a minimized or background program otherwise (its
-# priority, the driver's handling of a window nobody sees): frame rates of such a stretch are not the player's. Every two
-# seconds the run looks which window has the foreground and writes down the stretches the game was not in front; with
-# -Measure it also brings the game back (restore, then to the front) at once. The game takes no real input during a run
-# (the plugin turns it off), so a key or a click of the owner's in that time goes nowhere.
+# Foreground state changes scheduling and measured frame time. Record focus intervals every two seconds;
+# -Measure additionally restores foreground. Do not quote background rates as player performance.
 Add-Type -Namespace TgHarness -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
@@ -189,25 +169,11 @@ if ($GpuCheck) {
     @($all | Where-Object { $_.Percent -ge 0.5 -or $_.VideoPercent -ge 0.5 -or $_.VideoMemoryMB -ge 200 }) | Sort-Object Percent -Descending | Format-Table -AutoSize | Out-Host
     $others = Get-GpuOthers
     if ($null -eq $others) { Write-Host "Windows' GPU counters could not be read."; exit 2 }
-    # The tracer's offline GPU test is no "other program" to another such test. One of them keeps a single CPU thread busy
-    # and the GPU at 13 to 36 % (measured 2026-10-07: 188 s of CPU in 202 s), so several run side by side at nearly the
-    # speed of one. Until then the agents ran them one at a time, each waiting for a GPU with nobody on it: about 20 runs
-    # of 3 to 5 minutes stood in line, and the most polite script waited 35 minutes for its first turn (the owner: "are
-    # you sure they're not all just waiting on each other?"). Exit 0 here means "an offline GPU test may start", for at
-    # most -TestsAtOnce of them (1: wait for a GPU with no test on it, for a run whose GPU timings count). The game is
-    # another matter: a run of the game still waits until no test and no other program uses the GPU (below).
-    # Another program on the GPU (the owner's other games) does not hold an offline test back either: asked "While you
-    # play Starfield, may the agents' offline tests run? They never start our game, but they would take GPU from
-    # Starfield", the owner chose "Yes, up to 4" (2026-10-07). -TestsYield brings the old behaviour back for one call.
-    # Our own game is the exception: while it runs (a harness run of this or another session, or the owner playing it)
-    # no offline test starts, since its frame rates are what is being judged. On 2026-10-07 18:03 this check said "may
-    # start" beside the game at 40 % of the GPU (another session's run); only the callers' own "game closed" rule held.
+    # Permit bounded concurrency among offline PT tests only. A startup test may compile without visible GPU
+    # use; count running processes as well as utilization. This exception never permits another open game.
     if (Get-Process -Name $gameProcess -ErrorAction SilentlyContinue) { Write-Host "The game is running: an offline GPU test waits until it has closed."; exit 1 }
-    # SINCE 2026-10-12 00:20 a game of the owner's that is OPEN holds every offline test back too. That night a worker's
-    # offline test hung the GPU while Starfield was open (one run of the fog check, 600 times slower than every other
-    # from its first frame), Windows reset the driver (LiveKernelEvent 141, nvlddmkm 153) and Starfield was gone a
-    # minute later. "Yes, up to 4" (the owner, 2026-10-07, above) was given for tests that take a share of the card,
-    # not for one that can take the card down. Until the owner rules again: no offline test beside a listed game.
+    # No offline GPU test beside another listed open game. A 2026-10-12 driver reset during concurrent gameplay
+    # invalidated the earlier overlap policy.
     $openGame = Get-OwnerGame
     if ($openGame) { Write-Host "$openGame is open (a game of the owner's): no offline GPU test starts beside it (since 2026-10-12: a test hung the card and the driver's reset took the game down). Wait until it has closed."; exit 1 }
     # A run of the game that WAITS for the card holds the lock file already (a queue's script writes it before its wait):
@@ -412,9 +378,7 @@ $requestDir = Join-Path $GameDir 'BepInEx\TGPathTracing\Harness'
 $requestJson = ConvertTo-Json -InputObject $request -Depth 10
 [IO.File]::WriteAllText((Join-Path $Out 'request.json'), $requestJson, (New-Object Text.UTF8Encoding $false))
 
-# The GPU must be free, and stay free for a while, before the game starts: another game's frames would be slowed, and
-# this run's frame times would mean nothing. Nothing is written into the game folder before that: a game the owner
-# starts meanwhile plays as normal.
+# Require a sustained idle interval before launch, with no game-folder writes while waiting.
 $gpuLog = [ordered]@{ waitedSeconds = 0; before = ''; during = @{}; video = @{}; samples = 0; readable = $true; windowChecks = 0; notInFront = @() }
 $waitStart = [DateTime]::Now; $quietSince = $null; $lastSaid = [DateTime]::MinValue
 while ($true) {
@@ -507,10 +471,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $requestDir 'request.json'), $requestJson, (New-Object Text.UTF8Encoding $false))
     if ($TimeoutMinutes -le 0) { $TimeoutMinutes = if ($Inventory) { 8 } else { 10 + 6 * $scenarios.Count } }
     Assert-TgGameClosed
-    # ReShade (the owner's, with RenoDX) changes the game's tone mapping and its swapchain: a run with it on judges another
-    # picture, and on 2026-10-08 12:42 its steps saved no frames at all. The owner turns it on and off (it loads from
-    # dxgi.dll in the game folder); the harness never touches it. Only explicitly marked NR compatibility
-    # recipes may opt in; ordinary PT runs still refuse it.
+    # ReShade/RenoDX changes tone mapping and swapchain ownership. Ordinary PT runs refuse it; only explicit NR
+    # compatibility recipes opt in. Never toggle or modify its installation automatically.
     $reshade = @('dxgi.dll', 'd3d11.dll', 'ReShade64.dll') | Where-Object { Test-Path -LiteralPath (Join-Path $GameDir $_) } |
         Where-Object { "$((Get-Item -LiteralPath (Join-Path $GameDir $_)).VersionInfo.ProductName)$((Get-Item -LiteralPath (Join-Path $GameDir $_)).VersionInfo.FileDescription)" -match 'ReShade' }
     if ($AllowReShade -and @($request.scenarios | ForEach-Object { $_.steps } | Where-Object { $_.Contains('neural') }).Count -eq 0) {
@@ -588,15 +550,9 @@ try {
             foreach ($other in (Get-GpuVideoOnly $all)) {
                 if (-not $gpuLog.video.ContainsKey($other.Name) -or $gpuLog.video[$other.Name] -lt $other.VideoPercent) { $gpuLog.video[$other.Name] = $other.VideoPercent }
             }
-            # Another program of the owner's takes the card while the run goes (the owner started to play): the run
-            # ends at once and the game closes, so that it has the card (the owner, 2026-10-06: never beside another
-            # game or program). The workers' offline tests are not such a program. Two readings in a row (20 s), or a
-            # listed game open at all.
-            # The streaming encoder alone never ends a run (2026-10-11): Sunshine copies and converts every frame our
-            # own game shows, 4 to 5 % of the 3D engines while the game runs, and the owner: "Sunshine practically always
-            # runs". Twice in a row over the limit it ended a look-only run of the forest (20261011-223336). What it took
-            # is still written down above, and the report still says another program used the GPU (frame rates of
-            # such a run are not quoted: AGENTS.md; the owner's ruling on that is open).
+            # End a run when another listed game opens or sustained competing GPU use appears. Streaming
+            # encoding alone is allowed and measured; distinguish Sunshine conversion work from another
+            # interactive workload.
             $intruders = @($all | Where-Object { $_.Name -ne $gameProcess -and $_.Name -ne $testProcess -and $osProcesses -notcontains $_.Name -and $encoderProcesses -notcontains $_.Name -and ($_.Percent -ge $busyPercent -or ($_.VideoMemoryMB -ge $busyVideoMemoryMB -and $memoryNotCounted -notcontains $_.Name)) })
             $intruded = if ($intruders.Count) { $intruded + 1 } else { 0 }
             $game = Get-OwnerGame
@@ -614,8 +570,8 @@ try {
         $left = Get-Process -Name $gameProcess -ErrorAction SilentlyContinue
         if ($left) {
             Write-Warning 'The game did not close by itself: stopping it.'; $left | Stop-Process -Force
-            # A game whose GPU was reset takes longer than 3 s to go (2026-10-12: it still stood, and the owner's configs
-            # stayed in the backup folder "for the next run"): wait for it, so that they come back now.
+            # A game whose GPU was reset takes longer than 3 s to go: wait for it, so that they
+            # come back now.
             for ($i = 0; $i -lt 30 -and (Get-Process -Name $gameProcess -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
         }
     }

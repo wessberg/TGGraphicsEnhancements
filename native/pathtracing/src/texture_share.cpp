@@ -629,19 +629,18 @@ DXGI_FORMAT view_format(DXGI_FORMAT f) {
     }
 }
 
-// ------------------------------------------------------------------ the video memory cap
-// Windows counts a shared texture once for each device that holds it open (the probe: 430 MB counted for 216 MB on the
-// card) and weighs the game's count against the budget it gives the game (IDXGIAdapter3::QueryVideoMemoryInfo). Over it,
-// Windows moves the game's memory out to the PC's own (stutter, blurred textures), path tracing on or off: on an 8 GB card
-// a scene's textures counted a second time could push it there. So a texture is opened only while the game's count, the
-// tracer's second count of what it opened included, stays under 97 % of that budget, and only if it takes at most a
-// quarter of what is left: near the budget the largest stop first, the small ones last. A texture not opened keeps its
-// atlas tile (the plugin asks again now and then: TextureShare.Refresh); those open stay until the game frees them.
-// 97 %, not the 90 % of the first build (2026-10-09, the owner's own session: in a small interior the game's count sat at
-// 92 to 93 % of the budget, 12.2 of 13.2 GB, with nothing left for anyone to free; 596 textures of 293 MB stayed on hold
-// and path tracing stayed paused for good, where opening them would have left the count at 95 %). What the rule is
-// for is the budget itself: over it Windows moves memory out. The tracer's OTHER memory is not under this rule, and
-// outdoors it is what overran the budget that day (PT-87): that is cured by the tracer needing less, not here.
+// ------------------------------------------------------------------ the video memory cap Windows counts a
+// shared texture once for each device that holds it open (the probe: 430 MB counted for 216 MB on the card)
+// and weighs the game's count against the budget it gives the game (IDXGIAdapter3::QueryVideoMemoryInfo).
+// Over it, Windows moves the game's memory out to the PC's own (stutter, blurred textures), path tracing on
+// or off: on an 8 GB card a scene's textures counted a second time could push it there. So a texture is
+// opened only while the game's count, the tracer's second count of what it opened included, stays under 97 %
+// of that budget, and only if it takes at most a quarter of what is left: near the budget the largest stop
+// first, the small ones last. A texture not opened keeps its atlas tile (the plugin asks again now and then:
+// TextureShare.Refresh); those open stay until the game frees them. 97 %, not the 90 % of the first build.
+// What the rule is for is the budget itself: over it Windows moves memory out. The tracer's OTHER memory is
+// not under this rule, and outdoors it is what overran the budget that day (PT-87): that is cured by the
+// tracer needing less, not here.
 constexpr double kBudgetShare=0.97;
 constexpr uint64_t kLargestShare=4;
 // Under r.mutex. What Windows gives the game of the card's own memory and what it counts for the game now (the local
@@ -666,14 +665,7 @@ bool within_budget(Registry& r, uint64_t bytes) {
     char text[24]{};
     const bool testLimit=GetEnvironmentVariableA("TGPT_TEST_SHARE_LIMIT_MB", text, sizeof text)>0;
     if(testLimit) limit=uint64_t(std::strtoull(text, nullptr, 10))<<20;
-    // PT-87 (docs/agents/memory-2.md, memory3, section M3-4 "way 5"), ON TRIAL and off unless TGPT_TEST_SHARE_COUNT_ONCE is
-    // set: the cap weighs what the card really holds, Windows' count less the second counts that are no memory of the
-    // card's: of the game's textures the tracer has open (r.openBytes: each was counted by the game's device before the
-    // tracer opened it) and of the tracer's own shared textures (r.ownShared, as the tracer last said). The owner's
-    // "Path tracing paused: N textures unavailable" is this cap: with 1.1 to 1.9 GB of second counts in the count it
-    // closes that much before the card has that little room. Microsoft: the budget "generally will only be imposed when
-    // the system is under memory pressure", which is the card's real memory. Not the rule until the game has shown that
-    // the pauses go and the long frames do not come instead.
+    // PT-87: Track actual memory use and residency; do not limit scene content to meet a budget.
     const bool once=GetEnvironmentVariableA("TGPT_TEST_SHARE_COUNT_ONCE", nullptr, 0)>0;
     const uint64_t secondCounts=once ? r.openBytes+r.ownShared : 0;
     const uint64_t usage=memory.CurrentUsage-std::min<uint64_t>(memory.CurrentUsage, secondCounts);

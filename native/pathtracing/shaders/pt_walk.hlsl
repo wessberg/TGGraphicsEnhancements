@@ -1,30 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Light inside subsurface materials, for the pixels the camera sees (PT-40, PT-43): wax, skin, teeth. Such a pixel's diffuse
-// light is not the light that falls on it: it is the light that went into the thing somewhere, was scattered and absorbed
-// inside, and comes out here. By reciprocity that is one random walk from the pixel into the traced mesh (pt_common
-// subsurface_walk, the medium from the material's diffusion profile and the pixel's color) and the light gathered where the
-// walk leaves the mesh: the sun's and the lamps' with shadow rays (next-event estimation, as a path vertex takes them), and one
-// cosine-distributed ray for the sky's and the bounced light (a path as pt_gi's, ending on the radiance cache). A candle's
-// pockets and folds, which nothing lights from outside, glow with what went in at its top; a nostril or an ear with a lamp
-// behind it glows red, because the walk comes out on the lamp's side and the blue was absorbed on the way.
-//   It is the tracer's own in place of HDRP's screen-space scattering (a Burley blur of the light on screen, which only knows
-//   what the camera sees) and HDRP's thin-object transmission (a thickness map and one exponential): the owner, 2026-10-07,
-//   "everything should be path traced". The pixel's diffuse signals (pt_di_spatial's direct light, pt_gi_spatial's bounced
-//   light, both divided by the diffuse color) are replaced by the walk's: what it carries over the pixel's color (the
-//   composite multiplies the color back in, so a texture's detail stays sharp) times the light at the exit. The pixel's
-//   highlight stays where the camera sees it (pt_di_spatial's specular, pt_specular).
-//   Which pixels: those whose own camera ray (PT-59, pt_primary) stopped at a material light walks inside (pt_common
-//   subsurface_material: one the game's own shader scatters light under the surface of, TGPT_MATERIAL_SUBSURFACE and its
-//   profile's shape; not a leaf or cloth, which pass light as thin sheets), on a piece of the mesh that has an inside (a
-//   material drawn from both sides: only where it closes a volume), as often as the game's subsurface mask at the point
-//   says (own_walks: decided at the hit, pt_primary write_traced), exactly as a path's vertex on it is told
-//   (subsurface_vertex; pt_common "who walks"). The walk's entry is that hit itself. HDRP's G-buffer is not asked: until PT-58
-//   the pixels were HDRP's (its subsurface features and its profile by G-buffer index, a traced mesh looked for under HDRP's
-//   surface); on that route (TGPT_OPTION_GBUFFER_SURFACES) nothing walks now. Elsewhere the pixel keeps its light as a plain
-//   surface's.
-//   Unbiased, one walk a pixel a frame; its noise is the denoisers' to take out, as the bounced light's is. ReSTIR's
-//   samples for these pixels are not used (they are the light at the pixel, not at the exit): reusing exits between
-//   pixels and frames is the next step (Werner, Schuessler and Dachsbacher 2024, "ReSTIR Subsurface Scattering").
+// PT-40 / PT-43 / PT-59 / PT-58: Use material-derived physical scattering and transmission; preserve
+// measured profile units.
 #include "pt_common.hlsli"
 
 // The walk's entry: the triangle the pixel's own camera ray stopped at (pt_primary write_traced), where that triangle's

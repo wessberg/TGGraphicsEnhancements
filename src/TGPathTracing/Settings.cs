@@ -145,8 +145,8 @@ namespace TGPathTracing
                 "Keeps the bounced light reaching each part of the world from frame to frame, so light bounces on past the last " +
                 "bounce and reflections show surfaces lit by bounced light. Off stops the light at the last bounce."));
             RemoveIndirectIntensity(file);
-            // 1 as traced (the owner, 2026-10-07, told the default tripled the bounced light's color: "Let's keep it at 1 for
-            // now"). It was 3 until then: a config that still holds that old default is moved to 1, once.
+            // 1 as traced. It was 3 until then: a config that still holds that old default is
+            // moved to 1, once.
             IndirectColor = file.Bind(Section, "Indirect color", 1f, Row(order++, "Indirect Color", new AcceptableValueRange<float>(0f, 4f),
                 "How much color the bounced light keeps from the surfaces it bounced off, at the same brightness: 1 as traced " +
                 "(the default), 0 grey, more exaggerates the tint (a red cloth reddening the floor beside it)."));
@@ -220,8 +220,8 @@ namespace TGPathTracing
                 "the game's own rendering, and a report of the exposure, the lights near the camera and what the game has under the crosshair, " +
                 "in BepInEx/TGPathTracing/Captures."));
             SpatialReuse = file.Bind(Advanced, "Spatial reuse", true, Hidden("ReSTIR's spatial reuse between neighbouring pixels."));
-            // PT-73 e: how bright a lit surface may get from Dark Adaptation's brightening (the wall beside a lantern). The owner
-            // tunes it by eye (2026-10-08: "a mix" of the bloom before and the hold); not a row.
+            // PT-73: Internal highlight threshold for Dark Adaptation near bright lantern walls; retain the
+            // accepted balance. This is not a player row.
             HighlightsKept = file.Bind(Advanced, "Highlights kept", 0f, Hidden("Dark Adaptation brightens what is dark and holds back what is already bright: " +
                 "the brightness (as the game's exposure shows it) from which a lit surface is not brightened at all. 0 is the built-in level (1, chosen " +
                 "by eye on 2026-10-08); lower holds more firmly (0.54), higher lets the surroundings of a lamp bloom more; 1000000 holds nothing back."));
@@ -309,16 +309,17 @@ namespace TGPathTracing
                 "On trial, for finding causes. 0: what the path tracer reuses of the frame before is fetched by a pixel's motion alone, as before. " +
                 "1: its own histories for direct light, reflections and bounced light are fetched where the pixel's point was in the previous " +
                 "frame's own pixel grid (the two frames' sub-pixel shifts' difference added). 2: ReSTIR's reuse across frames as well. Leave it at 0."));
-            // PT-85 and PT-40, ON TRIAL (docs/agents/flame-specks.md), never rows: with each lamp in its flame at its flame's
-            // size the tavern shows twice the specks of lamps at the game's place and size. Four switches, one a suspect, all
-            // 0 (off) by default; the lamps stay in their flames whatever these say. They travel packed in TGPT_Frame.jitter's
-            // w (LampTrial); HDRP's radius for a lamp in its flags' top bits (SceneLights, only while a switch is at 1).
-            // The near size is no trial any more (the owner, 2026-10-09 06:50, of the tavern with it at 10 and 20: "the candles
-            // weren't overblown, I saw very little speckling, and the light coverage was still good"). A key of its own, so
-            // that a config holding the trial key's 0 takes this default. 15, not 10: with the size going by a lamp's
-            // strength, 15 is where the tavern's wall candelabra (burnt pixels 216 at 10, 28 at 15, 29 at 20) and the night
-            // scene's torch (9,520, 3,050, 568; the game's own 3,380) stop burning, and the picture's mean stays (run
-            // 20261009-075923).
+            // PT-85 and PT-40, ON TRIAL (docs/agents/flame-specks.md), never rows: with each
+            // lamp in its flame at its flame's size the tavern shows twice the specks of lamps
+            // at the game's place and size. Four switches, one a suspect, all 0 (off) by
+            // default; the lamps stay in their flames whatever these say. They travel packed in
+            // TGPT_Frame.jitter's w (LampTrial); HDRP's radius for a lamp in its flags' top bits
+            // (SceneLights, only while a switch is at 1). The near size is no trial any more. A
+            // key of its own, so that a config holding the trial key's 0 takes this default. 15,
+            // not 10: with the size going by a lamp's strength, 15 is where the tavern's wall
+            // candelabra (burnt pixels 216 at 10, 28 at 15, 29 at 20) and the night scene's
+            // torch (9,520, 3,050, 568; the game's own 3,380) stop burning, and the picture's
+            // mean stays (run 20261009-075923).
             LampNearSize = file.Bind(Advanced, "Lamp near size", 15, Hidden(
                 "In centimetres, 0 to 255. The game's lamps are far stronger than real flames: their strengths were set for lights a " +
                 "metre across. Path tracing puts each lamp in its flame, where its own wax and holder would be burnt white and " +
@@ -410,38 +411,30 @@ namespace TGPathTracing
                 "For tests only. Off: while path tracing is on screen the game's renderer draws no solid object and no decal under " +
                 "it, and the path tracer gives the frame its depth and motion. On: the game draws them as without path tracing, " +
                 "for a comparison with its own surfaces (the Yardstick view and the old route do this by themselves). Leave it off."));
-            // PT-112 (B), the rule since 2026-10-11 (the owner: fog and translucents into the tracer; docs/agents/fog-2.md): the
-            // game's fog traced along each camera ray (TGPT_FRAME_TRACED_FOG), with the light it scatters more than once
-            // (TGPT_FRAME_FOG_WALK: the mist's cache cells), HDRP's own opaque fog pass left out (GamePasses). Never a row; one
-            // hidden switch for tests. (HDRP's fog in its place, "HDRP fog in place of the traced fog", went the same day: the
-            // owner, "remove all the 'hacks' and workarounds as we go"; the game's own picture is what the fog is held against.)
-            // Its light is held in cells of a grid that follows the camera, as NVIDIA's RTX Remix builds its fog (PT-118, the
-            // owner's choice of 2026-10-11; the rule since 2026-10-12, when the hidden "Traced fog: froxel cache" and the
-            // per-pixel route it chose against went).
+            // PT-112 (B), the rule since 2026-10-11: the game's fog traced along each camera ray
+            // (TGPT_FRAME_TRACED_FOG), with the light it scatters more than once
+            // (TGPT_FRAME_FOG_WALK: the mist's cache cells), HDRP's own opaque fog pass left out
+            // (GamePasses). Never a row; one hidden switch for tests. Its light is held in cells
+            // of a grid that follows the camera, as NVIDIA's RTX Remix builds its fog (PT-118).
             FogScatteredOnce = file.Bind(Advanced, "Traced fog: light scattered once only", false, Hidden(
                 "For tests only. Off: the traced fog carries the light it scatters from droplet to droplet too. On: only the light it " +
                 "scatters once. Leave it off."));
-            // (PT-37: every lamp lights the traced fog, outdoors too, though the game's own Fog volume says "directional
-            // lights only" there. The owner, 2026-10-12, shown the night both ways: "Anything can light the mist - not just
-            // the sun and moon." The hidden switch that took the lamps out for that look is gone.)
-            // PT-112 (C), ON TRIAL, for one measuring run (docs/agents/particles-3.md 3.4): HDRP's transparent draw lists left
-            // empty for the gameplay camera, path tracing on or off, to see whether the game still simulates its effects
-            // (VFX Graph) when HDRP no longer draws them. Never a row; off.
-            // PT-127, ON TRIAL (the owner, 2026-10-11: "make sure NRD is set up to perfection, then, I no longer trust anything I
-            // look at which use NRD"): NRD as its documentation sets it up (tgpt_api.h TGPT_FRAME_NRD_SHIFT). Never a row; 0 until
-            // the owner has seen it. (It took the place of "NRD keeps detail (trial)", which changed nothing anyone could see.)
+            // PT-37 / PT-112 / PT-127: All physical emitters light the authored fog, including
+            // outdoors, with multiple scattering.
             NrdTrial = file.Bind(Advanced, "NRD trial", 0, Hidden(
                 "For a look only. 0 or 1: NRD's RELAX (NVIDIA's pick for this kind of path tracing). 2: NRD's REBLUR instead. " +
                 "Leave it at 0."));
             HdrpTransparentsOff = file.Bind(Advanced, "HDRP transparents not drawn (trial)", false, Hidden(
                 "For one test only. On: HDRP draws none of the game's transparent things (its effects vanish). Leave it off."));
-            // PT-112, the sky, ON TRIAL (docs/agents/sky-1.md, sky-2.md; SkyModel.cs), never a row, 0 by default until the game has
-            // answered (the owner, 2026-10-11, of HDRP's sky: "definitely bring that over too"). While the traced light is on
-            // screen under HDRP's Physically Based Sky: 1, for measuring, HDRP's sky passes are left out (its cube map's update,
-            // its sky and clouds drawn on the screen) and the path tracer draws what the camera sees of the sky from the sky
-            // its rays read now (HDRP's last); 2, the path tracer makes the sky itself (the atmosphere, the clouds, the sun's and
-            // the moon's discs) for its rays and for the screen, by day; at night (the game's stars and night sky, not made by
-            // the path tracer yet) HDRP draws what the camera sees; 3, the same day and night (no stars yet: for looking).
+            // PT-112, the sky, ON TRIAL (docs/agents/sky-1.md, sky-2.md; SkyModel.cs), never a
+            // row, 0 by default until the game has answered. While the traced light is on screen
+            // under HDRP's Physically Based Sky: 1, for measuring, HDRP's sky passes are left
+            // out (its cube map's update, its sky and clouds drawn on the screen) and the path
+            // tracer draws what the camera sees of the sky from the sky its rays read now
+            // (HDRP's last); 2, the path tracer makes the sky itself (the atmosphere, the
+            // clouds, the sun's and the moon's discs) for its rays and for the screen, by day;
+            // at night (the game's stars and night sky, not made by the path tracer yet) HDRP
+            // draws what the camera sees; 3, the same day and night (no stars yet: for looking).
             SkyTrial = file.Bind(Advanced, "Sky trial", 0, Hidden(
                 "On trial. 0: the game draws the sky as before. 1, for measuring: the game's sky passes are left out and the path tracer " +
                 "shows the sky its rays read now. 2: the path tracer makes the sky (air, haze, clouds, the sun and the moon) for its " +
@@ -491,25 +484,8 @@ namespace TGPathTracing
                 "way for it (a rough surface still shares widely, a glossy one hardly); 2, and only as far as they reflect " +
                 "alike: a metal's stains stay too. For a hammered helmet or a door's iron strap with the NRD denoiser, try 4, " +
                 "then 5 and 7. Glass, water and hair are left as they are. Leave it at 0."));
-            // PT-109, ON TRIAL (docs/agents/megageo-1.md), never a row, off (0) by default: the picture and the structures as
-            // before. NVIDIA RTX Mega Geometry (what Alan Wake 2 took in a patch): 1, the frame's top-level acceleration
-            // structure is a partitioned one, kept from frame to frame, of which the driver builds again only the parts
-            // whose things changed (the plain one is built anew over every thing each frame); its parts are cells of the
-            // world, 64 m wide at 1, 128 m at 2, 256 m at 3. The same things and the same hits: the picture does not change.
-            // It travels in TGPT_Frame.flags' bits 2 to 5 (HdrpPasses). It does something only on a native side built with
-            // -DTGPT_MEGA_GEOMETRY=ON and with an NVIDIA driver that reports the feature (the tracer asks it at start-up;
-            // its log says what it answered); everywhere else the plain structures serve. 4, 5, 6 (docs/agents/megageo-4.md):
-            // each cell's small plants (grass, bushes, ferns) in a structure of their own beside its trees; at 5 that structure
-            // is built from clusters stamped from templates (RTX Mega Geometry's second part), with the plants' micromaps
-            // (docs/agents/megageo-5.md; 4 is its yardstick), at 6 plain without them. 7 (megageo-5): NVIDIA's own layout,
-            // every plant's own structure built from its clusters, with micromaps, each its own instance in the partitioned
-            // top level (cells of 128 m); 8: 7 without micromaps. The same hits: the picture does not change.
-            // ON BY DEFAULT SINCE 2026-10-12 (7: NVIDIA's layout with the plants' micromaps). The owner: "I still want us
-            // to enable RTX Mega Geometry. Do not turn it off. I still insist there must be something we've done wrong if
-            // it's not making things faster." Standing in a town it is the faster way already (a frame 77.5 / 74.6 / 78.4
-            // ms plain, 7, plain in one run, the same picture: 20261012-113255); on a walk it was slower the night before
-            // (PT-109): that is our fault to find, not a reason for 0. 0 stays as the YARDSTICK for tests and is what a
-            // card or driver without the feature gets by itself.
+            // PT-109: Keep Mega Geometry enabled where supported; diagnose integration cost
+            // rather than disabling it.
             MegaGeometryTrial = file.Bind(Advanced, "Mega Geometry trial", 7, Hidden(
                 "7 is the default: NVIDIA RTX Mega Geometry, where the graphics driver offers it (elsewhere nothing changes). " +
                 "0: the path tracer's acceleration structures as before, for comparing. 1, 2 or 3: the top-level structure is kept " +

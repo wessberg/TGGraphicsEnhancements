@@ -1,8 +1,0 @@
-@echo off
-setlocal
-set "TEMP=C:\Users\Frede\AppData\Local\Temp\tgb\psr-build\tmp"
-set "TMP=%TEMP%"
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
-if errorlevel 1 exit /b %errorlevel%
-"C:\Users\Frede\AppData\Local\Microsoft\WinGet\Packages\Kitware.CMake_Microsoft.Winget.Source_8wekyb3d8bbwe\cmake-4.4.3-windows-x86_64\bin\cmake.exe" -S C:/Users/Frede/AppData/Local/Temp/tg-agents/wt/psr -B C:/Users/Frede/AppData/Local/Temp/tgb/psr-build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DTGFG_BUILD_NATIVE=ON -DBUILD_TESTING=ON -DFETCHCONTENT_FULLY_DISCONNECTED=ON -DMINHOOK_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/build/native/_deps/minhook-src -DSTREAMLINE_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/Streamline-2.14.1 -DNGX_INCLUDE_DIR=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/Streamline-2.14.1/external/ngx-sdk/include -DFIDELITYFX_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/FidelityFX-SDK-2.3.0 -DXESS_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/XeSS-SDK-3.0.2 -DANTILAG2_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/AntiLag2-SDK-2.0.0a -DDLSS_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/DLSS-SDK-310.9.1 -DRTXDI_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/RTXDI-Library-3.1 -DNRD_ROOT=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/NRD-SDK-4.17.3 -DTGPT_NRD_PREBUILT_LIBRARY=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/build/native/nrd/NRD.lib -DTGPT_NRD_PREBUILT_DEPS=C:/Users/Frede/Developer/TGFOA/TGFrameGeneration/build/native/_deps/shadermake-build/ShaderMakeBlob.lib -UTG_DXC
-exit /b %errorlevel%

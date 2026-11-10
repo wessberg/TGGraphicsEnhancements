@@ -1,14 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Finds the view each scenario's save was made with.
-
-A save keeps where the hero stands and which way they face, not the look up or down: every load comes back looking
-level. The save's picture in the load menu (a 320x180 JPEG the game stores with it) shows the view the owner framed.
-A calibration run (Run-PtHarness.ps1 -Calibrate) loads each save and takes small frames with the camera swept up and
-down and a little to either side; this picks the frame that matches the save's picture and writes the view into
-tests/ingame/camera.json, with the save's ID and time, so the numbers are used for that very save only.
-
-  python tools/harness/calibrate.py artifacts/harness/<run> [--camera tests/ingame/camera.json]
-"""
+"""Calibrate saved camera framing against captured frames. The load-menu thumbnail records the saved view; compare it with the actual game camera before interpreting a measurement."""
 import argparse
 import json
 import sys

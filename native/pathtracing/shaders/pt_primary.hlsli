@@ -1,30 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The tracer's own camera rays (pt_prepare): what a pixel shows is what its own ray stops at, found in the traced scene, and
-// that is the pixel's surface for everything after: direct and bounced light, reflections, the filters, NRD and the guides
-// Ray Reconstruction gets. The owner, 2026-10-07: "Everything should be in the main picture", told that hair was a layer
-// added after the denoiser ("the wrong design entirely"), and of rays that start from HDRP's G-buffer: "yes, of course it
-// should be like that. Why isn't it? We want full, proper path tracing."
-// Hair is the first to go this way (its cards, a beard's, the brows': TGPT_MATERIAL_HAIR_LAYER, their strands' alpha at
-// their texture's own size). A see-through card is what a path tracer makes of a surface that covers part of a pixel: it
-// stops the ray with the chance its texel covers (the game's alpha as RealHair remaps it, a texel at least as opaque as its
-// depth prepass always: strand_cover), a new draw every frame, and the ray that passes goes on to the next card or to what
-// lies behind. So a pixel half covered is hair in half the frames and the wall in the other half, and the denoisers and
-// the upscaler average it, as they do every other light: no card count, no blend, no layer after the denoiser.
-// Until 2026-10-07 hair was such a layer (pt_hair.hlsl): its raw noise stayed (it flickered), and with HDRP's hair hidden the
-// depth and motion vectors at its pixels were the wall's behind it, which the composite, DLSS and Ray Reconstruction all
-// move a pixel's light by (it slid over the wall as the camera moved: PT-53, PT-56, PT-57). From then until round 20 the
-// plugin had HDRP draw the hair's depth (CharacterCapture.HoldLayerDepth); since PT-112 (A) HDRP draws nothing opaque while
-// tracing and the frame's depth and motion are these rays' own (pt_compose writes them into HDRP's buffers).
-// Every pixel (PT-59, the owner the same afternoon: "make sure WE trace the world, not the game"): primary_all walks the whole
-// scene for each pixel and makes its surface of what the ray stops at, with the hit's own motion and emission; HDRP's
-// G-buffer is then only what that hit is compared with (yardstick_code: the view TGPT_VIEW_YARDSTICK and the numbers in the
-// log, which is how every gap between the traced scene and the drawn one is found). TGPT_OPTION_GBUFFER_SURFACES is the
-// route before it: HDRP's G-buffer for the surface, the tracer's own rays for hair alone (primary_pixel).
-// A pixel's ray passes through the very point HDRP drew the frame's depth at (TGPT_Frame.invViewProj holds the frame's
-// sub-pixel shift, as HDRP's depth, its motion vectors' pixel centres and the upscaler's told shift do), and the light is
-// shown in the frame it was traced for, each pixel its own texel (PT-84; tracer.cpp, d3d11.hlsl composite). So HDRP's depth
-// places nothing of the traced picture any more: a record's distance is its own hit's. (Until 2026-10-08 the light was shown
-// a frame later, moved by that frame's motion vectors and matched to its pixels by HDRP's depth, which each record kept.)
+// PT-53 / PT-56 / PT-57 / PT-112 / PT-59 / PT-84: The tracer owns the first camera hit and its geometry
+// guides for every pixel.
 
 // ---------------------------------------------------------------- hair's strands
 // A hair material's strands (tracer.cpp bake_hair, FrameConstants.strandTiles by its color tile's detail index): its block

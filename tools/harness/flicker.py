@@ -1,24 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""What flickers from frame to frame, shown: the places of a step that change most between consecutive frames of a
-frozen world, cut out at full size over several frames, beside the game's own picture of the same place.
-
-  python tools/harness/flicker.py <run>/<scenario>/<step> [--game <run>/<scenario>/1-game] [--out sheet.jpg]
-                                  [--spots 6] [--box 224] [--frames 4] [--gain 1] [--boil]
-
-A run made with -KeepFrames has each step's frames as f00.raw, f01.raw, ... In a frozen world nothing moves, so every
-change between two frames is the renderer's own: noise, a denoiser's boiling, a light that flips. The script measures
-the mean change per pixel between consecutive frames (in 8-bit levels), finds the spots where it is largest (apart
-from each other), and writes one row a spot: the game's picture there, then the step's consecutive frames, then the
-change itself (white: 16 levels and more). It prints each spot's place (as shares of the screen) and its numbers, and
-the step's overall figure. Judge with the step taken with no denoiser first (AGENTS.md).
-
---boil looks for boiling instead: what a denoiser leaves when its input is unsteady, blotches whose brightness wanders
-slowly. It measures how much the mean of each 16-pixel block wanders over ALL the step's frames (the standard
-deviation, in levels; fine grain averages out of a block, a blotch does not), picks the spots where that is largest,
-and shows frames spread over the whole sequence, with the wander as the last tile (white: 4 levels). Use it on the
-NRD step (16 frames in the `quick` recipe): the owner, 2026-10-07: "we need to catch boiling with NRD and prevent that
-too". With --game the game's own figure is printed beside it: the picture boils where it is several times that.
-"""
+"""Measure temporal variation in raw and NRD captures. Use matching frozen scenes and sufficient frames, and distinguish spatial detail loss from reduced temporal noise. See docs/PT-HARNESS.md."""
 import argparse
 import sys
 from pathlib import Path

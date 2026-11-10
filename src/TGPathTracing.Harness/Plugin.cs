@@ -40,9 +40,8 @@ namespace TGPathTracing.Harness
     {
         private void Update() { Runner.Tick(); }
         private void LateUpdate() { Runner.Tick(); }
-        // A line at the bottom left while a step's picture does not count yet (the owner, 2026-10-09: "I'm never sure
-        // when I can trust the visuals"). Runner.Banner is empty while pictures are taken: a grabbed frame holds what
-        // IMGUI drew.
+        // A line at the bottom left while a step's picture does not count yet. Runner.Banner is
+        // empty while pictures are taken: a grabbed frame holds what IMGUI drew.
         private static GUIStyle style;
         private void OnGUI()
         {

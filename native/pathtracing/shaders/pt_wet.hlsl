@@ -1,18 +1,18 @@
-// SPDX-License-Identifier: MIT
-// Where the water has been (PT-52; the owner, 2026-10-07: "would be cool if the water waves left a wetness trail/shader on
-// surfaces that can be seen after the wave leaves them, like wet sand on the beach"). Each frame, before the camera's surfaces
-// are made (pt_prepare), every cell of the store round the camera asks where HDRP's water stands over its middle this frame
-// (pt_water_surface water_over: the tracer's own water surface, the waves as every ray meets them) and remembers it. The store's cells are the world's (levels of
-// WET_GRID x WET_GRID round the camera, the finest g.wetGrid.x, each next twice as coarse; a cell keeps its place in the world as
-// the camera moves, its record found by its world index modulo the grid, its key the index itself), so what a wave wetted stays
-// wet behind the camera and when it comes back.
-// A cell's record: how long ago the water last stood at or above each height, as points (height in the world, time) down a
-// falling line, the oldest highest; between two points the water fell from the one to the other. A new reading (W, now) drops
-// every point below W (the water stands over them now), keeping where the remembered fall crossed W, and joins the line; a
-// level held since it came (two points at it) moves its newer point on to now; a point that lies on the line from the one
-// before it to the new one (the water fell steadily) is dropped. With all WET_POINTS kept, the point between two others whose
-// line misses it by the least time goes. Points older than twice the slowest drying (sand's) are forgotten.
-//   One thread a cell: (x, y) = (cell, level x WET_GRID + row). pass.a.x: 1 empties every level's cells, 0 reads the water.
+// SPDX-License-Identifier: MIT Where the water has been (PT-52). Each frame, before the camera's surfaces
+// are made (pt_prepare), every cell of the store round the camera asks where HDRP's water stands over its
+// middle this frame (pt_water_surface water_over: the tracer's own water surface, the waves as every ray
+// meets them) and remembers it. The store's cells are the world's (levels of WET_GRID x WET_GRID round the
+// camera, the finest g.wetGrid.x, each next twice as coarse; a cell keeps its place in the world as the
+// camera moves, its record found by its world index modulo the grid, its key the index itself), so what a
+// wave wetted stays wet behind the camera and when it comes back. A cell's record: how long ago the water
+// last stood at or above each height, as points (height in the world, time) down a falling line, the oldest
+// highest; between two points the water fell from the one to the other. A new reading (W, now) drops every
+// point below W (the water stands over them now), keeping where the remembered fall crossed W, and joins the
+// line; a level held since it came (two points at it) moves its newer point on to now; a point that lies on
+// the line from the one before it to the new one (the water fell steadily) is dropped. With all WET_POINTS
+// kept, the point between two others whose line misses it by the least time goes. Points older than twice
+// the slowest drying (sand's) are forgotten. One thread a cell: (x, y) = (cell, level x WET_GRID + row).
+// pass.a.x: 1 empties every level's cells, 0 reads the water.
 #include "pt_common.hlsli"
 #include "pt_waves.hlsli"
 

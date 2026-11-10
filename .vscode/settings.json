@@ -1,0 +1,80 @@
+{
+  "search.useIgnoreFiles": true,
+  "search.followSymlinks": false,
+  "search.ripgrep.maxThreads": 2,
+  // Use standard interpreter support; the environments preview floods searches
+  // on bulk Python-file creation/deletion (microsoft/vscode-python-environments#1989).
+  "python.useEnvironmentsExtension": false,
+  // SDKs, release packages and local development history are fetched/generated.
+  "search.exclude": {
+    "**/.git": true,
+    "**/node_modules": true,
+    "**/.venv": true,
+    "**/venv": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/bin": true,
+    "**/obj": true,
+    ".development": true,
+    ".testruns": true,
+    ".cache": true,
+    "artifacts": true,
+    "build": true,
+    "tgpt-images": true,
+    "*-SDK-*": true,
+    "Streamline-*": true,
+    "RTXDI-Library-*": true,
+    "NVAPI-*": true,
+    "DXC-*": true,
+    "DLSS-NR-Runtime": true
+  },
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/logs/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/bin/**": true,
+    "**/obj/**": true,
+    ".development/**": true,
+    ".testruns/**": true,
+    ".cache/**": true,
+    "artifacts/**": true,
+    "build/**": true,
+    "tgpt-images/**": true,
+    "*-SDK-*/**": true,
+    "Streamline-*/**": true,
+    "RTXDI-Library-*/**": true,
+    "NVAPI-*/**": true,
+    "DXC-*/**": true,
+    "DLSS-NR-Runtime/**": true
+  },
+  // Native/managed sources remain available to their language services.
+  "python.analysis.include": ["tests", "tools", "native", "src"],
+  "python.analysis.exclude": [
+    "**/.*", "**/node_modules", "**/__pycache__", "**/venv",
+    "**/bin", "**/obj", "artifacts", "build", "tgpt-images",
+    "*-SDK-*", "Streamline-*", "RTXDI-Library-*", "NVAPI-*", "DXC-*",
+    "DLSS-NR-Runtime"
+  ],
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.analysis.userFileIndexingLimit": 2000,
+  // Scan the opened repository, rather than local historical copies or SDKs.
+  "git.autoRepositoryDetection": "subFolders",
+  "git.repositoryScanMaxDepth": 0,
+  "git.repositoryScanIgnoredFolders": [
+    ".git", ".development", ".testruns", ".cache", ".venv", "node_modules",
+    "artifacts", "build", "tgpt-images"
+  ],
+  "git.openRepositoryInParentFolders": "never",
+  "gitlens.advanced.repositorySearchDepth": 0,
+  "gitlens.advanced.maxListItems": 200,
+  "gitlens.advanced.maxSearchItems": 200,
+  "gitlens.graph.defaultItemLimit": 200,
+  "gitlens.graph.pageItemLimit": 200,
+  "gitlens.graph.searchItemLimit": 200
+}

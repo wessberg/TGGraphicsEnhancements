@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: MIT
-// The rules of the things the game moves (PT-71 item 4; the owner: "What moves is traced as it moves"), kept free of the game
-// so tests/moving_rules_tests.cs checks each (tests/MovingRules.Tests.csproj, docs/agents/moving.md). SceneCapture.Follow places
-// every frame, where HDRP draws it then: every GameObject mesh renderer that is not statically batched, every Drake entity the
-// game made movable (no Static tag), and every chunk the scan listed whose entities moved since; each with where it was the
-// frame before, for its own motion.
+// SPDX-License-Identifier: MIT The rules of the things the game moves (PT-71), kept free of the game so
+// tests/moving_rules_tests.cs checks each (tests/MovingRules.Tests.csproj, docs/agents/moving.md).
+// SceneCapture.Follow places every frame, where HDRP draws it then: every GameObject mesh renderer that is
+// not statically batched, every Drake entity the game made movable (no Static tag), and every chunk the scan
+// listed whose entities moved since; each with where it was the frame before, for its own motion.
 using System.Collections.Generic;
 namespace TGPathTracing
 {

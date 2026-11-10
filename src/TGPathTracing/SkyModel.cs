@@ -1,24 +1,7 @@
 // SPDX-License-Identifier: MIT
-// PT-112, the sky, ON TRIAL (docs/agents/sky-1.md, sky-2.md; the hidden "Sky trial", 0 by default): HDRP's sky moved into the
-// path tracer. The owner, 2026-10-11, of HDRP work that runs beside the trace: "Basically we want to move over anything that
-// could have run sequentially or block the GPU before, so we know there's no HDRP bottlenecks and any GPU/CPU waits will come
-// from our own rendering"; of the sky: "definitely bring that over too".
-// Outdoors the game's sky is HDRP's Physically Based Sky with its Cloud Layer. While the traced light is on screen and the
-// trial asks, for the gameplay camera:
-// - HDRP's sky environment (its cube map of the sky, the cube's blur, its ambient probes) is no longer brought up to date
-//   every frame: the sky's update mode is OnDemand through a volume of the plugin's own (only that parameter overridden, never
-//   Add<T>(true)). With the tracer's own sky (2, 3) HDRP is asked for one update each time its sun has turned a degree, for
-//   what HDRP still lights itself (transparent surfaces, its fog's colour); the measuring switch (1) asks for none.
-// - HDRP's sky and clouds drawn on the screen (HDRenderPipeline.RenderSky, RenderClouds) are left out by Harmony prefixes, and
-//   the composite draws every pixel whose camera ray met nothing (pt_compose, pt_sky.hlsli): from the map the rays read now
-//   (1), or the tracer's own sky per pixel (2, 3). In 2 at night (the game's star layer, its own shader graph
-//   TG/Skybox/PhysicallyBasedSky_Wyrdness, is not made by the tracer yet: sky-1 step 4) HDRP draws its sky and clouds as before.
-// - Each frame the tracer is handed what HDRP's sky is for the camera (TGPT_SetSkyModel): the Physically Based Sky's numbers
-//   as HDRP's own methods work them out, the directional lights that interact with the sky (the game's Sun and Moon, HDRP's
-//   celestial bodies), the Cloud Layer with the game's cloud map (opened by the tracer, no copy) and how far the wind has
-//   moved it (HDRP adds that only while it draws its clouds: kept here meanwhile, from where HDRP left it).
-// A line in the log counts HDRP's renders of its sky into a cube map every 10 s, whatever the trial (sky-1: "does it run every
-// frame in play?").
+// PT-112: Capture authored Physically Based Sky and Cloud Layer inputs for the hidden sky trial. The migration
+// must replace duplicate HDRP work without losing physical sky content; the production sky migration remains
+// incomplete.
 using System;
 using System.Collections.Generic;
 using System.Reflection;

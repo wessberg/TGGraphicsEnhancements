@@ -20,10 +20,10 @@
 
 namespace tgpt::share {
 constexpr uint32_t kMaxShared=16384; // the numbers, and the range of the tracer's heap they take
-// Every size is shared (PT-64, the owner: "Don't do copies"). A texture under 64 KB takes a 64 KB page of its own on the
-// tracer's device while both devices have it open, which the registry's count of the tracer's memory includes
-// (TGPT_SharedTexture.bytes, openBytes); until then such textures were left to their 64x64 atlas tiles.
-// A handle (TGPT_SharedTexture.handle): the number in its low bits, its registration's serial (17 bits) above.
+// Every size is shared (PT-64). A texture under 64 KB takes a 64 KB page of its own on the tracer's device
+// while both devices have it open, which the registry's count of the tracer's memory includes
+// (TGPT_SharedTexture.bytes, openBytes); until then such textures were left to their 64x64 atlas tiles. A
+// handle (TGPT_SharedTexture.handle): the number in its low bits, its registration's serial (17 bits) above.
 constexpr uint32_t kNumberBits=14, kSerialMask=(1u<<17)-1u;
 static_assert((1u<<kNumberBits)==kMaxShared, "a handle's number covers the range");
 

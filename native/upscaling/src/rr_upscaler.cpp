@@ -129,11 +129,7 @@ private:
             create.InWidth=width_; create.InHeight=height_; create.InTargetWidth=outWidth_; create.InTargetHeight=outHeight_;
             create.InPerfQualityValue=NVSDK_NGX_PerfQuality_Value(quality_);
             create.InFeatureCreateFlags=int(flags_);
-            // NVIDIA's Default preset in every quality mode, as its guide recommends ("we recommend games stick to ..._Default
-            // for all modes", DLSS-RR Integration Guide 3.13). In SDK 310.9.16 Default is preset F (the guide's tables give
-            // memory and speed for "Presets Default, F" together). The owner, 2026-10-11: "Use NVIDIA's Default, if that is
-            // currently preset F. If it's not, use preset F." Until then F was pinned. A newer nvngx_dlssd.dll whose Default
-            // is no longer F must be looked at again (PT-127).
+            // PT-127: Use documented vendor signals/settings and retain unresolved audit items.
             for(const char* mode:{NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality,
                                   NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance,
                                   NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality})

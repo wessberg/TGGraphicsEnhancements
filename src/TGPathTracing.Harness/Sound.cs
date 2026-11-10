@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: MIT
-// No sound during a run (the owner, 2026-10-07: "please turn off the volume in the game", and again after the next runs:
-// "Also keep the game volume turned off when we test"). The game's sound is FMOD's (FMODUnity.dll), not Unity's, so
-// Unity's own master volume, the first try, muted nothing. FMOD's master channel group is muted through the game's FMOD
-// integration (RuntimeManager.MuteAllEvents), by name, so the runner needs no reference to it; Unity's volume goes to 0
-// too (videos). Neither is a setting of the game's: nothing the player set is touched, and both come back at the end.
+// SPDX-License-Identifier: MIT No sound during a run. The game's sound is FMOD's (FMODUnity.dll), not
+// Unity's, so Unity's own master volume, the first try, muted nothing. FMOD's master channel group is muted
+// through the game's FMOD integration (RuntimeManager.MuteAllEvents), by name, so the runner needs no
+// reference to it; Unity's volume goes to 0 too (videos). Neither is a setting of the game's: nothing the
+// player set is touched, and both come back at the end.
 using System;
 using System.Reflection;
 using UnityEngine;

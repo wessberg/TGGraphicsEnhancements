@@ -156,10 +156,9 @@ namespace TGPathTracing
         // a fire's within a metre; a glowing thing is the one the light was kept for.
         internal static float SearchReach(EmitterKind kind) => kind == EmitterKind.Brazier || kind == EmitterKind.Fire || kind == EmitterKind.Lava ? 1f : 0.5f;
 
-        // What a light kept by its names stands at: the nearest glowing thing within GlowReach of it, whether or not a light
-        // claimed it (its own light did); -1 for none. The owner, 2026-10-06, of the mineral cave's six warm lights in a group
-        // named "torch_06" with no torch at them: a light kept for its name must also have its flame, lamp or glowing thing at
-        // it, else it is the game's fill light.
+        // A name-matched light must have a flame, lamp or emissive surface nearby. Return the nearest glowing
+        // object within GlowReach, even if another light already claims it, or -1. Names alone otherwise retain
+        // artist fill lights.
         internal static int EmitterAt(float x, float y, float z, IList<GlowThing> things, out float distance)
         {
             int best = -1; distance = float.MaxValue;

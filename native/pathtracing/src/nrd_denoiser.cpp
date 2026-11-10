@@ -204,13 +204,14 @@ bool Nrd::dispatch(ID3D12GraphicsCommandList* list, uint32_t slot, UploadRing& r
     c.isHistoryConfidenceAvailable=f.diffuseConfidence.resource && f.specularConfidence.resource;
     c.accumulationMode=restart_ ? nrd::AccumulationMode::CLEAR_AND_RESTART : f.reset ? nrd::AccumulationMode::RESTART : nrd::AccumulationMode::CONTINUE;
     if(nrd::SetCommonSettings(*rt.instance, c)!=nrd::Result::SUCCESS) { error="NRD refused this frame's common settings"; return false; }
-    // NVIDIA's defaults, but for three things below. The firefly suppression is on (REBLUR's default, not RELAX's), which takes
-    // a pixel brighter than all eight around it down to the brightest of them., which takes a pixel brighter than all eight around it down to the brightest of them.
-    // It costs light (PT-75: 5 of 100 parts of a closed room's bounced light, 6 to 10 where the sky comes through small
-    // holes, blue most: tgpt_gpu_test nrdMean), and it was off for some hours on 2026-10-08. In the game every scene was
-    // then sprinkled with dots that linger (the owner, 18:10: "stars or sprinkles ... constantly across all scenes"; the
-    // tavern: 37 places a frame against 3 with it on). A rare bright path held for as long as RELAX's history is worse
-    // than the light it carries. The light comes back by making those paths less rare in the tracer, never by this switch.
+    // NVIDIA's defaults, but for three things below. The firefly suppression is on (REBLUR's default,
+    // not RELAX's), which takes a pixel brighter than all eight around it down to the brightest of
+    // them., which takes a pixel brighter than all eight around it down to the brightest of them. It
+    // costs light (PT-75: 5 of 100 parts of a closed room's bounced light, 6 to 10 where the sky comes
+    // through small holes, blue most: tgpt_gpu_test nrdMean), and it was off for some hours on
+    // 2026-10-08. In the game every scene was then sprinkled with dots that linger. A rare bright path
+    // held for as long as RELAX's history is worse than the light it carries. The light comes back by
+    // making those paths less rare in the tracer, never by this switch.
     if(f.kind!=rt.kind) { error="NRD's instance is for another kind of frame"; return false; }
     // NRD's history as its documentation sets it: "Always accumulate in 'seconds' not in 'frames', use
     // 'GetMaxAccumulatedFrameNum' for conversion" (NRDSettings.h), at the real frame rate (README: frame generation's frames

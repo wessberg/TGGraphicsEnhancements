@@ -1129,8 +1129,8 @@ class SourceConsistency(unittest.TestCase):
         seen = common.split("float3 shade_seen(", 1)[1].split("\n}", 1)[0]
         self.assertIn("const float rayAlpha = reflection_alpha(roughness);", seen)
         self.assertIn("ray_cone(hit.footprint, coneSpread + rayAlpha);", seen)
-        # Reflection Boost never roughens (a mirror stays one), in the tracer and in Ray Reconstruction's guides alike; its rule
-        # for stone and metal is the owner's (2026-10-06) and stays.
+        # Reflection Boost never roughens an existing mirror. Check the same metal/stone rule in traced shading
+        # and RR guides.
         boost = common.split("void reflection_boost(", 1)[1].split("\n}", 1)[0]
         self.assertIn("roughness = min(roughness, unboosted);", boost)
         self.assertIn("roughness = min(roughness, unboosted);", self.text(PT + "shaders/d3d11.hlsl"))
@@ -1172,8 +1172,9 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("dxgi->GetSharedHandle(&handle)", share)
         self.assertIn("host().add_hook(table[5], reinterpret_cast<void*>(&create_2d), &realCreate2D)", share)
         self.assertIn("host().add_hook(table3[54], reinterpret_cast<void*>(&create_2d1), &realCreate2D1)", share)
-        # Only what shaders alone read: render targets, depth, UAVs, CPU-written and shared textures stay. Every size (PT-64, the
-        # owner: "Don't do copies"): until then one under 64 KB with its mips kept its 64x64 atlas tile.
+        # Only what shaders alone read: render targets, depth, UAVs, CPU-written and shared textures
+        # stay. Every size (PT-64): until then one under 64 KB with its mips kept its 64x64 atlas
+        # tile.
         self.assertIn("d.BindFlags==D3D11_BIND_SHADER_RESOURCE && d.CPUAccessFlags==0", share)
         self.assertNotIn("kMinBytes", self.text(PT + "src/texture_share.hpp"))
         self.assertNotIn("kMinBytes", share)
@@ -1255,9 +1256,9 @@ class SourceConsistency(unittest.TestCase):
         # On a thread of its own: the game's start doesn't wait for it.
         self.assertIn("std::thread([g=ComPtr<ID3D11Device>(game), d=ComPtr<ID3D12Device>(device), w=std::string(when)] {", share)
         self.assertIn("}).detach();", share)
-        # The video memory cap: a texture opens only while Windows' count for the game, the tracer's second count included,
-        # stays under 97 % of the budget (90 % until 2026-10-09: the owner's session sat at 93 % in a small interior and stayed
-        # paused for good), and only if it takes a quarter of what is left at most (the largest stop first).
+        # The video memory cap: a texture opens only while Windows' count for the game, the tracer's
+        # second count included, stays under 97 % of the budget, and only if it takes a quarter of
+        # what is left at most (the largest stop first).
         self.assertIn("constexpr double kBudgetShare=0.97;", share)
         self.assertIn("constexpr uint64_t kLargestShare=4;", share)
         self.assertIn("if(bytes*kLargestShare<=left) return true;", share)
@@ -1281,13 +1282,13 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("TGPT_TEST_SHARE_BREAK=99", cmake)
 
     def test_path_tracing_grass(self):
-        # Grass and leaves as HDRP shades them (PT-03, docs/PT-VEGETATION.md; tgpt_gpu_test measures each): a blade's
-        # reflectance is its diffusion profile's (0.0023 for the game's foliage, where 0.04 made wet grass glint white), in the
-        # tracer and in Ray Reconstruction's guide; the light through it is its material's own share (the plugin works it out
-        # from the profile the material names: TGPT_Material.subsurface), from the sky and bounced light behind it too; its material's occlusion
-        # stays; its rays leave from its own face; and it lets a light's shadow ray through half the time (the owner chose
-        # partial grass shadows, 2026-10-06: "We want grass shadows, but not those horrible looking ones"), micromaps leaving
-        # its covered texels to that test.
+        # Grass and leaves as HDRP shades them (PT-03, docs/PT-VEGETATION.md; tgpt_gpu_test measures
+        # each): a blade's reflectance is its diffusion profile's (0.0023 for the game's foliage,
+        # where 0.04 made wet grass glint white), in the tracer and in Ray Reconstruction's guide; the
+        # light through it is its material's own share (the plugin works it out from the profile the
+        # material names: TGPT_Material.subsurface), from the sky and bounced light behind it too; its
+        # material's occlusion stays; its rays leave from its own face; and it lets a light's shadow
+        # ray through half the time, micromaps leaving its covered texels to that test.
         prepare = self.text(PT + "shaders/pt_prepare.hlsl")
         common = self.text(PT + "shaders/pt_common.hlsli")
         self.assertIn("const bool leaf = deferred && translucent;", prepare)
@@ -1334,9 +1335,9 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("if ((m.flags & MATERIAL_THIN_CLOTH) != 0 && state == OMM_OPAQUE) state = OMM_UNKNOWN_OPAQUE;", self.text(PT + "shaders/pt_omm_bake.hlsl"))
         self.assertIn("if (!found && clothCandidate && scene_sways() && window < CLOTH_SWAY_REACH) {", prepare)
         self.assertIn("if ((mat.Flags & Tgpt.MaterialAlphaTest) == 0) { mat.AlphaCutoff = 0f; mat.Flags |= Tgpt.MaterialAlphaTest; }", self.text("src/TGPathTracing/SceneCapture.cs"))
-        # PT-49 (the owner: "we really need to make sure we detect cloth correctly. That also includes clothes hanging on a drier
-        # and stuff"): thin cloth is found by what it is (ClothRules: the game's TG/Clothes/ family, a hanging sheet's name, a
-        # cloth drawn from both sides), checked without the game against the census of the harness's scenes.
+        # PT-49: thin cloth is found by what it is (ClothRules: the game's TG/Clothes/ family, a
+        # hanging sheet's name, a cloth drawn from both sides), checked without the game against the
+        # census of the harness's scenes.
         capture = self.text("src/TGPathTracing/SceneCapture.cs")
         self.assertIn("else if (ClothRules.IsThinCloth(shaderName, m.name, (mat.Flags & Tgpt.MaterialDoubleSided) != 0))", capture)
         self.assertIn("if (shader.StartsWith(ClothFamily, StringComparison.OrdinalIgnoreCase)) return true;", self.text("src/TGPathTracing/ClothRules.cs"))
@@ -1395,10 +1396,9 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(check, tests)
 
     def test_path_tracing_world_is_what_the_game_draws(self):
-        # PT-63, PT-61 (the owner, 2026-10-07: "make sure WE trace the world, not the game"; of objects left out: "that
-        # sounds like a big problem, if things suddenly disappear when PT is enabled. Fix that"). The tracer's own camera
-        # rays show only what is in the traced scene, so what is traced is what the game draws, by the game's own rules
-        # (WorldRules, checked without the game by tests/world_rules_tests.cs).
+        # PT-63, PT-61. The tracer's own camera rays show only what is in the traced scene, so what is
+        # traced is what the game draws, by the game's own rules (WorldRules, checked without the game
+        # by tests/world_rules_tests.cs).
         capture = self.text("src/TGPathTracing/SceneCapture.cs")
         rules = self.text("src/TGPathTracing/WorldRules.cs")
         # Statically batched renderers are traced, once a combined mesh: never skipped again.
@@ -1437,8 +1437,8 @@ class SourceConsistency(unittest.TestCase):
         for text in ('"; LOD as drawn (bias "', '" statically batched renderers traced in "', '" Drake entities the game has not loaded for drawing (left out)"',
                      '" trees past their last mesh traced as that mesh (the game draws a card)"'):
             self.assertIn(text, capture)
-        # No distance past which nothing is traced (the owner: "Why? Do that"): the Scene Radius and Ray Distance rows and
-        # every cut by them are gone, not set wide; what the game draws is traced however far off.
+        # No distance past which nothing is traced: the Scene Radius and Ray Distance rows and every
+        # cut by them are gone, not set wide; what the game draws is traced however far off.
         settings = self.text("src/TGPathTracing/Settings.cs")
         rows = self.text("src/TGPathTracing/PathTracingRow.cs")
         for text in (settings, rows, capture, leshy, self.text("src/TGPathTracing/CharacterCapture.cs"), self.text("src/TGPathTracing/WaterCaustics.cs"),
@@ -1453,10 +1453,10 @@ class SourceConsistency(unittest.TestCase):
         self.assertNotIn("CountDecals()", capture)
         self.assertIn("DecalCapture.Summary", capture)
         self.assertIn("DecalCapture.Capture(hd)", self.text("src/TGPathTracing/HdrpPasses.cs"))
-        # Grass, leaves and trunks sway in the tracer as the game sways them (the owner: "of course our shadows and reflections
-        # should move alongside the grass and leaves swaying in the wind. Otherwise what's the point of realtime ray tracing"):
-        # the game's three vegetation shaders' vertex maths (read from their compiled code), every such instance posed every
-        # frame in a group with the others of its cell, with no count or distance that leaves one still.
+        # Grass, leaves and trunks sway in the tracer as the game sways them: the game's three
+        # vegetation shaders' vertex maths (read from their compiled code), every such instance posed
+        # every frame in a group with the others of its cell, with no count or distance that leaves
+        # one still.
         header = self.text(PT + "include/tgpt_api.h")
         self.assertIn("TGPT_EXPORT int32_t TGPT_CALL TGPT_SetPlantWind(const TGPT_PlantWindFrame* frame, const TGPT_PlantWind* winds, uint32_t count);", header)
         self.assertIn("TGPT_EXPORT int32_t TGPT_CALL TGPT_SetWindNoise(uint32_t key, uint32_t width, uint32_t height, uint32_t flags, const uint8_t* texels);", header)
@@ -2208,9 +2208,10 @@ class SourceConsistency(unittest.TestCase):
         caustics_plugin = self.text("src/TGPathTracing/WaterCaustics.cs")
         self.assertIn("d.SmoothnessNear = s.startSmoothness; d.SmoothnessFar = s.endSmoothness;", caustics_plugin)
         self.assertIn("internal float SmoothnessFadeStart, SmoothnessFadeDistance;", self.text("src/TGPathTracing/NativeTracer.cs"))
-        # 3: our own foam (the owner, 2026-10-08: "our own foam"): where it forms is the simulation's squeeze past the
-        # surface's threshold; how much and what it looks like is written from what the game's foam texture holds and from
-        # how foam behaves, not from Unity's shader. The lines that were a port of Unity's foam erosion are gone.
+        # 3: our own foam: where it forms is the simulation's squeeze past the surface's threshold;
+        # how much and what it looks like is written from what the game's foam texture holds and from
+        # how foam behaves, not from Unity's shader. The lines that were a port of Unity's foam
+        # erosion are gone.
         for old in ("eroded", "pow(age, 32.0)", "smoothstep(0.1, 0.9", "lerp(5.0, 0.1, life)", "0.225 * (sample.a + sample.r)", "frac(phase + 0.5)"):
             self.assertNotIn(old, foam, old)
         self.assertIn("static const float FOAM_ONSET = 0.45;", foam)
@@ -2277,11 +2278,11 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("#define TGPT_OPTION_NRD 1024u", header)
         self.assertIn("#define TGPT_FEATURE_NRD 16u", header)
         self.assertIn("#define TGPT_FEATURE_NRD_ACTIVE 32u", header)
-        # NRD as its README sets it up (PT-127; the owner, 2026-10-11: "Obviously we want to 100% follow NVIDIA's and AMD's
-        # implementation guidelines for these technologies"): RELAX (REBLUR on trial) for the diffuse and the specular light,
-        # all the light a surface gives, demodulated by NRD_MaterialFactors, with real hit distances, the shading normal and
-        # 2.5D motion. Until then RELAX took the bounced light alone against the triangle's normal with a hit distance of 1
-        # and the tracer's own filters the rest: the gravel came out milky (run 20261011-150230: the region's detail 6.7, as
+        # NRD as its README sets it up (PT-127): RELAX (REBLUR on trial) for the diffuse and the
+        # specular light, all the light a surface gives, demodulated by NRD_MaterialFactors, with real
+        # hit distances, the shading normal and 2.5D motion. Until then RELAX took the bounced light
+        # alone against the triangle's normal with a hit distance of 1 and the tracer's own filters
+        # the rest: the gravel came out milky (run 20261011-150230: the region's detail 6.7, as
         # documented 8.8, with none 15.5) and the tavern's wood grain and small shadows blurred.
         nrd = self.text(PT + "src/nrd_denoiser.cpp")
         self.assertIn("const nrd::DenoiserDesc denoiser{kRelax, denoiser_of(kind)};", nrd)
@@ -2316,10 +2317,10 @@ class SourceConsistency(unittest.TestCase):
         # 0.06 without). Settled in the game: do not feed it back again.
         self.assertIn("    k.denoise1[1]=kInvalid;", self.text(PT + "src/tracer.cpp"))
         self.assertNotIn("nrdDirectionKept", self.text(PT + "src/tracer.cpp"))
-        # PT-75, PT-85: RELAX's firefly suppression is ON. Off, it kept 5 of 100 parts more of a closed room's bounced light,
-        # and in the game every scene was sprinkled with dots that linger (the owner, 2026-10-08: "stars or sprinkles ...
-        # constantly across all scenes"; the tavern: 37 places a frame against 3). Settled in the game: do not turn it off
-        # again to gain light; make the rare bright paths less rare in the tracer.
+        # PT-75, PT-85: RELAX's firefly suppression is ON. Off, it kept 5 of 100 parts more of a
+        # closed room's bounced light, and in the game every scene was sprinkled with dots that
+        # linger. Settled in the game: do not turn it off again to gain light; make the rare bright
+        # paths less rare in the tracer.
         self.assertIn("relax.enableAntiFirefly=true;", nrd)
         self.assertNotIn("enableAntiFirefly=false", nrd)
         # NRD's units follow the bounced light's own median (a histogram read back), not the brightest light in the scene:
@@ -2382,8 +2383,7 @@ class SourceConsistency(unittest.TestCase):
             self.assertRegex(tracer, r"st\." + name + r"\[i\]=make_texture\(d, heap, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT,")
         self.assertIn("historyOut[p] = float4(color, sqrt(variance));", self.text(PT + "shaders/pt_temporal.hlsl"))
         atrous = self.text(PT + "shaders/pt_atrous.hlsl")
-        # PT-85: the pass does NOT keep the light of rare bright samples (it did for some hours on 2026-10-08, and in the game
-        # each became a soft round disc held by the history: the owner's "orbs ... like an overlay ... seemingly anywhere").
+        # PT-85: the pass does NOT keep the light of rare bright samples.
         self.assertIn("sum += c.rgb * w; variance += c.a * c.a * w * w; weights += w;", atrous)
         # PT-75's cost stays for now: against the centre's own noise, and divided by its own weights' sum, a bright, noisy
         # pixel takes its dim neighbours' light and they refuse its own (a candle-lit floor's direct light keeps 0.75 of its
@@ -2749,12 +2749,12 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("diffuse = ls.irradiance * nl * terminator_softening(s, ls.dir) / PI;", self.text(PT + "shaders/pt_rtxdi.hlsli"))
 
     def test_path_tracing_face_on_its_mesh(self):
-        # PT-43, PT-44 (the owner, of Ron: "In vanilla, you see blushes and details on his cheek, and we see is eyelid casting
-        # a shadow or whatever. In our rendering there's none of that"). A character's skin whose own triangle the camera ray
-        # finds under HDRP's surface, and an eye, are lit from that triangle (onMesh): their rays leave a millimetre above it
-        # and every back face stops them, so the lids, brow and nose shadow them; from ray_offset's 2 cm out (and with back
-        # faces within near_back passed) the eye was lit edge to edge. Skin keeps its material's ambient occlusion (GBuffer3's
-        # tag, as a leaf's) for its bounced and sky light.
+        # PT-43, PT-44. A character's skin whose own triangle the camera ray finds under HDRP's
+        # surface, and an eye, are lit from that triangle (onMesh): their rays leave a millimetre
+        # above it and every back face stops them, so the lids, brow and nose shadow them; from
+        # ray_offset's 2 cm out (and with back faces within near_back passed) the eye was lit edge to
+        # edge. Skin keeps its material's ambient occlusion (GBuffer3's tag, as a leaf's) for its
+        # bounced and sky light.
         common = self.text(PT + "shaders/pt_common.hlsli")
         prepare = self.text(PT + "shaders/pt_prepare.hlsl")
         self.assertIn("float surface_offset(Surface s) { return s.onMesh ? 0.001 + s.distance * 0.0002 : ray_offset(s.distance); }", common)
@@ -2781,9 +2781,9 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(check, gpu)
 
     def test_path_tracing_round_surfaces(self):
-        # PT-04 (the owner, 2026-10-06: jars, cups, cloth folds and shoulders looked "stepped"/low-poly traced). What the tracer
-        # draws from its own mesh (see-through glass, props HDRP draws forward, a bottle's far side) is shaded by the mesh's
-        # vertex normals (Hit.rounded), turned to face the viewer at the outline; rays still start from the triangle's own.
+        # PT-04. What the tracer draws from its own mesh (see-through glass, props HDRP draws forward,
+        # a bottle's far side) is shaded by the mesh's vertex normals (Hit.rounded), turned to face
+        # the viewer at the outline; rays still start from the triangle's own.
         common = self.text(PT + "shaders/pt_common.hlsli")
         self.assertIn("float3 rounded;    // the mesh's own smooth normal there", common)
         self.assertIn("if (mesh.normals != INVALID && (g.settings2.y & OPTION_FACETED) == 0) {", common)
@@ -2971,12 +2971,8 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(name, checks)
 
     def test_path_tracing_materials_as_the_games_shaders_show_them(self):
-        # PT-64 (2026-10-07). Since the tracer's own camera rays make every pixel's surface, what the player sees of a
-        # surface is what a hit reads of its material. The owner, of the tracer reading a handful of shaders its own way:
-        # "sounds like a big problem, fix that"; of fixed numbers: "Big problem too"; of 64x64 copies: "Don't do copies"; of a
-        # reflection borrowing the on-screen material: "Well, don't". And at 17:55: "remove all the 'hacks' and workarounds as
-        # we go". The yardstick named the materials: the game's rock, grass, ground, leaves, trunks and furniture, each drawn
-        # by a Shader Graph of the game's own that the tracer read HDRP Lit's way.
+        # PT-64: Read original game textures and material values without reduced-resolution private
+        # copies.
         header = self.text(PT + "include/tgpt_api.h")
         common = self.text(PT + "shaders/pt_common.hlsli")
         programs = self.text(PT + "shaders/pt_materials.hlsli")
@@ -3087,8 +3083,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("const bool transmits = (features & 7u) >= 2u && (features & 7u) <= 3u;", self.text(PT + "shaders/d3d11.hlsl"))
         self.assertIn("c.extras[1]=frame.thickProfiles;", self.text(PT + "src/tracer.cpp"))
         self.assertIn('"Reflection Boost leaves skin\'s reflections as the game made them"', self.text("tests/pathtracing_gpu_test.cpp"))
-        # Its mirror share goes to metal (the owner, 2026-10-06: "we want metal to reflect more than stone and brick"): a
-        # non-metal only gets glossier. One rule for the deferred surface, the forward one and Ray Reconstruction's guides.
+        # Its mirror share goes to metal: a non-metal only gets glossier. One rule for the deferred
+        # surface, the forward one and Ray Reconstruction's guides.
         self.assertIn("f0 = lerp(f0, f0 / max(top, 1e-3), 0.7 * boost * metal);", common)
         self.assertIn("roughness = lerp(roughness, 0.05, saturate(boost * (1.0 + metal)));", common)
         self.assertEqual(self.text(PT + "shaders/pt_prepare.hlsl").count("reflection_boost(roughness, f0, "), 2)
@@ -3173,8 +3169,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertNotIn("ShadowDetail", self.text("src/TGPathTracing/Settings.cs"))
         self.assertIn("private const float Highlight = 0.5f;", passes)
         settings = self.text("src/TGPathTracing/Settings.cs")
-        # 35 since 2026-10-08 (the owner, of the tavern at 50, 40, 35 and 25: "Do Dark ADaption 35 as default then"): the room
-        # as a whole at the game's own level (23.3 against 23.5), a candle's surroundings 1.3 times the game's (2.8 at 50).
+        # 35 since 2026-10-08: the room as a whole at the game's own level (23.3 against 23.5), a
+        # candle's surroundings 1.3 times the game's (2.8 at 50).
         self.assertIn('DarkAdaptation = file.Bind(Section, "Dark adaptation", 35, Row(order++, "Dark Adaptation", new AcceptableValueRange<int>(0, 100),', settings)
         self.assertIn('var legacy = file.Bind(Advanced, "Auto exposure compensation", 0f, Hidden("Replaced by Exposure."));', settings)
         self.assertIn("float most = Mathf.Clamp(gameEv - settings.ExposureLowest.Value, 0f, 12f);", passes)
@@ -3186,11 +3182,9 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("float v = traced_ungained(luminance(light), traced_gain());", meter)
         self.assertNotIn("/ traced_gain();", meter)
         common_text = self.text(PT + "shaders/pt_common.hlsli")
-        # PT-73 e (the lantern's wall): the gain's automatic part by each pixel's own brightness: all of it in the dark, none
-        # from HIGHLIGHT_KEPT up (the game's exposure there, never darker), arriving at it with the slope of the line L' = L.
-        # Applied where the light is stored for the composite, after NRD; the meter and Fog Adaptation's histogram take it
-        # back out with the same curve solved backwards (one W in both shader files); nothing where the automatic part is 1.
-        # The owner, 2026-10-08 18:30: hold 1 (it was 2 for a day; the tavern's lights were "a bit overexposed/bloomy").
+        # PT-73: Highlight hold applies full automatic gain in darkness and none at HIGHLIGHT_KEPT, with unit
+        # slope at the threshold. Apply after NRD; metering solves the same curve backwards. Keep the accepted
+        # threshold 1 in both shader paths.
         self.assertIn("static const float HIGHLIGHT_KEPT = 1.0;", common_text)
         self.assertIn("if (!(automatic > 1.0)) return 1.0;", common_text)
         self.assertIn("return (1.0 + b * (1.0 - x) * (1.0 - x) / (1.0 + b * x * (1.0 - x))) / automatic;", common_text)
@@ -3324,10 +3318,9 @@ class SourceConsistency(unittest.TestCase):
         # Every light in the loaded scenes counts, including DontSave ones (Conversation Lighting Overhaul's).
         lights = self.text("src/TGPathTracing/SceneLights.cs")
         self.assertNotIn("string[] PlacedNames", lights)
-        # PT-47 (the owner, 2026-10-06: only fill, fake area and fake bounce lights are dropped; "emissive things, like crystals
-        # in a cave, or magic ... should still emit light"): a light the names leave out is kept where a glowing thing no flame's
-        # or lamp's light claims stands at it (LightRules, checked without the game by tests/light_rules_tests.cs), with HDRP's
-        # range, and every left-out and kept-for-a-glow name is logged with what is at it.
+        # PT-47: a light the names leave out is kept where a glowing thing no flame's or lamp's light
+        # claims stands at it (LightRules, checked without the game by tests/light_rules_tests.cs),
+        # with HDRP's range, and every left-out and kept-for-a-glow name is logged with what is at it.
         self.assertIn("int at = LightRules.GlowAt(p.x, p.y, p.z, things, out float distance, out _);", lights)
         self.assertIn("if ((p - camera).sqrMagnitude > r2 || ByNames(light).placed || !LightsWorld(light.GetComponent<HDAdditionalLightData>(), lightLayers)) continue;\n                LightRules.Claim(p.x, p.y, p.z, things);", lights.replace("\r\n", "\n"))
         self.assertIn("internal static bool IsEffectLight(Light light) => Classify(light).effect;", lights)
@@ -3335,8 +3328,9 @@ class SourceConsistency(unittest.TestCase):
         rules = self.text("tests/LightRules.Tests.csproj")
         self.assertIn('<Compile Include="..\\src\\TGPathTracing\\LightRules.cs" Link="LightRules.cs" />', rules)
         self.assertIn("LightRules.Tests", self.text("docs/TESTING.md"))
-        # Each traced light is the size of what emits it (the owner, 2026-10-06: "whatever is most realistic"), measured from the
-        # emitting thing at it or its kind's size; HDRP's radius (an artist's value for soft shadows) only for a mod's own light.
+        # Each traced light is the size of what emits it, measured from the emitting thing at it or
+        # its kind's size; HDRP's radius (an artist's value for soft shadows) only for a mod's own
+        # light.
         self.assertNotIn("Mathf.Clamp(radius, 0.02f, fire ? 1f : 0.3f)", lights)
         self.assertIn("n.Radius = size.radius;", lights)
         self.assertIn("if (at < 0) s.radius = LightRules.DefaultRadius(kind);", lights)
@@ -3363,8 +3357,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("return lightSide ? THIN_THROUGH : near_back(s.distance);", common)
         self.assertEqual(self.text(PT + "shaders/pt_rtxdi.hlsli").count("light_ray_end(ls, dist, offset), near_back_towards(s, v / dist));"), 2)
         self.assertIn("\"a candle's light at its flame no longer lights its own wax from inside: the wax's top shadows its sides\"", self.text("tests/pathtracing_gpu_test.cpp"))
-        # A light kept by a flame's or a lamp's name needs its flame, lamp or glowing thing at it (the owner, of the mineral cave's
-        # six warm lights in a group named "torch_06": "I only see one torch in the scene"), else it is a fill light, logged.
+        # A light kept by a flame's or a lamp's name needs its flame, lamp or glowing thing at it,
+        # else it is a fill light, logged.
         self.assertIn("if (LightRules.EmitterAt(p.x, p.y, p.z, things, out _) >= 0) emitterSeen[id] = named.parent;", lights)
         self.assertIn("else { c.placed = true; c.noEmitter = true; }", lights)
         self.assertIn("\"\\\" left out (\" + NoEmitterText(light)", lights)
@@ -3426,9 +3420,9 @@ class SourceConsistency(unittest.TestCase):
         # the footprint's sides the strands of a card turned from the camera ran together into an even veil.
         self.assertIn("static const uint STRAND_ANISO = 9;", hair)
         self.assertIn("f.lod = log2(max(max(major / float(f.taps), minor), 1e-6)) + asfloat(g.hair.w);", hair)
-        # No fixed count of cards changes what the picture converges to (the owner, 2026-10-07: "There is no budgets or limits
-        # there, this is PT"): past the cards lit one by one the ray goes on and stops at a card by chance, as its cover gives.
-        # (Every card so now: none is lit "one by one" first, there is no count at all.)
+        # No fixed count of cards changes what the picture converges to: past the cards lit one by one
+        # the ray goes on and stops at a card by chance, as its cover gives. (Every card so now: none
+        # is lit "one by one" first, there is no count at all.)
         self.assertNotIn("HAIR_LAYERS", hair)
         self.assertIn("if (ray_chance(inst, geo, prim, PRIMARY_SALT) < c) { cover = c; hair = true; q.CommitNonOpaqueTriangleHit(); }", hair)
         # Each strand's light by the game's normal map (RealHair: Lambert about its normal-mapped normal; the highlights shifted
@@ -3506,10 +3500,11 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("if(m.flags&(TGPT_MATERIAL_CAMERA_ONLY|TGPT_MATERIAL_GLASS|TGPT_MATERIAL_STRANDS|TGPT_MATERIAL_HAIR_LAYER)) return false;", self.text(PT + "src/scene.cpp"))
         # The game's materials are left as they are: the tracer gives glossy glass texels a mirror finish itself.
         self.assertNotIn("GlassFinish.Set(", self.text("src/TGPathTracing/HdrpPasses.cs"))
-        # Light inside subsurface materials (PT-40, PT-43; the owner, 2026-10-07: "everything should be path traced"): a
-        # random walk inside the traced mesh by HDRP's diffusion profiles (its own conversion to a medium), lit where it
-        # comes out, for the camera's pixels (pt_walk) and where paths and reflections meet such a material
-        # (subsurface_vertex). HDRP's screen-space scattering (pt_sss) is gone: no blur of the light on screen.
+        # Light inside subsurface materials (PT-40, PT-43): a random walk inside the traced mesh by
+        # HDRP's diffusion profiles (its own conversion to a medium), lit where it comes out, for the
+        # camera's pixels (pt_walk) and where paths and reflections meet such a material
+        # (subsurface_vertex). HDRP's screen-space scattering (pt_sss) is gone: no blur of the light
+        # on screen.
         self.assertFalse((ROOT / (PT + "shaders/pt_sss.hlsl")).exists())
         self.assertNotIn("pt_sss", self.text("CMakeLists.txt"))
         walk = self.text(PT + "shaders/pt_walk.hlsl")
@@ -3624,12 +3619,13 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("return caustic_through(origin, s.normal, s.geoNormal, v / dist, dist, false, straight);", self.text(PT + "shaders/pt_rtxdi.hlsli"))
         self.assertIn("NormalStream = Tgpt.NoStream };", self.text("src/TGPathTracing/SceneCapture.cs"))
         self.assertIn('"glass focuses the sun into a bright spot, with a darker ring round it (caustics)"', self.text("tests/pathtracing_gpu_test.cpp"))
-        # Caustics (PT-14, the owner, 2026-10-07: "Do. not. fake. stuff. Real path traced caustics"): the sun's and the lamps'
-        # light traced onto HDRP's water as its real waves shape it, reflected and refracted there and traced on; where it lands,
-        # its light over the area its cell's corners land round (pt_caustics.hlsl). HDRP's water in the traced scene under a mask
-        # bit of its own, which only the water queries ask for (every other ray asks for MASK_ALL, never 0xFF). The water's own
-        # surface, its waves as triangles (PT-71 item 5), is in MASK_ALL under a bit of its own (MASK_WAVES): a ray that must pass
-        # it (the caustics' own: water_mask) or looks for it apart (the camera's first walk: MASK_SOLID) leaves that bit out.
+        # Caustics (PT-14): the sun's and the lamps' light traced onto HDRP's water as its real waves
+        # shape it, reflected and refracted there and traced on; where it lands, its light over the
+        # area its cell's corners land round (pt_caustics.hlsl). HDRP's water in the traced scene
+        # under a mask bit of its own, which only the water queries ask for (every other ray asks for
+        # MASK_ALL, never 0xFF). The water's own surface, its waves as triangles (PT-71 item 5), is in
+        # MASK_ALL under a bit of its own (MASK_WAVES): a ray that must pass it (the caustics' own:
+        # water_mask) or looks for it apart (the camera's first walk: MASK_SOLID) leaves that bit out.
         shaders = {name: self.text(PT + "shaders/" + name) for name in sorted(f.name for f in (ROOT / PT / "shaders").iterdir()) if name.endswith((".hlsl", ".hlsli"))}
         # MASK_STRANDS (instances holding hair the tracer's own camera rays find, since 2026-09-28) is asked for by the camera
         # ray that looks for hair alone (pt_primary.hlsli primary_walk: its `mask` is that or MASK_ALL, nothing else).
@@ -4404,9 +4400,9 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("try { step(); }", plugin)
 
     def test_path_tracing_moving_things_traced_where_they_are(self):
-        # PT-71 item 4 (the owner: "What moves is traced as it moves"; docs/agents/moving.md): since the tracer's own camera
-        # rays draw every pixel, a thing the game moves is placed every frame where HDRP draws it then, with where it was the
-        # frame before for its own motion, and the scan's copy of it is not traced. The flag that said "moved since the last
+        # PT-71 item 4: since the tracer's own camera rays draw every pixel, a thing the game moves is
+        # placed every frame where HDRP draws it then, with where it was the frame before for its own
+        # motion, and the scan's copy of it is not traced. The flag that said "moved since the last
         # scan, distrust it" is gone with the reason for it.
         header = self.text(PT + "include/tgpt_api.h")
         self.assertNotIn("TGPT_INSTANCE_MOVING", header)
@@ -4568,8 +4564,7 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn('"' + check + '"', gpu)
 
     def test_path_tracing_no_limits_that_change_the_picture(self):
-        # PT-50 (the owner, 2026-10-07: "There is no budgets or limits there, this is PT"; a budget may cost noise or speed,
-        # never change what the picture converges to; docs/agents/caps.md).
+        # PT-50.
         common = self.text(PT + "shaders/pt_common.hlsli")
         lights = self.text("src/TGPathTracing/SceneLights.cs")
         # Lights: no count of 1,024, no reach past which a light stops (only an effect's light keeps HDRP's window), and the
@@ -4632,9 +4627,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn('optics.Ior.ToString("0.###") + (refracts && m.HasProperty("_Ior") ? " (material)" : IsCornea(m) ?', self.text("src/TGPathTracing/GlassFinish.cs"))
 
     def test_traced_world_arrives_by_the_clock(self):
-        # PT-98 (the owner, 2026-10-09: "I frequently see stuff pop in over time ... so I'm never sure when I can trust the
-        # visuals"; "it took a LONG time before it kicked in"). The tracer ran at 5 to 10 frames a second, and whatever was
-        # counted by the frame or by the scan came 6 to 12 times later than at 60. What a frame takes in goes by the clock.
+        # PT-98. The tracer ran at 5 to 10 frames a second, and whatever was counted by the frame or
+        # by the scan came 6 to 12 times later than at 60. What a frame takes in goes by the clock.
         capture = self.text("src/TGPathTracing/SceneCapture.cs")
         # Meshes are registered for a share of the frame's time, counted after the frame's first mesh: the first call into
         # Unity waits for the render thread, which at 8 frames a second ate the whole share (so it was still 6 a frame).
@@ -4802,7 +4796,7 @@ class SourceConsistency(unittest.TestCase):
         keys = [s["key"] for s in plan["scenarios"]]
         self.assertEqual(len(keys), len(set(keys)))
         for scenario in plan["scenarios"]:
-            # The save's name is what the owner types in the game's save menu; where tells them where to stand for it.
+            # Scenario save names match the game save menu; the where field describes the camera position.
             self.assertTrue(scenario["save"].startswith("PT ") and scenario["tests"] and scenario["where"], scenario["key"])
             self.assertIn(scenario.get("recipe", plan["defaults"]["recipe"]), plan["recipes"], scenario["key"])
             left, top, right, bottom = scenario["roi"]
@@ -4816,11 +4810,11 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(section, targets)
 
     def test_own_camera_rays_and_hair_as_a_surface(self):
-        # PT-57 and PT-59 (the owner, 2026-10-07: "Everything should be in the main picture", "make sure WE trace the world, not
-        # the game"). Hair is no layer added after the denoiser any more: the pixel's own camera ray stops at a card with the
-        # chance its texel covers, a new draw every frame, and what it stops at is the pixel's surface. And so for every pixel:
-        # its surface is what its own ray finds in the traced scene (pt_primary primary_all); HDRP's G-buffer is the route
-        # before it (TGPT_OPTION_GBUFFER_SURFACES) and what the yardstick compares the hit with.
+        # PT-57 and PT-59. Hair is no layer added after the denoiser any more: the pixel's own camera
+        # ray stops at a card with the chance its texel covers, a new draw every frame, and what it
+        # stops at is the pixel's surface. And so for every pixel: its surface is what its own ray
+        # finds in the traced scene (pt_primary primary_all); HDRP's G-buffer is the route before it
+        # (TGPT_OPTION_GBUFFER_SURFACES) and what the yardstick compares the hit with.
         shaders = ROOT / PT / "shaders"
         self.assertFalse((shaders / "pt_hair.hlsl").exists(), "the hair layer's pass is gone")
         primary = self.text(PT + "shaders/pt_primary.hlsli")
@@ -4884,13 +4878,13 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(check, gpu)
 
     def test_path_tracing_edges_carry_the_shift(self):
-        # PT-84 (the owner's pictures of 2026-10-08: the traced picture's edges were stairs of two output pixels and thin things
-        # rows of dots, where the game's own picture is smooth; docs/agents/edges.md). The game's upscaler is told a new
-        # sub-pixel shift every frame and lays each frame's samples down where they were taken. So the traced picture a frame
-        # hands it must be that frame's own, sampled at that frame's shift. Two things made it otherwise:
-        # A. The camera's rays carried no shift at all: the plugin read HDRP's matrices when its capture pass executed, after
-        #    HDRP (while still RECORDING the frame) had taken the shift out of its camera again. It keeps them from where HDRP
-        #    records its opaque passes now (armedView), and says once a session whether they hold the shift.
+        # PT-84. The game's upscaler is told a new sub-pixel shift every frame and lays each frame's
+        # samples down where they were taken. So the traced picture a frame hands it must be that
+        # frame's own, sampled at that frame's shift. Two things made it otherwise: A. The camera's
+        # rays carried no shift at all: the plugin read HDRP's matrices when its capture pass
+        # executed, after HDRP (while still RECORDING the frame) had taken the shift out of its camera
+        # again. It keeps them from where HDRP records its opaque passes now (armedView), and says
+        # once a session whether they hold the shift.
         passes = self.text("src/TGPathTracing/HdrpPasses.cs")
         self.assertIn("armedView = hdCamera.mainViewConstants;", passes)
         self.assertIn("var view = armedView;", passes)
@@ -4949,11 +4943,12 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(check, checks)
 
     def test_path_tracing_small_lamps_on_trial_default_off(self):
-        # PT-85 and PT-40 (docs/agents/flame-specks.md), ON TRIAL: with each lamp in its flame at its flame's size the tavern
-        # shows twice the specks of lamps at the game's place and size. Four hidden switches, one a suspect (A the near
-        # field, B the reflected ball, C the highlight, D the shadow's disc), ALL 0 by default: off, every lamp is as it
-        # was. They never move a lamp out of its flame (the owner: "the fire is the emitter"). No option bit, no size, no ABI:
-        # TGPT_Frame.jitter's w, FrameConstants.wetGrid's w, and HDRP's radius in a light's flags' top 12 bits.
+        # PT-85 and PT-40 (docs/agents/flame-specks.md), ON TRIAL: with each lamp in its flame at its
+        # flame's size the tavern shows twice the specks of lamps at the game's place and size. Four
+        # hidden switches, one a suspect (A the near field, B the reflected ball, C the highlight, D
+        # the shadow's disc), ALL 0 by default: off, every lamp is as it was. They never move a lamp
+        # out of its flame. No option bit, no size, no ABI: TGPT_Frame.jitter's w,
+        # FrameConstants.wetGrid's w, and HDRP's radius in a light's flags' top 12 bits.
         settings = self.text("src/TGPathTracing/Settings.cs")
         self.assertRegex(settings, r'LampNearSize = file\.Bind\(Advanced, "Lamp near size", 15, Hidden\(')
         self.assertNotIn("Lamp trial near light", settings)
@@ -4973,11 +4968,11 @@ class SourceConsistency(unittest.TestCase):
         common = self.text(PT + "shaders/pt_common.hlsli")
         self.assertIn("uint lamp_trial() { return uint(max(g.wetGrid.w, 0.0) + 0.5); }", common)
         self.assertIn("if (mode == 0u || l.type > 1u) return l.radius;", common)
-        # The near size (bits 0-7) is no trial any more (the owner, 2026-10-09 06:50, of the tavern with it at 10 and 20 cm:
-        # "the candles weren't overblown, I saw very little speckling, and the light coverage was still good"): within it a
-        # lamp's light stops growing, from two of it on nothing changes; a lamp larger than it, and 0, are as before.
-        # The size is that of a lamp of a tavern candlestick's strength and grows with the square root of a lamp's own, so
-        # the most any lamp puts on a surface is the same (a wall candelabra three times as strong still burnt its wax).
+        # The near size (bits 0-7) is no trial any more: within it a lamp's light stops growing, from
+        # two of it on nothing changes; a lamp larger than it, and 0, are as before. The size is that
+        # of a lamp of a tavern candlestick's strength and grows with the square root of a lamp's own,
+        # so the most any lamp puts on a surface is the same (a wall candelabra three times as strong
+        # still burnt its wax).
         self.assertIn("#define LAMP_NEAR_STRENGTH 13500.0", common)
         self.assertIn("const float n2 = n * n * max(luminance(l.color), 0.0) * (1.0 / LAMP_NEAR_STRENGTH);", common)
         self.assertIn("return n2 > own && l.type <= 1u ? rsqrt(d2 * d2 + n2 * n2) : 1.0 / max(d2, own);", common)
@@ -5052,11 +5047,12 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("inline bool held_camera_shift(const TGPT_Frame& f, float held[2]) {", self.text(PT + "src/camera_shift.hpp"))
         self.assertIn("const bool have=held_camera_shift(f, held);", tracer)
         self.assertIn("st.cameraShift[0]=held[0]; st.cameraShift[1]=held[1]; st.haveCameraShift=have;", tracer)
-        # ON TRIAL (the owner, 2026-10-08 23:20: the game is the first test): behind TGPT_Frame.jitter's z, 0 by default,
-        # which the plugin's hidden setting sets; no option bit, no size, no ABI. Off, the difference stays 0 and the
-        # history's second try does not run: the tracer as it was. 1: the tracer's own histories follow the shifts and
-        # ReSTIR's reuse keeps its fetch (its own search finds its surface; with its fetch moved too the direct light
-        # boiled 19 % more inside flat surfaces and the edges gained nothing). 2: ReSTIR's as well, for finding causes.
+        # ON TRIAL: behind TGPT_Frame.jitter's z, 0 by default, which the plugin's hidden setting
+        # sets; no option bit, no size, no ABI. Off, the difference stays 0 and the history's second
+        # try does not run: the tracer as it was. 1: the tracer's own histories follow the shifts and
+        # ReSTIR's reuse keeps its fetch (its own search finds its surface; with its fetch moved too
+        # the direct light boiled 19 % more inside flat surfaces and the edges gained nothing). 2:
+        # ReSTIR's as well, for finding causes.
         self.assertIn("if(trial && have && st.haveCameraShift && !reset) { k.look[1]=held[0]-st.cameraShift[0]; k.look[2]=held[1]-st.cameraShift[1]; }", tracer)
         self.assertIn("k.look[3]=trial==1 ? 2.f : trial==2 ? 1.f : 0.f;", tracer)
         self.assertIn("if (weightSum > 0.01 || !(g.look.w > 0.5)) break;", temporal)
@@ -5082,13 +5078,13 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn(check, checks)
 
     def test_path_tracing_character_normals_on_trial(self):
-        # PT-92 (the owner, 2026-10-09: "blockiness/low-polyness on the armored guards helmet, and the cloth of the guy with the
-        # weird mask"), ON TRIAL behind the hidden "Character normals" (0 by default: the picture as before; docs/agents/
-        # char-normals.md). A character reached the tracer as skinned positions alone, so each of its triangles was shaded flat.
-        # The game's own skinning leaves every vertex's skinned normal beside its position (Kandra's CompressedVertex, byte 12):
-        # at 1 it travels with the position, in the same two passes and the shared texture's alpha, into a buffer the
-        # character's mesh record names, and a hit's Hit.rounded is smooth for every ray. Nothing is drawn or skinned twice,
-        # nothing is read from the screen.
+        # PT-92, ON TRIAL behind the hidden "Character normals" (0 by default: the picture as before;
+        # docs/agents/ char-normals.md). A character reached the tracer as skinned positions alone, so
+        # each of its triangles was shaded flat. The game's own skinning leaves every vertex's skinned
+        # normal beside its position (Kandra's CompressedVertex, byte 12): at 1 it travels with the
+        # position, in the same two passes and the shared texture's alpha, into a buffer the
+        # character's mesh record names, and a hit's Hit.rounded is smooth for every ray. Nothing is
+        # drawn or skinned twice, nothing is read from the screen.
         api = self.text(PT + "include/tgpt_api.h")
         self.assertIn("#define TGPT_SKINNED_STRIDE_MASK 0xFFFFu", api)
         self.assertIn("#define TGPT_SKINNED_NORMAL_SHIFT 16u", api)
@@ -5353,10 +5349,10 @@ class SourceConsistency(unittest.TestCase):
             self.assertIn('"' + name + '"', checks)
 
     def test_path_tracing_speed_on_trial_default_off(self):
-        # PT-99, ON TRIAL (docs/agents/speed-1.md; the owner, 2026-10-09: "right now we're at like 8 FPS. It can barely
-        # render"): speed that leaves the picture as it is, behind the hidden "Speed trial" (0 by default: every ray as
-        # before). Bit 1: a shadow ray that nothing stopped asked which water its start lies in with one more ray, straight
-        # up, wherever the scene held water; with the bit only a point under the water's highest point asks.
+        # PT-99, ON TRIAL: speed that leaves the picture as it is, behind the hidden "Speed trial" (0
+        # by default: every ray as before). Bit 1: a shadow ray that nothing stopped asked which water
+        # its start lies in with one more ray, straight up, wherever the scene held water; with the
+        # bit only a point under the water's highest point asks.
         common = self.text(PT + "shaders/pt_common.hlsli")
         water = self.text(PT + "shaders/pt_water_surface.hlsli")
         tracer = self.text(PT + "src/tracer.cpp")
@@ -5436,16 +5432,16 @@ class SourceConsistency(unittest.TestCase):
             self.assertNotIn("neural", step)
 
     def test_path_tracing_ser_split_is_the_rule(self):
-        # PT-99 and PT-110 (docs/agents/ser-2.md, rule-2.md; the owner, 2026-10-10: "Do not turn that off. If it makes it
-        # slower with that on, then it's either not due to that, or due to us not designing our tech with it in mind").
-        # The game answered on 2026-10-10 (run 20261010-130621, the same picture, no denoiser; the bounced light's stage,
-        # ms, a tavern / a town / a beach): its pass split in two, the reuse across frames a compute pass of its own in the
-        # screen's order, and ONE regrouping with no hint of our own after the pixel's first ray, outside the rays' loop:
-        # 9.5 / 22.7 / 28.9, where the pass as it shipped (the call inside that loop) took 41.9 / 57.7 / 61.5 and the plain
-        # compute pass 13.7 / 27.6 / 64.6. That is the only form, in every build; the compute passes take it too, without
-        # the call. The reflections' pass stays as it shipped (the trial's 3-bit key for it was worse: the town 33.8 against
-        # 24.7 ms, the beach 101 against 93). The reordering study, the split trial, their switches, passes and recipes
-        # are gone.
+        # PT-99 and PT-110. The game answered on 2026-10-10 (run 20261010-130621, the same picture, no
+        # denoiser; the bounced light's stage, ms, a tavern / a town / a beach): its pass split in
+        # two, the reuse across frames a compute pass of its own in the screen's order, and ONE
+        # regrouping with no hint of our own after the pixel's first ray, outside the rays' loop: 9.5
+        # / 22.7 / 28.9, where the pass as it shipped (the call inside that loop) took 41.9 / 57.7 /
+        # 61.5 and the plain compute pass 13.7 / 27.6 / 64.6. That is the only form, in every build;
+        # the compute passes take it too, without the call. The reflections' pass stays as it shipped
+        # (the trial's 3-bit key for it was worse: the town 33.8 against 24.7 ms, the beach 101
+        # against 93). The reordering study, the split trial, their switches, passes and recipes are
+        # gone.
         cmake = self.text("CMakeLists.txt")
         tracer = self.text(PT + "src/tracer.cpp")
         common = self.text(PT + "shaders/pt_common.hlsli")
@@ -5570,11 +5566,11 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("#ifdef TGPT_SPEED_MEASURE\n    const bool plainToo=true;", tracer)
 
     def test_path_tracing_rain_wetness_on_trial_default_off(self):
-        # PT-108 and PT-104, ON TRIAL (docs/agents/rain-1.md; the owner, 2026-10-09, of a fire on wet ground: "In the PT
-        # presentation, it looks flat"). When it rains the game's ScreenSpaceWetness pass rewrites the roughness HDRP lights
-        # its G-buffer with (and nothing else: no normal, no colour), by its moisture and a noise picture laid over the
-        # world. The tracer makes the same roughness at every hit, for every kind of ray. Hidden, off by default, and
-        # compiled into the passes only by CMake's TGPT_RAIN_WETNESS (OFF): a trial costs frame time switched off.
+        # PT-108 and PT-104, ON TRIAL. When it rains the game's ScreenSpaceWetness pass rewrites the
+        # roughness HDRP lights its G-buffer with (and nothing else: no normal, no colour), by its
+        # moisture and a noise picture laid over the world. The tracer makes the same roughness at
+        # every hit, for every kind of ray. Hidden, off by default, and compiled into the passes only
+        # by CMake's TGPT_RAIN_WETNESS (OFF): a trial costs frame time switched off.
         common = self.text(PT + "shaders/pt_common.hlsli")
         tracer = self.text(PT + "src/tracer.cpp")
         header = self.text(PT + "include/tgpt_api.h")
@@ -5641,11 +5637,12 @@ class SourceConsistency(unittest.TestCase):
             self.assertNotIn("neural", step)
 
     def test_path_tracing_mega_geometry_on_trial_beside_the_plain_path(self):
-        # PT-109, ON TRIAL (docs/agents/megageo-1.md; the owner, 2026-10-09: "and add the alan wake 2 bvh"): NVIDIA RTX
-        # Mega Geometry, through NVAPI. A path BESIDE the plain acceleration structures: compiled in only by CMake's
-        # TGPT_MEGA_GEOMETRY (OFF: a build without it holds no line of it and links no NVAPI), asked for by a hidden
-        # setting that is 0, and taken only where the driver itself reports the feature (never a table of cards); the
-        # plain path serves everywhere else and whenever a call fails. The picture does not change: the same instances.
+        # PT-109, ON TRIAL: NVIDIA RTX Mega Geometry, through NVAPI. A path BESIDE the plain
+        # acceleration structures: compiled in only by CMake's TGPT_MEGA_GEOMETRY (OFF: a build
+        # without it holds no line of it and links no NVAPI), asked for by a hidden setting that is 0,
+        # and taken only where the driver itself reports the feature (never a table of cards); the
+        # plain path serves everywhere else and whenever a call fails. The picture does not change:
+        # the same instances.
         cmake = self.text("CMakeLists.txt")
         scene = self.text(PT + "src/scene.cpp")
         scene_h = self.text(PT + "src/scene.hpp")
@@ -5694,8 +5691,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("NvAPI_D3D12_GetRaytracingCaps(device, NVAPI_D3D12_RAYTRACING_CAPS_TYPE_PARTITIONED_TLAS, &topCaps, sizeof(topCaps));", mega)
         self.assertIn("NvAPI_D3D12_GetRaytracingCaps(device, NVAPI_D3D12_RAYTRACING_CAPS_TYPE_CLUSTER_OPERATIONS, &clusterCaps, sizeof(clusterCaps));", mega)
         self.assertIn("st.scene.megaCaps=mega_probe(device, vendor, megaLines);", tracer)
-        # The switch: hidden, 0, in the frame's flags (no option bit: all 32 are taken), and only where the driver reports it.
-        # (On by default since 2026-10-12, the owner: "Do not turn it off": 7, NVIDIA's layout; 0 is the tests' yardstick.)
+        # The switch: hidden, 0, in the frame's flags (no option bit: all 32 are taken), and only
+        # where the driver reports it.
         self.assertIn('MegaGeometryTrial = file.Bind(Advanced, "Mega Geometry trial", 7, Hidden(', settings)
         self.assertNotIn('"Mega Geometry trial", 0, Hidden(', settings)
         self.assertIn("#define TGPT_FRAME_MEGA_SHIFT 2u", header)
@@ -6245,15 +6242,14 @@ class SourceConsistency(unittest.TestCase):
                 self.assertIn("MEASURING", step["name"])
 
     def test_path_tracing_hdrp_draws_nothing_opaque_while_tracing(self):
-        # PT-112 (A), the rule since 2026-10-11 (the owner, 2026-10-10: "Let's prevent HDRP rendering, yes"): HDRP's opaque
-        # draw lists are left empty and its decals left out of the gameplay camera's frame while the traced light is on
-        # screen; the tracer writes the frame's depth and motion into HDRP's buffers. Never the frame setting OpaqueObjects
-        # (it woke the game's ECS uploads: 800 ms frames, PROJECT-CONTEXT DEAD ENDS).
+        # PT-112 (A), the rule since 2026-10-11: HDRP's opaque draw lists are left empty and its
+        # decals left out of the gameplay camera's frame while the traced light is on screen; the
+        # tracer writes the frame's depth and motion into HDRP's buffers. Never the frame setting
+        # OpaqueObjects (it woke the game's ECS uploads: 800 ms frames, PROJECT-CONTEXT DEAD ENDS).
         passes = self.text("src/TGPathTracing/GamePasses.cs")
         self.assertIn("__result.layerMask = 0; __result.batchLayerMask = 0;", passes)
         self.assertIn("aggregatedFrameSettings.SetEnabled(FrameSettingsField.Decals, false);", passes)
-        # (2026-10-11, the owner: HDRP's lighting "must not render at all" while tracing: its screen-space lighting, shadow
-        # maps, volumetric fog grid and deferred lighting are left out with the decals.)
+
         self.assertIn("foreach (var field in LeftOut) aggregatedFrameSettings.SetEnabled(field, false);", passes)
         for field in ("SSAO", "ContactShadows", "SSR", "SSGI", "ScreenSpaceShadows", "SubsurfaceScattering", "ShadowMaps", "Volumetrics"):
             self.assertRegex(passes, r"FrameSettingsField\." + field + r"\b[^;]*\};")
@@ -6384,9 +6380,8 @@ class SourceConsistency(unittest.TestCase):
         self.assertIn("auto groundShine=[&](V3 n, V3 v, V3 l) {", check)
         self.assertIn("const double behind=sky ? double(skyColor[c])/double(exposure) : sunE*sunShine+(fogCase.place==5 ? double(lamps[0].color[c])*lampShine : 0.0);", check)
         self.assertIn('const bool absorber=asked("TGPT_TEST_FOG_ABSORBER");', check)
-        # PT-37 (the same report): the night's fog, a fog that thins with height, known exactly by quadrature, and
-        # HDRP's own fog by hand beside it (the worker's trial of the sky's light not dimmed by the fog above is NOT
-        # in the tree: HDRP's shortcut, and the owner's rule is "path traced, always").
+        # PT-37 (the same report): the night's fog, a fog that thins with height, known exactly by
+        # quadrature, and HDRP's own fog by hand beside it.
         self.assertIn("total+=(a*(sunE*sunShare*w.sunPart+s*w.skyPart)+behind)*double(exposure);", check)
         self.assertIn("totalHdrp+=(a*(moonDimmer*sunE*sunShare*w.sunPart+s*w.taken)+behind)*double(exposure);", check)
         self.assertNotIn("FOG_SKY_UNDIMMED", self.text(PT + "include/tgpt_api.h"))

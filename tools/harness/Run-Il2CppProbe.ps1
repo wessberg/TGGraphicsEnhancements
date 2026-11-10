@@ -29,7 +29,7 @@ $savesBefore = Get-SaveHashes
 $installed = Join-Path $GameDir 'BepInEx\plugins\TGIl2CppProbe.dll'
 Copy-Item -LiteralPath $built -Destination $installed -Force
 try {
-    # A game of the owner's that is open holds a start back, whatever it uses just then (AGENTS.md).
+    # An open listed game blocks startup even if its menu or paused state uses little GPU time.
     while (Get-Process -Name 'Starfield' -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 5 }
     & (Join-Path $PSScriptRoot 'Run-PtHarness.ps1') -LaunchOnly -GameDir $GameDir
     $deadline = (Get-Date).AddMinutes($Minutes)

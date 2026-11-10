@@ -1,14 +1,13 @@
-# SPDX-License-Identifier: MIT
-# TG Path Tracing from the working tree into the game, for a harness run: the plugin (and with -Native the native DLL)
-# built and copied over the installed ones, nothing else. For iterating on a look (AGENTS.md: "build, install, deploy,
-# hash-check", the test suites when the owner says it looks good): no package, no zip, the other mods and the bridge
-# they bundle untouched. The plugin is compiled against the tree's bridge library and runs on the installed one (the
-# bridge's managed API only grows). A release goes through Build.ps1 and Package.ps1 as before.
-#   .\tools\harness\Deploy-PtBuild.ps1            the plugin
-#   .\tools\harness\Deploy-PtBuild.ps1 -Native    the native DLL too (its shaders), from build\native
-#   .\tools\harness\Deploy-PtBuild.ps1 -Restore <folder>   puts back the files a deploy kept aside
-# Each deploy keeps the files it replaces under artifacts\harness\builds\<time>\before and writes what it installed
-# (hashes) to artifacts\harness\builds\<time>\build.json; the newest is what a harness run then tests.
+# SPDX-License-Identifier: MIT TG Path Tracing from the working tree into the game, for a harness run: the
+# plugin (and with -Native the native DLL) built and copied over the installed ones, nothing else. For
+# iterating on a look: no package, no zip, the other mods and the bridge they bundle untouched. The plugin is
+# compiled against the tree's bridge library and runs on the installed one (the bridge's managed API only
+# grows). A release goes through Build.ps1 and Package.ps1 as before..\tools\harness\Deploy-PtBuild.ps1 the
+# plugin.\tools\harness\Deploy-PtBuild.ps1 -Native the native DLL too (its shaders), from
+# build\native.\tools\harness\Deploy-PtBuild.ps1 -Restore <folder> puts back the files a deploy kept aside
+# Each deploy keeps the files it replaces under artifacts\harness\builds\<time>\before and writes what it
+# installed (hashes) to artifacts\harness\builds\<time>\build.json; the newest is what a harness run then
+# tests.
 [CmdletBinding()]
 param(
     [switch]$Native,

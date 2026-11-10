@@ -721,22 +721,22 @@ struct Surface {
 static const float HAIR_F0 = 0.0465;
 // In the hair texture's second word, beside the material: hair the tracer's own camera ray stopped at (Surface.strands).
 static const uint HAIR_STRAND = 0x80000000u;
-// The cosine a light arriving along l lights a surface with: from in front, and for a translucent one also from behind, the
-// part it lets through (through): a grass blade's or a leaf's (TRANSMISSION: without it every blade facing away from the
-// sun was black, where HDRP lights it through), or thin cloth's, the light through its weave (CLOTH_TRANSMISSION, as white
-// linen lets through a quarter to a third of it: a banner held up to the sun shows the light behind it, dimmer than a leaf).
-// What the two shares stand for since PT-40 (2026-10-07; the owner: thin things "pass light by their own material"):
-//   A leaf or a blade (HDRP's transmission through a thin diffusion profile) passes what its material says: HDRP's
-//   transmittance of its profile at its own thickness, tinted, times its transmission mask: per pixel from the GBuffer where
-//   the camera sees it (leaf_transmittance), per material where a path meets it (thin_through, from the plugin). TRANSMISSION
-//   is then only the grey share ReSTIR weighs such a pixel's samples by and its rays' split between the two sides (the
-//   final shading divides it out: leaf_tint), the share lit through where the material says nothing (no profile read: an
-//   older plugin, a shader without one), and how often a light's ray passes a blade (alpha_opaque: the owner's ruling on
-//   grass shadows, 2026-10-06, "soft and partial"; a look, not a material's number).
-//   Thin cloth has no such material data: the game draws its cloth (TG/Clothes/Cloth_Wind and the plain Lit materials
-//   ClothRules finds by name) as HDRP's standard material, with no diffusion profile, no thickness and no transmission,
-//   and HDRP itself lights it opaque. Its rule stays the stated one: CLOTH_TRANSMISSION of the light through the weave,
-//   tinted by the cloth's own color (cloth_tint), nothing else to go on.
+// The cosine a light arriving along l lights a surface with: from in front, and for a translucent one also
+// from behind, the part it lets through (through): a grass blade's or a leaf's (TRANSMISSION: without it
+// every blade facing away from the sun was black, where HDRP lights it through), or thin cloth's, the light
+// through its weave (CLOTH_TRANSMISSION, as white linen lets through a quarter to a third of it: a banner
+// held up to the sun shows the light behind it, dimmer than a leaf). What the two shares stand for since
+// PT-40: A leaf or a blade (HDRP's transmission through a thin diffusion profile) passes what its material
+// says: HDRP's transmittance of its profile at its own thickness, tinted, times its transmission mask: per
+// pixel from the GBuffer where the camera sees it (leaf_transmittance), per material where a path meets it
+// (thin_through, from the plugin). TRANSMISSION is then only the grey share ReSTIR weighs such a pixel's
+// samples by and its rays' split between the two sides (the final shading divides it out: leaf_tint), the
+// share lit through where the material says nothing (no profile read: an older plugin, a shader without
+// one), and how often a light's ray passes a blade. Thin cloth has no such material data: the game draws its
+// cloth (TG/Clothes/Cloth_Wind and the plain Lit materials ClothRules finds by name) as HDRP's standard
+// material, with no diffusion profile, no thickness and no transmission, and HDRP itself lights it opaque.
+// Its rule stays the stated one: CLOTH_TRANSMISSION of the light through the weave, tinted by the cloth's
+// own color (cloth_tint), nothing else to go on.
 static const float TRANSMISSION = 0.5;
 static const float CLOTH_TRANSMISSION = 0.3;
 float translucent_cos(float3 normal, float3 l, float through) {
@@ -881,15 +881,9 @@ float3 cone_sample(float3 dir, float cosMax, float2 u) {
     return normalize(to_world(float3(s * cos(phi), s * sin(phi), c), dir));
 }
 float2 disk_sample(float2 u) { float r = sqrt(u.x), phi = 2.0 * PI * u.y; return r * float2(cos(phi), sin(phi)); }
-// Taming the Shadow Terminator (Chiang, Li and Burley 2019): a shading normal (smooth, normal-mapped) can face a light
-// the surface's own flatter triangle faces away from, and the traced shadow then cuts the light off in a step along
-// the triangles (faces, rounded armour, pillars). The light fades out towards the geometric terminator instead. Not
-// for a translucent surface, lit from behind on purpose.
-// Skin only (PT-04). The fade works face by face: where a flat face leans less towards the light than the smooth normal,
-// the light it leaves is that face's own flat cosine, so every face near the shadow line was one tone with a step at its
-// edge, and the shadow line ran straight along the mesh (a jug of 12 to 16 sides, a cup, a shoulder, a cloth fold). Their
-// shadow rays start ray_offset outside the surface (shadow_origin), which clears a convex face's own mesh, so there was
-// nothing for it to hide. Skin keeps it, as the owner judged faces with it.
+// PT-04: Fade skin lighting toward the geometric terminator to reduce faceted shadow steps (Chiang, Li and
+// Burley 2019). Apply only to skin: a translucent surface intentionally receives backlighting. Retain the
+// accepted skin fade while diagnosing other materials.
 float terminator_softening(Surface s, float3 l) {
     if (s.translucent) return 1.0;
     if (!s.skin && (g.settings2.y & OPTION_FACETED) == 0) return 1.0;
@@ -899,13 +893,14 @@ float terminator_softening(Surface s, float3 l) {
     return g * (1.0 + g * (1.0 - g));
 }
 
-// Reflection Boost on a surface's finish (the owner, 2026-10-06: "we want metal to reflect more than stone and brick").
-// Everything gets a little glossier; a metal twice that, and mirrors more, towards the brightest its own color goes (a gold
-// stays gold). How much of a metal a surface is comes from its specular color: a non-metal's is 0.04, a metal's its own
-// color. Until then the boost raised every surface's mirror share towards 0.6 by the same step: at 0.1 that doubled what
-// stone, wood and soil mirror (0.04 to 0.079: up to three fifths of the lifted shadows outdoors) and left a metal at 0.7 as
-// it was. d3d11.hlsl's guides for Ray Reconstruction say the same. It never roughens: a surface smoother than the boost's
-// 0.05 (a mirror: smoothness 1, roughness 0) keeps its own roughness (PT-46: at the boost's 1 a mirror became 0.05 rough).
+// Reflection Boost on a surface's finish. Everything gets a little glossier; a metal twice that, and mirrors
+// more, towards the brightest its own color goes (a gold stays gold). How much of a metal a surface is comes
+// from its specular color: a non-metal's is 0.04, a metal's its own color. Until then the boost raised every
+// surface's mirror share towards 0.6 by the same step: at 0.1 that doubled what stone, wood and soil mirror
+// (0.04 to 0.079: up to three fifths of the lifted shadows outdoors) and left a metal at 0.7 as it was.
+// d3d11.hlsl's guides for Ray Reconstruction say the same. It never roughens: a surface smoother than the
+// boost's 0.05 (a mirror: smoothness 1, roughness 0) keeps its own roughness (PT-46: at the boost's 1 a
+// mirror became 0.05 rough).
 void reflection_boost(inout float roughness, inout float3 f0, float boost) {
     const float top = max(f0.r, max(f0.g, f0.b));
     const float metal = saturate((top - 0.08) / 0.4);
@@ -1040,21 +1035,9 @@ float directional_fog(float3 position, float cosZenith) {
     return exp(-k * depth / max(cosZenith, 0.001));
 }
 float sun_fog(float3 position) { return directional_fog(position, g.sunDir.y); }
-// Highlights held (PT-73 e, the lantern): the gain's automatic part brightens a pixel by how dark it is. One gain for the
-// whole picture (until 2026-10-08) lifted the wall beside a lantern as much as the dark room around it (x5.3 in a tavern),
-// and the wall burned out to white. With L the pixel's traced light as the game's exposure and the player's Exposure show
-// it, G the automatic gain there, b = G - 1 and x = L / W:  L' = W - (W - L) / (1 + b x (1 - x))  below W, and L' = L from
-// W up. A dark pixel gets G (the slope at 0), a pixel at W is left as it is, and above W the picture is the game's own
-// exposure, never darker: a flame and a lamp's glass stay the brightest things. It is "L G / (1 + L (G - 1) / W)", which
-// is W - (W - L) / (1 + b x), with b x (1 - x) for b x: that one meets the line L' = L at W with a slope of 1 / G against
-// the line's 1, a ring on a wall whose light falls off through W; this one arrives with the line's slope. The order of
-// brightness is kept at every G (the slope, (1 + b (1 - x)^2) / (1 + b x (1 - x))^2, is never 0).
-// W, HIGHLIGHT_KEPT, in the units the composite stores and HDRP's tone mapping reads (radiance times HDRP's exposure).
-// 1.0 is the owner's choice, 2026-10-08 18:30, after a day at 2.0 (their choice by eye that morning, "hold 2, agreed", of
-// the tavern's lantern room at 0.54, 1, 2, 4, 8 and none, the harness's recipe `lantern-hold`): in the tavern "some lights
-// ... were still a bit overexposed/bloomy ... let's do hold 1 instead". (0.54, the first build's, is what the game's
-// ACES tone mapping shows at 0.4 of the screen's white; 0.18 shows at 0.10, 1.0 at 0.62.) d3d11.hlsl's TGPT_FOG has its
-// copy.
+// PT-73: Apply automatic dark adaptation per pixel without lifting already-bright lantern walls. For x=L/W and
+// b=G-1, use Lprime=W-(W-L)/(1+b*x*(1-x)) below W and Lprime=L above W. This preserves the dark-end gain,
+// highlight threshold and unit slope. Metering inverts the same curve; keep W=1.
 static const float HIGHLIGHT_KEPT = 1.0;
 // The share of its gain a pixel's traced light keeps: lit is its luminance as stored with the whole gain (traced_gain),
 // and the light is stored times this. 1 where the automatic part is 1 (daylight): the picture as it was, bit for bit.
@@ -1504,15 +1487,9 @@ float material_alpha(InstanceRecord inst, MaterialRecord m, uint geometry, uint 
     }
     return a;
 }
-// ON TRIAL (PT-93, docs/agents/grass-boil.md; never a row, to be taken out or made the rule once the game has answered):
-// grass lit by a fire on the ground flickers in every frame. A light's shadow ray flips a coin at every blade of grass
-// and every leaf it meets (alpha_opaque, TRANSMISSION: one half), and a ray that runs level through a tuft meets many: with
-// n blades in its way it arrives in one frame of 2^n, carrying all of the light. The mean is the shadow the owner chose
-// (2026-10-06, "soft and partial"); a single frame is black or 2^n times too bright, and no history of 16 frames holds that.
-// With the plugin's hidden setting "Grass shadow trial" at 1 (bit 22 of g.wetGrid.w, above the lamp trial's 22 bits; 0: off,
-// every ray as before) the final shading's shadow rays (transmittance, transmittance_from_surface) take the product of
-// what each blade lets through: the coin's own mean, so the picture converges to the same thing, and no coin. ReSTIR's reuse
-// (pt_rtxdi rtxdi_visible, which needs a yes or a no) keeps the coin.
+// PT-93: A light ray crosses n stochastic foliage layers with probability 2^-n and compensating weight 2^n. The
+// estimate converges to partial transmission but produces rare bright samples that short histories cannot
+// stabilize. Evaluate transmission sampling without changing its mean.
 bool leaf_product_on() { return ((uint(max(g.wetGrid.w, 0.0) + 0.5) >> 22) & 1u) != 0u; }
 // g_leafProduct: set while such a ray is traced with the trial on. g_leafMet: the blades it met (at most: traversal may
 // report a triangle twice, so the product is taken by leaf_walk, which meets each crossing once). g_leafThrough: the last
@@ -1551,15 +1528,15 @@ bool alpha_opaque(uint instanceId, uint geometry, uint primitive, float2 bary) {
         if (g_lightRay && !g_glassSolid) return false;
         return true;
     }
-    // A leaf or a blade of grass (TGPT_MATERIAL_TRANSLUCENT) in a light's way (g_lightRay) lets the light through as often as
-    // the tracer lights such a blade through from behind (TRANSMISSION, half): one blade's shadow is half one, softer still
-    // where the blade covers part of a texel, and it deepens with every further blade in the way. Stopped whole, every traced
-    // tuft threw a hard, black shadow on the ground and on the grass behind it (the game's grass casts none at all: its
-    // vegetation settings turn grass's shadows off. The owner, 2026-10-06: "We want grass shadows, but not those horrible
-    // looking ones"). A tree's crown, many leaves deep, still shades as a whole. Its micromaps leave its covered texels to
-    // this test (pt_omm_bake).
-    // ON TRIAL (PT-93, g_leafProduct): no coin. The blade is counted and passed, and the ray's light is the product of what
-    // each blade in its way lets through (leaf_pass, leaf_walk): the coin's own mean, the same in every frame.
+    // A leaf or a blade of grass (TGPT_MATERIAL_TRANSLUCENT) in a light's way (g_lightRay) lets the
+    // light through as often as the tracer lights such a blade through from behind (TRANSMISSION, half):
+    // one blade's shadow is half one, softer still where the blade covers part of a texel, and it
+    // deepens with every further blade in the way. Stopped whole, every traced tuft threw a hard, black
+    // shadow on the ground and on the grass behind it. A tree's crown, many leaves deep, still shades as
+    // a whole. Its micromaps leave its covered texels to this test (pt_omm_bake). ON TRIAL (PT-93,
+    // g_leafProduct): no coin. The blade is counted and passed, and the ray's light is the product of
+    // what each blade in its way lets through (leaf_pass, leaf_walk): the coin's own mean, the same in
+    // every frame.
     if (g_leafProduct && g_lightRay && !g_cameraRays && (m.flags & (MATERIAL_TRANSLUCENT | MATERIAL_THIN_CLOTH | MATERIAL_STRANDS)) == MATERIAL_TRANSLUCENT) { ++g_leafMet; return false; }
     if ((m.flags & MATERIAL_TRANSLUCENT) != 0 && g_lightRay && !g_cameraRays && ray_chance(instanceId, geometry, primitive, 0x6C656166u) < TRANSMISSION) return false;
     // Without a texture the base color's alpha decides alone (a cutoff above 1 makes a submesh invisible to rays). An
@@ -3560,22 +3537,7 @@ float3 light_cookie(LightRecord l, float3 fromLight) {
     return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
 }
 #define LIGHT_NO_RANGE 0x80000u   // TGPT_LIGHT_NO_RANGE: no window at its range; the range says how far the light grid lists it
-// ON TRIAL (PT-85 and PT-40, docs/agents/flame-specks.md; never a row, to be taken out once the game has answered): why
-// lamps placed in their flames, at their flames' size, make twice the specks of lamps at the game's place and size. Four
-// hidden settings of the plugin, one a suspect, all 0 (off: everything as before) unless set, packed into g.wetGrid.w
-// (TGPT_Frame.jitter's w, tracer.cpp):
-//   bits 0-7   NOT on trial any more: a lamp's near size in centimetres (light_falloff below; the plugin's default 10,
-//              0 from the offline test). It was the suspect that was guilty, and the owner chose it in the game.
-//   bits 8-9   B, the lamp as a reflection ray on see-through glass or water meets it (reflected_lamps): 0 its own size,
-//              1 the radius HDRP gave it, 2 five times its own.
-//   bits 10-11 C, the highlight a light's sample makes (pt_rtxdi rtxdi_shade, direct_light): evaluated towards a point of a
-//              disc of that other radius (0, 1, 2 as B's) in place of the lamp's own.
-//   bits 12-13 D, the disc a lamp's shadow ray aims at (how soft its shadow is): the same three.
-//   bits 14-21 the job after's (docs/agents/flame-near.md), not a suspect but a way out: what stands within this many
-//              centimetres of a lamp is found on purpose (lamp_around, above direct_light; 0 off).
-// HDRP's radius for a lamp: bits 20-31 of its flags, in millimetres (TGPT_LIGHT_HDRP_RADIUS_SHIFT; the plugin fills them
-// only while a setting at 1 asks; 0: not given, the lamp's own radius serves). Each switch changes that one use of the
-// radius and nothing else: the lamp stays in its flame, and its light on a surface a metre away is the same.
+// PT-85 / PT-40: Suppress rare bright-sample trails without hiding lighting or material errors.
 #define LIGHT_HDRP_RADIUS_SHIFT 20u // TGPT_LIGHT_HDRP_RADIUS_SHIFT
 #define LAMP_TRIAL_REFLECTED 8u
 #define LAMP_TRIAL_HIGHLIGHT 10u
@@ -4793,19 +4755,20 @@ float3 shade_path(Hit hit, float3 dir, uint bounces, inout Rng rng, bool feed) {
 }
 float3 shade_path(Hit hit, float3 dir, uint bounces, inout Rng rng) { return shade_path(hit, dir, bounces, rng, false); }
 
-// What a reflection shows where its ray met a surface (PT-46, the owner: "we need our tracer to be able to perfectly render the
-// world in a mirror"): the light the surface sends back along the ray, lit as the camera's own pixel of it is. Its diffuse color
-// (a metal has none) and its specular lobe, with Reflection Boost as pt_prepare gives a pixel the camera sees (not a leaf's, a
-// blade's or thin cloth's), take the sun's and the lights' samples (direct_light: its highlights); its bounced light is the
-// radiance cache's, times its diffuse color and its mask map's occlusion, with Indirect Color as a camera pixel's bounced light
-// takes it (pt_gi_spatial); what its specular lobe reflects of its surroundings is, for a smooth metal, one more reflection ray
-// (a reflection in a reflection, shaded as a path vertex), else the cache's light times the lobe's directional albedo, as
-// Reflections on Glossy Surfaces take it (pt_specular). Hair keeps no highlight here (the camera's are Kajiya-Kay's along its
-// strands, pt_hair). Until 2026-10-07 a reflection showed a path vertex's light (shade_path): the base color as diffuse light
-// (a metal's specular color too), no highlight, the bounced light without Indirect Color. A lit red wall in a perfect mirror
-// (tgpt_gpu_test) came out at 0.86 of its brightness seen directly, its green and blue at 0.70 and 0.61 of the wall's against
-// its red: too dark and too colored, its highlights and reflections (the light's color, not the wall's) missing. Now 0.98,
-// 0.99 and 0.98 (at Indirect Color 1).
+// What a reflection shows where its ray met a surface (PT-46): the light the surface sends back along the
+// ray, lit as the camera's own pixel of it is. Its diffuse color (a metal has none) and its specular lobe,
+// with Reflection Boost as pt_prepare gives a pixel the camera sees (not a leaf's, a blade's or thin
+// cloth's), take the sun's and the lights' samples (direct_light: its highlights); its bounced light is the
+// radiance cache's, times its diffuse color and its mask map's occlusion, with Indirect Color as a camera
+// pixel's bounced light takes it (pt_gi_spatial); what its specular lobe reflects of its surroundings is,
+// for a smooth metal, one more reflection ray (a reflection in a reflection, shaded as a path vertex), else
+// the cache's light times the lobe's directional albedo, as Reflections on Glossy Surfaces take it
+// (pt_specular). Hair keeps no highlight here (the camera's are Kajiya-Kay's along its strands, pt_hair).
+// Until 2026-10-07 a reflection showed a path vertex's light (shade_path): the base color as diffuse light
+// (a metal's specular color too), no highlight, the bounced light without Indirect Color. A lit red wall in
+// a perfect mirror (tgpt_gpu_test) came out at 0.86 of its brightness seen directly, its green and blue at
+// 0.70 and 0.61 of the wall's against its red: too dark and too colored, its highlights and reflections (the
+// light's color, not the wall's) missing. Now 0.98, 0.99 and 0.98 (at Indirect Color 1).
 static const float SEEN_MIRROR_ROUGHNESS = 0.6; // a lobe smoother than this, of a metal, traces its own reflection
 // For the reflections' filter (PT-80, pack_seen): the surface shade_seen shaded last (behind glass: the one its walk ended
 // on), its shading normal and its reflectance (its diffuse color plus what its specular lobe reflects, as it lit it). The
@@ -4835,9 +4798,10 @@ float3 shade_seen(Hit hit, float3 dir, inout Rng rng, bool feed) {
     const float coneWidth = g_coneWidth, coneSpread = g_coneSpread;
     const float3 from = g_pathFrom; const bool gathers = g_pathGathers;
     float3 result = 0.0;
-    // A smooth metal's own reflection ray below: HDRP's fog over its way too, as the camera's pixel of the metal has it over
-    // its reflection ray (pt_specular: fogged). Without it a steel breastplate in a foggy cave, which shows the fog's light
-    // and little else, was 4 to 5 times darker in a mirror than seen directly (PT-88, the owner: "pure black").
+    // A smooth metal's own reflection ray below: HDRP's fog over its way too, as the camera's pixel of
+    // the metal has it over its reflection ray (pt_specular: fogged). Without it a steel breastplate in
+    // a foggy cave, which shows the fog's light and little else, was 4 to 5 times darker in a mirror
+    // than seen directly (PT-88).
     bool secondWay = false; float3 secondFrom = 0.0; float secondDist = 0.0;
     if (!follow) {
     StructuredBuffer<MaterialRecord> materials = ResourceDescriptorHeap[g.scene0.w];

@@ -85,24 +85,21 @@
 // With it: the light the fog scatters more than once (the mist's cells of the radiance cache; without: the light
 // scattered once alone, for tests).
 #define TGPT_FRAME_FOG_WALK (1u << 16)
-// (Bit 24: free again since 2026-10-12 11:10. For two hours it was PT-37's trial, "no lamp lights the camera's fog
-// where the game's Fog volume says directional lights only"; the owner, shown the night both ways: "Anything can light
-// the mist - not just the sun and moon." Every lamp lights the fog, everywhere: the rule.)
-// (Bit 19: free since 2026-10-12. It chose the fog's cells against the per-pixel route, pt_fog.hlsl, which went.)
-// (Bits 25 to 29: free since 2026-10-12. With 24 they were the fog grid's trial number, 24 and 25: the walk as the first trial
-// had it and RTX Remix's reuse and filter, which showed the same picture as the plain cells in every scene for more
-// time; and the number that left a part of the grid's fog out while its numbers were logged, 26 to 29: PT-118, PT-133.)
-// (Bit 21: free since 2026-10-11. It was the trial of NRD's history confidence, which is the rule whenever NRD runs.)
-// (Bit 20 is free: PT-110's micromaps for characters, on trial there, gave no speed in the game and came out, 2026-10-11.)
-// NVIDIA NRD as its README sets it up (PT-127; the owner, 2026-10-11: "make sure NRD is set up to perfection", then:
-// "Obviously we want to 100% follow NVIDIA's and AMD's implementation guidelines for these technologies"): all the light a
-// surface gives, the diffuse light (the direct and the bounced light and the caustics, demodulated) and the specular light
-// (the reflections and the lights' highlights, demodulated), with their hit distances, the shading normal and 2.5D motion
-// (pt_nrd_prep.hlsl, nrd_denoiser.cpp). Glass and water keep the reflections' own filter (NRD is for opaque surfaces).
-// The denoiser, ON TRIAL (no size or ABI change, 0 as every caller left these bits), the plugin's hidden "NRD trial" in the
-// flags' bits 17 and 18 (no option bit: all 32 are taken): 0 or 1 RELAX (NVIDIA: "designed for RTXDI"), 2 REBLUR, which
-// sizes its filter by the hit distances. (Until 2026-10-11 0 was RELAX on the bounced light alone, in its directional
-// form, with the tracer's own filters on the rest: gone.)
+// (PT-37) (Bit 19: free since 2026-10-12. It chose the fog's cells against the per-pixel route, pt_fog.hlsl,
+// which went.) (Bits 25 to 29: free since 2026-10-12. With 24 they were the fog grid's trial number, 24 and
+// 25: the walk as the first trial had it and RTX Remix's reuse and filter, which showed the same picture as
+// the plain cells in every scene for more time; and the number that left a part of the grid's fog out while
+// its numbers were logged, 26 to 29: PT-118, PT-133.) (Bit 21: free since 2026-10-11. It was the trial of
+// NRD's history confidence, which is the rule whenever NRD runs.) (Bit 20 is free: PT-110's micromaps for
+// characters, on trial there, gave no speed in the game and came out, 2026-10-11.) NVIDIA NRD as its README
+// sets it up (PT-127): all the light a surface gives, the diffuse light (the direct and the bounced light
+// and the caustics, demodulated) and the specular light (the reflections and the lights' highlights,
+// demodulated), with their hit distances, the shading normal and 2.5D motion (pt_nrd_prep.hlsl,
+// nrd_denoiser.cpp). Glass and water keep the reflections' own filter (NRD is for opaque surfaces). The
+// denoiser, ON TRIAL (no size or ABI change, 0 as every caller left these bits), the plugin's hidden "NRD
+// trial" in the flags' bits 17 and 18 (no option bit: all 32 are taken): 0 or 1 RELAX (NVIDIA: "designed for
+// RTXDI"), 2 REBLUR, which sizes its filter by the hit distances. (Until 2026-10-11 0 was RELAX on the
+// bounced light alone, in its directional form, with the tracer's own filters on the rest: gone.)
 #define TGPT_FRAME_NRD_SHIFT 17u
 #define TGPT_FRAME_NRD_MASK 3u
 #define TGPT_OMM_TRIAL_PLANTS_SOLID 1u
@@ -638,16 +635,16 @@ struct TGPT_ClothWind {
     float intensity[3]; uint32_t flags; // _Intensity; TGPT_WIND_*
     float direction[2]; float reserved[2]; // _Direction's x and y
 };
-// The game's wind on its grass and leaves (PT-63, the owner: "of course our shadows and reflections should move alongside the
-// grass and leaves swaying in the wind. Otherwise what's the point of realtime ray tracing"), as their vertex shaders move
-// them (TG/Vegetation/Vegetation_Grass and Vegetation_Leaves, read from their compiled code: docs/agents/world.md 4.1).
-// The tracer keeps every instance with such a material in the pose HDRP draws it in that frame (pt_sway.hlsl), in groups of
-// the instances of one cell of the world, each group one BLAS refitted every frame; no count or distance leaves one still.
-//   grass:  gust = max of two readings of the noise map over the world, scrolled by speed x time and turned by the
-//           direction; moved = position + saturate(saturate(6 y) gust) x the object's W2O x ((cos A, 0, sin A) (k^4 - k^2)),
-//           k = 1 + 0.0001 speed strength y, A = 450 - direction degrees
-//   leaves: the position turned about the wind's axis by noise x speed x strength degrees, weighed by its height
-//           ((y + pivotOffsetY) / bendHeight), fading with the distance along the camera's view from fade[0] to fade[1]
+// The game's wind on its grass and leaves (PT-63), as their vertex shaders move them
+// (TG/Vegetation/Vegetation_Grass and Vegetation_Leaves, read from their compiled code: docs/agents/world.md
+// 4.1). The tracer keeps every instance with such a material in the pose HDRP draws it in that frame
+// (pt_sway.hlsl), in groups of the instances of one cell of the world, each group one BLAS refitted every
+// frame; no count or distance leaves one still. grass: gust = max of two readings of the noise map over the
+// world, scrolled by speed x time and turned by the direction; moved = position + saturate(saturate(6 y)
+// gust) x the object's W2O x ((cos A, 0, sin A) (k^4 - k^2)), k = 1 + 0.0001 speed strength y, A = 450 -
+// direction degrees leaves: the position turned about the wind's axis by noise x speed x strength degrees,
+// weighed by its height ((y + pivotOffsetY) / bendHeight), fading with the distance along the camera's view
+// from fade[0] to fade[1]
 #define TGPT_MAX_PLANT_WIND 4096u
 #define TGPT_PLANT_GRASS 1u
 #define TGPT_PLANT_LEAVES 2u

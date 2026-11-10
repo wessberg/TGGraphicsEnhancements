@@ -124,15 +124,13 @@ namespace TGPathTracing
         // The glowing things near the camera (GatherGlows): the traced emissive surfaces (SceneCapture.Glows), effects drawn
         // glowing and emissive decals, those a light kept by its names or look stands at claimed.
         private static readonly List<GlowThing> things = new List<GlowThing>();
-        // A light's classification: by its names and look, and where they leave it out, by what is at it (PT-47, the owner,
-        // 2026-10-06: "make sure we only drop those fake area lights ... But emissive things, like crystals in a cave, or magic
-        // ... of course they should still emit light"). A light within LightRules.GlowReach of a glowing thing no flame's or
-        // lamp's light claims is that thing's light, kept with HDRP's colour, strength and range (an effect's reach); a light
-        // with nothing glowing at it is the game's fill, fake area or fake bounce light, left out. Made again when the glowing
-        // things change.
-        // noEmitter: kept by a flame's or a lamp's name, but with no flame, lamp or glowing thing within LightRules.GlowReach (the
-        // mineral cave's six warm "Point Light_35" to "_40" in a group named "torch_06", none at its torch: their reflections in
-        // the wet floor were the owner's "4 of these yellow lights in the water ... I only see one torch"), left out as fill.
+        // A light's classification: by its names and look, and where they leave it out, by what is
+        // at it (PT-47). A light within LightRules.GlowReach of a glowing thing no flame's or lamp's
+        // light claims is that thing's light, kept with HDRP's colour, strength and range (an
+        // effect's reach); a light with nothing glowing at it is the game's fill, fake area or fake
+        // bounce light, left out. Made again when the glowing things change. noEmitter: kept by a
+        // flame's or a lamp's name, but with no flame, lamp or glowing thing within
+        // LightRules.GlowReach, left out as fill.
         private struct Class { internal bool placed, effect, glow, noEmitter; internal int parent; internal EmitterKind kind; internal GlowThing thing; internal float distance; }
         private static readonly Dictionary<int, Class> placedCache = new Dictionary<int, Class>(), glowKept = new Dictionary<int, Class>();
         // A light kept by its names that once had its flame at it, by its parent: kept while its parent stays the same, as a
@@ -412,20 +410,23 @@ namespace TGPathTracing
             cookies[key] = index;
             return index;
         }
-        // The size a kept light is traced with: the size of what emits it, for its highlights and its shadows alike (the owner,
-        // 2026-10-06, asked whether lamps get their real size for highlights only or for shadows too: "whatever is most
-        // realistic"). Never HDRP's radius: an artist's value for soft shadows (this game gives candle and torch lights 0.25 to
-        // 1.5 m and more), which the tracer drew as a glowing ball that big, so a lamp's highlight in a puddle was a long soft
-        // smear where HDRP draws a point. Measured from the emitting thing at the light where there is one (the flame's
-        // particles, a lantern's glowing glass, the crystal it was kept for: LightRules.MeasuredRadius, held to its kind's
-        // range), else its kind's size (LightRules.DefaultRadius: a candle's flame 1.2 cm across, a torch's 8 cm, a lantern's
-        // glass 10 cm, a brazier 30 cm, a bonfire 50 cm). Its cookie still shapes the light near it as HDRP's does. A mod's own
-        // light (the dialogue light) stands for nothing in the world and keeps HDRP's radius.
-        // And a flame's or a lamp's light is traced where its measured flame is (LightRules.FlameCentre, TGPT_LIGHT_AT_EMITTER),
-        // never where HDRP has it: the tavern's candles have theirs in the wax 10 cm under the flame (21,149 cd), which HDRP
-        // softens by its radius of 1 m (its fill-light falloff, I / (d^2 + r^2): the wax 3 cm away got I / 1.0009), and which the
-        // tracer, at the flame's 1.2 cm, gave the whole wax from inside (I / d^2: 1,100 times that), white-hot (lights round 2).
-        // The hidden "Lights sized as their emitters" key off traces every light at HDRP's place and radius, as before, to compare.
+        // The size a kept light is traced with: the size of what emits it, for its highlights and
+        // its shadows alike. Never HDRP's radius: an artist's value for soft shadows (this game
+        // gives candle and torch lights 0.25 to 1.5 m and more), which the tracer drew as a glowing
+        // ball that big, so a lamp's highlight in a puddle was a long soft smear where HDRP draws a
+        // point. Measured from the emitting thing at the light where there is one (the flame's
+        // particles, a lantern's glowing glass, the crystal it was kept for:
+        // LightRules.MeasuredRadius, held to its kind's range), else its kind's size
+        // (LightRules.DefaultRadius: a candle's flame 1.2 cm across, a torch's 8 cm, a lantern's
+        // glass 10 cm, a brazier 30 cm, a bonfire 50 cm). Its cookie still shapes the light near it
+        // as HDRP's does. A mod's own light (the dialogue light) stands for nothing in the world and
+        // keeps HDRP's radius. And a flame's or a lamp's light is traced where its measured flame is
+        // (LightRules.FlameCentre, TGPT_LIGHT_AT_EMITTER), never where HDRP has it: the tavern's
+        // candles have theirs in the wax 10 cm under the flame (21,149 cd), which HDRP softens by
+        // its radius of 1 m (its fill-light falloff, I / (d^2 + r^2): the wax 3 cm away got I /
+        // 1.0009), and which the tracer, at the flame's 1.2 cm, gave the whole wax from inside (I /
+        // d^2: 1,100 times that), white-hot (lights round 2). The hidden "Lights sized as their
+        // emitters" key off traces every light at HDRP's place and radius, as before, to compare.
         private struct Traced { internal float radius; internal EmitterKind kind; internal bool measured, atEmitter; internal Vector3 local; internal string source; }
         private static readonly HashSet<int> photometryLogged = new HashSet<int>();
         private static readonly Dictionary<int, Traced> sizes = new Dictionary<int, Traced>();

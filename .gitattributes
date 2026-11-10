@@ -1,0 +1,4 @@
+# Local development data must never appear in Git archive output.
+.development export-ignore
+.testruns export-ignore
+tgpt-images export-ignore

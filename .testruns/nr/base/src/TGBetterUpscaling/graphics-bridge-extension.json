@@ -1,6 +1,0 @@
-{
-  "name": "TG Better Upscaling",
-  "native": "Native/TGBetterUpscaling.Native.dll",
-  "bridge": "Native/TGGraphicsBridge.Native.dll",
-  "bridgeVersion": "1.2.1"
-}

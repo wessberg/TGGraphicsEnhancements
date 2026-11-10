@@ -1,19 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""PT-53, PT-55, PT-57: how much a head's hair (or brows) flickers and moves, traced against the game's own picture.
-
-  python tools/harness/hair_motion.py <run>/<scenario> --head x0,y0,x1,y1 --hair x0,y0,x1,y1 [--steps a,b,...]
-
-The owner, 2026-10-07: "Don't you grab and inspect frames yourself? Why is it left for me to judge?" This is the number.
-Needs the run's raw frames (Run-PtHarness.ps1 -KeepFrames). Boxes are shares of the screen (left, top, right, bottom):
---head a part that moves exactly as the head does (the face), --hair the hair (or the brows) to judge.
-
-For each step: every frame is lined up on the head (phase correlation of the head box against the first frame: the
-camera's slide moves the whole head on screen, and the face is the game's own surface, so it moves exactly with it); then
-in the hair box, after that shift, how much each pixel still changes from frame to frame (mean absolute change in 8-bit
-levels of luma, of consecutive frames) and how far the hair's own pattern sits from the head's (phase correlation of the
-hair box, in pixels). A still camera gives the flicker alone. The game's own picture is the yardstick: its hair moves with
-its head and flickers only as its upscaler does.
-"""
+"""Measure hair stability across captured camera motion. Inspect the native-resolution frames alongside the numeric result; a scalar score alone cannot establish appearance."""
 import json
 import sys
 from pathlib import Path

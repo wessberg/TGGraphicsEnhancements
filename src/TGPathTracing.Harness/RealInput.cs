@@ -1,12 +1,10 @@
-// SPDX-License-Identifier: MIT
-// Real input kept out of the game while a harness run lasts (PT-97; the owner, 2026-10-09, watching a run: "You're in
-// third person, you navigate the menus and save outfits. Then once in a while you exit back into the game"). The game's
-// window takes the focus when it starts, and what was typed then, and a gamepad's sticks and buttons with or without the
-// focus, steered the frozen game: two scenes failed with "the game left gameplay during capture". The game reads its
-// devices through Rewired: every controller it knows (keyboard, mouse, gamepads, custom ones) is disabled for the run,
-// and those this turned off are turned on again at its end. By reflection: the harness links no input assembly. The mods'
-// own hotkeys (Unity's legacy Input) are not touched, and the runner itself steers the game through its code, never
-// through input.
+// SPDX-License-Identifier: MIT Real input kept out of the game while a harness run lasts (PT-97). The game's
+// window takes the focus when it starts, and what was typed then, and a gamepad's sticks and buttons with or
+// without the focus, steered the frozen game: two scenes failed with "the game left gameplay during
+// capture". The game reads its devices through Rewired: every controller it knows (keyboard, mouse,
+// gamepads, custom ones) is disabled for the run, and those this turned off are turned on again at its end.
+// By reflection: the harness links no input assembly. The mods' own hotkeys (Unity's legacy Input) are not
+// touched, and the runner itself steers the game through its code, never through input.
 using System;
 using System.Collections;
 using System.Collections.Generic;

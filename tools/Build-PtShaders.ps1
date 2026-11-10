@@ -1,32 +1,28 @@
-# SPDX-License-Identifier: MIT
-# TG Path Tracing's shader passes compiled side by side, before the NMake build that would compile them one at a time.
-#
-#   .\tools\Build-PtShaders.ps1 [-BuildDir build\native] [-Throttle 14] [-MachineLimit 6] [-FreeGb 16] [-PeakGb 8] [-First]
-#
-# Why: an NMake tree runs one command at a time, and the tracer's passes have grown (2026-10-08: pt_specular alone took
-# over 12 minutes of one core, the whole native build about an hour on a 32-thread PC). This reads the very commands
-# CMake wrote for the shader headers (CMakeFiles\TGPathTracingShaders.dir\build.make: one dxc line a header, with the
-# files it depends on), runs those whose header is missing or older than a file it depends on, several at a time, and
-# leaves the rest to `cmake --build`, which then finds the headers up to date and only compiles C++ and links.
-# Nothing here knows a flag or a pass by name: when CMakeLists.txt changes them, configure again and this follows.
-# A failed compile prints its errors, its half-written header is removed, and the exit code is 1.
-#
-# One PC, several trees. -Throttle is this run's own limit; -MachineLimit and -FreeGb hold for the whole PC, whoever
-# started the other compiles (2026-10-09: five workers compiled at once, 16 dxc held 35 GB and three GPU tests 12 GB of
-# 62; the game then could not create its Direct3D 12 device, 0x8007000E, and the bridge fell back to Windows' own
-# runtime: no DirectX Raytracing 1.2, a frame of 2 s). A compile starts only while fewer than -MachineLimit dxc run on
-# the PC and -FreeGb of memory are free (a large pass takes up to 6 GB); while the game runs, a third as many and twice
-# the memory; the same while a game run waits to start (the file %TEMP%\tgb\GAME-WANTED, which the coordinator's run
-# helper keeps while it waits and runs; older than three hours it is taken for left behind). One compile always may
-# run when no other does, so nothing waits for ever.
-# The free memory is counted LESS what the compiles already running will still take: a big pass (the reflections,
-# the bounced light, the walk) starts small and grows to -PeakGb over minutes, so every running dxc, whoever
-# started it, holds back the rest of its peak (2026-10-09 14:55: twelve dxc all passed the test at their start and
-# then committed 100 GB on this 62 GB PC, which paged for minutes with the owner at it). A small pass ends within
-# seconds and gives its share back. Never raise -MachineLimit or lower -FreeGb while other trees compile.
-# -First is for the coordinator's build of the MAIN tree alone (the build the next look at the game waits for): while
-# it runs it keeps the file %TEMP%\tgb\BUILD-FIRST fresh, and every other run of this script starts no new compile
-# until that file is gone or a minute old (compiles already running end by themselves). A -First run is not held by
+# SPDX-License-Identifier: MIT TG Path Tracing's shader passes compiled side by side, before the NMake build
+# that would compile them one at a time..\tools\Build-PtShaders.ps1 [-BuildDir build\native] [-Throttle 14]
+# [-MachineLimit 6] [-FreeGb 16] [-PeakGb 8] [-First] Why: an NMake tree runs one command at a time, and the
+# tracer's passes have grown (2026-10-08: pt_specular alone took over 12 minutes of one core, the whole native
+# build about an hour on a 32-thread PC). This reads the very commands CMake wrote for the shader headers
+# (CMakeFiles\TGPathTracingShaders.dir\build.make: one dxc line a header, with the files it depends on), runs
+# those whose header is missing or older than a file it depends on, several at a time, and leaves the rest to
+# `cmake --build`, which then finds the headers up to date and only compiles C++ and links. Nothing here knows
+# a flag or a pass by name: when CMakeLists.txt changes them, configure again and this follows. A failed
+# compile prints its errors, its half-written header is removed, and the exit code is 1. One PC, several
+# trees. -Throttle is this run's own limit; -MachineLimit and -FreeGb hold for the whole PC, whoever started
+# the other compiles (2026-10-09: five workers compiled at once, 16 dxc held 35 GB and three GPU tests 12 GB
+# of 62; the game then could not create its Direct3D 12 device, 0x8007000E, and the bridge fell back to
+# Windows' own runtime: no DirectX Raytracing 1.2, a frame of 2 s). A compile starts only while fewer than
+# -MachineLimit dxc run on the PC and -FreeGb of memory are free (a large pass takes up to 6 GB); while the
+# game runs, a third as many and twice the memory; the same while a game run waits to start (the file
+# %TEMP%\tgb\GAME-WANTED, which the coordinator's run helper keeps while it waits and runs; older than three
+# hours it is taken for left behind). One compile always may run when no other does, so nothing waits for
+# ever. The free memory is counted LESS what the compiles already running will still take: a big pass (the
+# reflections, the bounced light, the walk) starts small and grows to -PeakGb over minutes, so every running
+# dxc, whoever started it, holds back the rest of its peak. A small pass ends within seconds and gives its
+# share back. Never raise -MachineLimit or lower -FreeGb while other trees compile. -First is for the
+# coordinator's build of the MAIN tree alone (the build the next look at the game waits for): while it runs it
+# keeps the file %TEMP%\tgb\BUILD-FIRST fresh, and every other run of this script starts no new compile until
+# that file is gone or a minute old (compiles already running end by themselves). A -First run is not held by
 # -MachineLimit, only by the memory. A worker never passes -First.
 param(
     [string]$BuildDir = 'build\native',
@@ -141,8 +137,8 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
         $process = Start-Process -FilePath $job.Exe -ArgumentList $job.Arguments -WorkingDirectory $BuildDir -WindowStyle Hidden -PassThru `
             -RedirectStandardError $err -RedirectStandardOutput $out
         $null = $process.Handle   # Keeps the exit code readable after the process has ended.
-        # A compile never outranks what the owner is doing on this PC (2026-10-12 02:10: three workers' compilers and
-        # Starfield stood at 90 % of the CPU together). Below normal costs nothing while the CPU is free.
+        # Compile below normal priority so interactive applications retain CPU time; idle throughput is
+        # unchanged.
         try { $process.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal } catch { }
         $null = $running.Add([pscustomobject]@{ Job = $job; Name = $name; Process = $process; Err = $err; Started = $watch.Elapsed })
     }

@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: MIT
-// TG Path Tracing's cloth rules (src/TGPathTracing/ClothRules.cs), checked against the census of the harness's scenes
-// (docs/agents/cloth.md: every material whose shader or name says cloth, in the state audits of every run up to
-// 2026-10-07). The owner (PT-49): "we really need to make sure we detect cloth correctly. That also includes clothes hanging
-// on a drier and stuff". Thin cloth is a hanging sheet the light passes through; cloth lying on a floor, thick, stuffed or
-// wrapped round something (one face drawn) is a solid surface; characters' clothes are left as they are.
+// PT-49: Trace live game deformation for camera rays, reflections and shadows.
 using System;
 using TGPathTracing;
 

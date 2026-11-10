@@ -64,21 +64,21 @@ float3 fog_grid_uvw(float3 relative) {
                   0.5 - clip.y / max(clip.w, 1e-6) * 0.5, fog_depth_slice(clip.w) / float(FOG_SLICES));
 }
 
-// ---- A lamp's light, in two parts that sum to it exactly at every point (PT-118, docs/agents/fogfix.md)
-// A lamp's or a glowing surface's light falls with the square of the distance d: right by it it changes within
-// millimetres, and a cell is centimetres to most of a metre deep. One value a cell cannot hold that (it converged to a
-// blob the size of the cell, brighter or dimmer by where the lamp sat in its cell; and the mean of 1 / d^2 over a cell has
-// no bound on a sample, so the blob boiled). So the light e a lamp gives a point is split by a radius r tied to the
-// cell's size there:
-//   the cells hold           e d^2 / (d^2 + r^2)   (as bright as e far from the lamp, never above I / r^2: smooth at a cell's size),
-//   each pixel's own ray adds e r^2 / (d^2 + r^2)   (all of e right by the lamp, falling as 1 / d^4 beyond r: fog_lamps_residual).
-// No light is cut and none is counted twice: the two shares sum to 1 at every point, whatever r is. r is one and a half
-// times a cell's WIDTH at the point's own view depth (16 pixels: the depth / 58 at 1080 rows), so both passes know it
-// from the point alone. The width, not the depth (a cell is 5 to 20 times deeper than wide): the camera's ray sums the
-// light along its way whatever the cells' depth is (a cell's value is the mean over the cell, and the walk's weights
-// between slices sum to each slice's own depth), so only across the screen must the cells' share be smooth.
-// Departure from RTX Remix, named (PT-127's rule): Remix puts all of a light into its cells and cuts what a sample has
-// above a firefly threshold. Here nothing is cut (the owner: "No limits that change the picture").
+// ---- A lamp's light, in two parts that sum to it exactly at every point (PT-118, docs/agents/fogfix.md) A
+// lamp's or a glowing surface's light falls with the square of the distance d: right by it it changes within
+// millimetres, and a cell is centimetres to most of a metre deep. One value a cell cannot hold that (it
+// converged to a blob the size of the cell, brighter or dimmer by where the lamp sat in its cell; and the
+// mean of 1 / d^2 over a cell has no bound on a sample, so the blob boiled). So the light e a lamp gives a
+// point is split by a radius r tied to the cell's size there: the cells hold e d^2 / (d^2 + r^2) (as bright
+// as e far from the lamp, never above I / r^2: smooth at a cell's size), each pixel's own ray adds e r^2 /
+// (d^2 + r^2) (all of e right by the lamp, falling as 1 / d^4 beyond r: fog_lamps_residual). No light is cut
+// and none is counted twice: the two shares sum to 1 at every point, whatever r is. r is one and a half
+// times a cell's WIDTH at the point's own view depth (16 pixels: the depth / 58 at 1080 rows), so both
+// passes know it from the point alone. The width, not the depth (a cell is 5 to 20 times deeper than wide):
+// the camera's ray sums the light along its way whatever the cells' depth is (a cell's value is the mean
+// over the cell, and the walk's weights between slices sum to each slice's own depth), so only across the
+// screen must the cells' share be smooth. Departure from RTX Remix, named (PT-127's rule): Remix puts all of
+// a light into its cells and cuts what a sample has above a firefly threshold. Here nothing is cut.
 static const float FOG_SMOOTH = 1.5; // r in cell widths
 float fog_smooth_radius(float depth) {
     const float2 perCell = 2.0 / (float2(length(g.motionViewProj[0].xyz), length(g.motionViewProj[1].xyz)) * float2(fog_grid_size().xy));

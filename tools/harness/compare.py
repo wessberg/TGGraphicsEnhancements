@@ -53,7 +53,7 @@ def main():
     parser.add_argument("older")
     parser.add_argument("newer")
     parser.add_argument("--plan", default="")
-    parser.add_argument("--step", default="2-traced-none")  # the undenoised take first (the owner, 2026-10-07)
+    parser.add_argument("--step", default="2-traced-none")  # Start with the undenoised capture.
     parser.add_argument("--size", type=int, default=900)
     args = parser.parse_args()
     older, newer = Path(args.older), Path(args.newer)

@@ -451,17 +451,16 @@ def main():
     gpu = load_json(run / "gpu.json", {})
     if gpu:
         during = gpu.get("during") or {}
-        # The owner's stream (Sunshine) is no "other program" for the run's speed since 2026-10-12 ("I would prefer if I
-        # can stay on the SUnshine/moonlight stream"): the owner plays over it, so speed is measured with it. It is named
-        # below; what spoils a run's speed is any OTHER program on the card.
+        # Keep Sunshine streaming enabled in comparable performance runs. Report its activity separately;
+        # unrelated GPU work invalidates timing.
         others = {name: percent for name, percent in during.items() if not name.lower().startswith("sunshine")}
         lines.append(f"- The GPU: waited {gpu.get('waitedSeconds', 0)} s for it to be free; other programs during the run: "
                      + (", ".join(f"{name} up to {percent} %" for name, percent in during.items()) if during else "none"))
         if others:
             problems.append("Other programs used the GPU during the run (" + ", ".join(f"{name} up to {percent} %" for name, percent in others.items())
                             + "): the frame rates are not to be trusted, and the run slowed them down.")
-        # The game in front (the owner, 2026-10-10: "only respect our frametimes when we know it was"): a run that never
-        # saw the game's window, or saw it behind another or minimized, says so; its stretches name the steps to doubt.
+        # The game in front: a run that never saw the game's window, or saw it behind another or
+        # minimized, says so; its stretches name the steps to doubt.
         behind = gpu.get("notInFront") or []
         if isinstance(behind, str):
             behind = [behind]
@@ -478,14 +477,11 @@ def main():
             lines.append("- The game's window: not checked (a run from before 2026-10-10 16:00): whether it was in front is not known.")
         video = gpu.get("video") or {}
         if video:
-            # Not a problem by the owner's word (2026-10-06): the screen's own streaming. It still costs a little.
+            # Streaming alone does not invalidate the run, but its frame-time cost remains relevant.
             lines.append("- Video encoding during the run (it holds no run back, and costs a little frame rate): "
                          + ", ".join(f"{name} up to {percent} % of the encoder" for name, percent in video.items()))
-            # A stream being encoded by a program (Sunshine) is not "a little" for the tracer's two reordering passes
-            # (2026-10-12: the forest's bounced light 17.4 to 19.9 ms and its reflections 24.0 to 27.0 with Sunshine at
-            # 20 % of the encoder and under the guard's 4 % of the 3D engines; round 19 saw the same). The owner plays
-            # over the stream and keeps it on (2026-10-12), so this is the speed that counts: it is held against other
-            # runs WITH a stream alone, never against a quiet card's.
+            # Compare streamed runs with streamed runs. Sunshine affected forest GI from 17.4 to 19.9 ms and
+            # reflections from 24 to 27 ms in the recorded case, even below the startup utilization threshold.
             streams = {name: percent for name, percent in video.items() if not name.startswith("System")}
             if streams:
                 lines.append("- THE OWNER'S STREAM WAS ON during the run (" + ", ".join(f"{name} up to {percent} % of the encoder" for name, percent in streams.items())
@@ -512,7 +508,7 @@ def main():
             to_make.append(f"{scenario.get('save', '')}: {about.get('where', '')} (now run on {info.get('slot', '?')})")
         if info.get("error"):
             if "was not found" in info["error"]:
-                # Not a failure of the build under test: the owner has not made this scenario's save yet.
+                # A missing scenario save is incomplete test setup, not a renderer regression.
                 to_make.append(f"{scenario.get('save', '')}: {about.get('where', '')} (not run: no stand-in)")
                 lines += ["", f"Not run: the save \"{scenario.get('save', '')}\" does not exist yet. Where to make it: {about.get('where', '?')}", ""]
             else:

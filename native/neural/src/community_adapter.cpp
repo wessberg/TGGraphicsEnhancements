@@ -45,7 +45,8 @@ NVSDK_NGX_Result __cdecl initialize(const wchar_t* path,const char* selectedSha2
         auto locked=std::make_unique<tgnr::RuntimeFileLock>(file.c_str());
         // Detect a file replaced since bootstrap, without pinning any release's hash.
         if(!locked->matches(selectedSha256)) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        // A prior owner of this module could have another initialization or patched imports.
+        // A previous module instance may have initialized state or patched imports; validate ownership before
+        // reuse.
         if(GetModuleHandleW(L"nvngx_dlssnr.dll")) return NVSDK_NGX_Result_FAIL_FeatureAlreadyExists;
         model=LoadLibraryExW(file.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
         if(!model) return NVSDK_NGX_Result_FAIL_PlatformError;

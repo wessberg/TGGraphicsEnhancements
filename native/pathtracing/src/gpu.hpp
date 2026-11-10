@@ -63,11 +63,10 @@ struct Texture {
 
 // One CPU/GPU descriptor heap; slots are handed out and back through a free list. A released slot may still
 // be read by frames the GPU has not finished: it returns to the free list once the consumer fence passes the
-// value set_retire named when it was released (the frame being recorded then), in collect.
-// Every slot's state is kept (since 2026-10-11, PT-118: the fog grid read a texture another owner's view had replaced): a
-// slot given back twice would sit in the free list twice and go to two owners, the later view replacing the earlier. A
-// second give-back, and a view written into a slot that is not handed out, are refused or noted with the line that did
-// it (take_misuse, which the tracer logs).
+// value set_retire named when it was released (the frame being recorded then), in collect. Every slot's
+// state is kept (PT-118): a slot given back twice would sit in the free list twice and go to two owners, the
+// later view replacing the earlier. A second give-back, and a view written into a slot that is not handed
+// out, are refused or noted with the line that did it (take_misuse, which the tracer logs).
 class DescriptorHeap {
 public:
     struct Misuse { uint32_t index; uint8_t state; bool write; const char* file; int line; const char* gaveBackFile; int gaveBackLine; };

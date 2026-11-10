@@ -1,22 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Two steps of a harness run side by side IN MOTION, for a choice the owner makes from pictures (AGENTS.md "Choices go
-on a page with pictures": frames grabbed during motion, the game's motion blur off).
-
-  python tools/harness/motion_clips.py <run folder> <out folder> [--a STEP] [--b STEP] [--none STEP]
-         [--label-a TEXT] [--label-b TEXT] [--by-index] <scene>:<x>,<y>,<w>,<h> [...]
-
-The run must have kept its raw frames (`Queue-PtRun.ps1 -KeepFrames`) and its moving steps must carry
-`"disableMotionBlur": true` (a step without it is smeared by the game's own motion blur: this tool stops when a
-frame says the blur was on or does not say). Defaults are the recipe `nrd-motion`'s steps (RELAX beside REBLUR).
-For each scene it writes into the out folder:
-  <scene>-crop.webp   a moving picture of the box at the game's own pixels (not scaled), A beside B
-  <scene>-whole.webp  the whole frame at a quarter of its pixels, the box drawn in
-  <scene>-still.jpg   the pair from the middle of the sweep
-  <scene>-none.jpg    the same moment of the --none step (no denoiser), when given
-The two steps' frames are lined up by where the camera looks (the nearest yaw within one sweep from left to right),
-or frame for frame with --by-index (a recipe that poses the camera by the frame's number). The picture plays there
-and back, at the pace the frames were taken (a run that keeps raw 4K frames takes about ten a second).
-"""
+"""Create side-by-side motion comparisons from two harness steps. Require motion blur to be disabled for review comparisons and preserve native-resolution crops."""
 import argparse
 import json
 import os
@@ -74,7 +57,7 @@ def main():
     p.add_argument('--none', default='2-none-moving')
     p.add_argument('--label-a', default="RELAX (NVIDIA's for RTXDI)"); p.add_argument('--label-b', default='REBLUR')
     p.add_argument('--by-index', action='store_true')
-    p.add_argument('--allow-blur', action='store_true', help='for looking at a run that had the blur on; never for the owner\'s page')
+    p.add_argument('--allow-blur', action='store_true', help='for looking at a run that had the blur on; exclude from review comparisons')
     o = p.parse_args()
     os.makedirs(o.out, exist_ok=True)
     for spec in o.boxes:

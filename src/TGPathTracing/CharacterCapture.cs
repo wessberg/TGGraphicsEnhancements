@@ -66,12 +66,14 @@ namespace TGPathTracing
             Traced = 0; Reading = 0;
         }
 
-        // Hair, eyebrows and lashes stay opaque while tracing, as the game draws hair far away: alpha-tested, drawn forward or
-        // into the GBuffer, and so traced (the owner's rule: nothing is left to HDRP's shading while tracing). Up close the game
-        // makes them transparent (hair by distance, BodyFeatures.RefreshDistanceBand; eyebrows and lashes always), which camera
-        // rays can't find in front of HDRP's surface, so HDRP drew them with its own light over the traced image. Hair goes
-        // through the game's own HairController.Refresh (patched: what the game asks for is kept, and given back when tracing
-        // stops); eyebrows and lashes are switched on their materials, whose alpha test is on already.
+        // Hair, eyebrows and lashes stay opaque while tracing, as the game draws hair far away:
+        // alpha-tested, drawn forward or into the GBuffer, and so traced. Up close the game makes
+        // them transparent (hair by distance, BodyFeatures.RefreshDistanceBand; eyebrows and lashes
+        // always), which camera rays can't find in front of HDRP's surface, so HDRP drew them with
+        // its own light over the traced image. Hair goes through the game's own
+        // HairController.Refresh (patched: what the game asks for is kept, and given back when
+        // tracing stops); eyebrows and lashes are switched on their materials, whose alpha test is
+        // on already.
         private static readonly Type HairControllerType = AccessTools.TypeByName("Awaken.TG.Main.Character.Features.HairController");
         private static readonly MethodInfo HairRefresh = HairControllerType != null ? AccessTools.Method(HairControllerType, "Refresh", new[] { typeof(bool), typeof(bool) }) : null;
         private static readonly FieldInfo HairRenderer = HairControllerType != null ? AccessTools.Field(HairControllerType, "_kandraRenderer") : null;

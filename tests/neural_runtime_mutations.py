@@ -33,7 +33,7 @@ def main():
         exe = folder / "runtime-tests.exe"
         command = ["cl.exe", "/nologo", "/MT", "/O2", "/EHsc", "/std:c++17",
                    "/I" + str(folder), "/I" + str(ROOT / "native/neural/include"),
-                   "/I" + str(ROOT / "native/neural/src"), "/I" + str(ROOT / "DLSS-SDK-310.9.1/include"),
+                   "/I" + str(ROOT / "native/neural/src"), "/I" + str(ROOT / "DLSS-SDK-310.9.16/include"),
                    str(ROOT / "tests/neural_runtime_tests.cpp"), "/Fo" + str(folder / "test.obj"),
                    "/Fe" + str(exe), "/link", "bcrypt.lib"]
         build = subprocess.run(command, capture_output=True, text=True)
@@ -62,7 +62,7 @@ def main():
             dll = folder / "TGNeuralRendering.nvngx.dll"
             command = ["cl.exe", "/nologo", "/LD", "/MT", "/O2", "/EHsc", "/std:c++17",
                        "/I" + str(ROOT / "native/neural/include"), "/I" + str(ROOT / "native/neural/src"),
-                       "/I" + str(ROOT / "DLSS-SDK-310.9.1/include"), str(source),
+                       "/I" + str(ROOT / "DLSS-SDK-310.9.16/include"), str(source),
                        "/Fo" + str(folder / "adapter.obj"), "/link", "/OUT:" + str(dll),
                        "/IMPLIB:" + str(folder / "adapter.lib"), "bcrypt.lib"]
             build = subprocess.run(command, capture_output=True, text=True)

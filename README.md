@@ -195,7 +195,7 @@ FoA Mod Manager lists exactly the same rows; the hotkeys are in the config only.
 I'm moving water into the traced picture, with the game's waves, reflections, refraction and absorption. The waves
 are real triangles in the traced scene, moved every frame by the game's own wave data, so the camera, mirrors, bounced
 light and shadows all meet the same water. The separate Water Reflections row is gone. This work is still being
-checked; the remaining gaps and build status are in [the water report](docs/agents/water-4.md).
+checked; the remaining gaps and build status are in [the water report](docs/PT-DETAILS.md).
 
 Caustics (On by default): the sun and lamps shining through a glass bottle, flask or potion are bent and focused by
 it into a bright spot or line in its shadow (manifold next event estimation on the glass's smooth surface). Sunlight
@@ -533,6 +533,11 @@ both mods.
 cover the implementation, the test plan and the primary sources. `docs/FSR-FLICKER-INVESTIGATION.md`
 records the resolved HUD/hand flicker investigation; read it before changing the frame generation
 input path.
+
+## Development documentation
+
+Current work: [BACKLOG.md](BACKLOG.md). Path Tracing: [status](docs/PT-STATE.md), [issue register](docs/PT-REQUESTS.md).
+Build inputs: [dependencies](docs/BUILD-DEPENDENCIES.md). [Contributing](CONTRIBUTING.md) and [public source preparation](docs/PUBLIC-SOURCE.md).
 
 ## License
 

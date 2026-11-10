@@ -1927,13 +1927,12 @@ void wait_for_scene_readers() {
         check(st.c11->Wait(st.consumer.d11.Get(), st.consumer.value), "D3D11 wait before updating the atlas or the sky");
 }
 
-// PT-98: what a frame may take in goes by the clock, not by the frame (the owner, 2026-10-09, of a guard's textures and a
-// town filling in: "it took a LONG time before it kicked in"; the tracer ran at 5 to 10 frames a second, where "24 tiles a
-// frame" is 190 a second and at 60 it is 1,440). frame_clock: how many frames of 60 a second the time since the last
-// traced frame holds, 1 (60 a second and faster, and the first frame) to kClockMost (7.5 frames a second and slower, and
-// the first frame after tracing was off). The tile bakes below and the scene's own budgets (GpuScene::set_clock) are
-// multiplied by it: the same work a second whatever the frame rate, in fewer and larger pieces. Nothing is left out; a
-// frame that takes more in is longer by that work (a tile is one small D3D11 compute pass).
+// PT-98: what a frame may take in goes by the clock, not by the frame. frame_clock: how many frames of 60 a
+// second the time since the last traced frame holds, 1 (60 a second and faster, and the first frame) to
+// kClockMost (7.5 frames a second and slower, and the first frame after tracing was off). The tile bakes
+// below and the scene's own budgets (GpuScene::set_clock) are multiplied by it: the same work a second
+// whatever the frame rate, in fewer and larger pieces. Nothing is left out; a frame that takes more in is
+// longer by that work (a tile is one small D3D11 compute pass).
 constexpr double kClockMost=8.0;
 double frameClock=1.0;
 double frame_clock(std::chrono::steady_clock::time_point now) {
@@ -3481,10 +3480,9 @@ uint64_t trace(const TGPT_Frame& f, uint32_t parity) {
     k.params[0]=std::isfinite(f.tracedGain) && f.tracedGain>0.f ? std::clamp(f.tracedGain, 1.f/64.f, 4096.f) : 1.f; k.params[1]=f.maxRayDistance>1 ? f.maxRayDistance : 1000.f; k.params[2]=f.skyIntensity>0 ? f.skyIntensity : 1.f;
     k.params[3]=std::max(8.f, 30.f*float(st.width)/1920.f);
 #ifdef TGPT_SPEED_MEASURE
-    // A measuring build's alone (PT-99, docs/agents/perf-1.md; the hidden "Speed trial" number 34816: the second page's
-    // 2048): every ray ends after 60 m, to time what the rays' unlimited length costs (the owner, 2026-10-09: "a ray can
-    // travel forever ... isn't that the primary reason for our perf woes?"). It changes the picture: for measuring only,
-    // never in a build for players.
+    // A measuring build's alone (PT-99, docs/agents/perf-1.md; the hidden "Speed trial" number 34816:
+    // the second page's 2048): every ray ends after 60 m, to time what the rays' unlimited length costs.
+    // It changes the picture: for measuring only, never in a build for players.
     if(std::isfinite(f.prevCameraPosition[3]) && f.prevCameraPosition[3]>0.f && (uint32_t(std::floor(std::min(f.prevCameraPosition[3], 524287.f)/8.f)+0.5f)&0x8800u)==0x8800u) k.params[1]=60.f;
 #endif
     k.look[0]=std::isfinite(f.highlightKept) && f.highlightKept>0.f ? f.highlightKept : 0.f;
@@ -4898,9 +4896,7 @@ void publish_memory(bool force=false) {
         // The water's surface has no figure of its own in TGPT_Diagnostics: its pieces are in the figures of what they are.
         if(const uint64_t water=st.scene.water_memory()) line<<"; of meshGeometry, acceleration, scratch, records and transfer the water's surface holds "<<water;
         line<<")"; log(line.str());
-        // PT-87, the owner's question (2026-10-09: "We removed limits so that ... we trace infinitely out into the distance.
-        // isn't that the primary reason for our perf woes?"): the traced world's memory by its distance from the camera
-        // (GpuScene::distance_bands says what is counted where). Counted only: nothing is cut by distance.
+        // PT-87: Track actual memory use and residency; do not limit scene content to meet a budget.
         if(st.haveMemoryCamera && d.meshGeometry+d.acceleration+d.plants+d.sharedTextures>0) {
             std::vector<uint64_t> textureBytes; share::open_bytes(textureBytes);
             GpuScene::DistanceBands bands; st.scene.distance_bands(st.memoryCamera, textureBytes, bands);

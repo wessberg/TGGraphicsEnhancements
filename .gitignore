@@ -6,6 +6,20 @@ __pycache__/
 *.pyc
 .vs/
 
+# Local Python environments and tool caches
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+/.cache/
+*.pyo
+
+# Local development history, scratch copies and generated test images
+/.development/
+/.testruns/
+/tgpt-images/
+
 # Native build output and local diagnostic captures
 build/
 TGFG-*.log

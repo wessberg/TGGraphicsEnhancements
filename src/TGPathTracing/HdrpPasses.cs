@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 // Where the path tracer meets HDRP's frame.
 //
 // Capture: HDRP renders the GBuffer in its prepass, then (before shadows and lighting) runs its opaque
@@ -138,7 +138,8 @@ namespace TGPathTracing
             try
             {
                 if (!Ready) throw new MissingMemberException("HDRP's RenderSSR, prepass output or custom pass recording changed in this game build.");
-                // Never enabled: the volume only gives the capture pass an owner; HDRP never runs it itself.
+                // Keep this volume disabled: it retains the capture pass, which is invoked explicitly rather
+                // than executed by HDRP.
                 captureHost = new GameObject("TG Path Tracing capture") { hideFlags = HideFlags.HideAndDontSave };
                 captureHost.SetActive(false);
                 UnityEngine.Object.DontDestroyOnLoad(captureHost);
@@ -875,10 +876,11 @@ namespace TGPathTracing
                     }
                     if (!(share.x >= 0f && share.y >= 0f && share.z >= 0f) || float.IsInfinity(share.x + share.y + share.z)) return;
                     mat.SubsurfaceR = share.x; mat.SubsurfaceG = share.y; mat.SubsurfaceB = share.z;
-                    // Once a material (it stopped after 24 lines until 2026-10-08: the shares above 1 were found from a log that
-                    // held a quarter of them). Above 1 is no share: the profile's transmission tint is an HDR colour, and a
-                    // sheet whose colour x (1 + share) is above 1 sends on more light than fell on it
-                    // (docs/agents/who-walks.md 3b: found, not changed, the owner's call).
+                    // Once a material (it stopped after 24 lines until 2026-10-08: the
+                    // shares above 1 were found from a log that held a quarter of them).
+                    // Above 1 is no share: the profile's transmission tint is an HDR
+                    // colour, and a sheet whose colour x (1 + share) is above 1 sends on
+                    // more light than fell on it.
                     float most = Mathf.Max(share.x, Mathf.Max(share.y, share.z));
                     if (walkLogged.Add("thin|" + m.name + "|" + shaderName))
                         Session.Log.LogInfo("Thin material \"" + m.name + "\" (" + shaderName + ", " + settings.name + "): where a path meets it, it passes " +

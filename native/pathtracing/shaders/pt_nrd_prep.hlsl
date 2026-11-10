@@ -1,37 +1,38 @@
-// SPDX-License-Identifier: MIT
-// NVIDIA NRD's inputs and results, as NRD's README sets them up (PT-127; the owner, 2026-10-11: "Obviously we want to 100%
-// follow NVIDIA's and AMD's implementation guidelines for these technologies"). Since that day NRD takes all the light a
-// surface gives, split into its diffuse and its specular part at the camera's surface and divided by their material
-// factors (NRD_MaterialFactors), with real hit distances, the shading normal and 2.5D motion. Until then (round 2 to
-// 2026-10-11) RELAX took the bounced light alone, in its directional form, against the triangle's normal with a hit distance
-// of 1, and the tracer's own filters took the direct light and the reflections: the tavern's wood grain and its small
-// shadows were blurred away and a gravel ground came out milky (runs 20261011-141211 and -150230).
-// RELAX (NVIDIA: "designed for RTXDI") or REBLUR, DIFFUSE_SPECULAR (nrd_denoiser.cpp; the hidden "NRD trial" picks REBLUR).
-// The inputs, for every pixel NRD takes (nrd_takes): the view depth along the camera's axis (positive); motion to the
-// previous frame (its texture coordinate minus this one's, and the view depth's change: pt_common motion_depth_change, the
-// point's own previous position, a moving thing's too); the shading normal (the normal map's, the light was shaded with;
-// hair's across its strand, facing the view, as NRD's hair tips ask, and hair's material ID 1, NRD's strandMaterialID) with
-// linear roughness; the diffuse light (the direct and the bounced light and the caustics, under a leaf's own occlusion: the
-// composite's sum) times the diffuse color over NRD's diffuse factor, with the bounced light's hit distance (pt_gi_spatial:
-// ReSTIR's sample through the diffuse lobe's lens, else the pixel's own cosine ray's); the specular light (the reflections
-// and the lights' highlights) over NRD's specular factor, with the reflection's hit distance (a miss: HIT_DISTANCE_MISS).
-// REBLUR takes the distances normalized (REBLUR_FrontEnd_GetNormHitDist with its default parameters, which
-// nrd_denoiser.cpp leaves). A pixel whose camera ray met a still pure mirror is handed as the surface the mirror shows
-// (primary surface replacement, pt_psr_record.hlsli: NRD README's own section on it), its light and guides from the
-// pixel's record. Glass, water and what is seen from inside it are no pixel of NRD's (its README: "not natively
-// designed for volumetrics or transparency"): a depth beyond the denoising range, which NRD leaves alone; they keep the
-// reflections' own filter (tracer.cpp).
-// NRD's units put the diffuse light's median at a half (tracer.cpp, from the histogram below). What is brighter in a channel
-// than NRD takes (nrd_ceiling) is handed at it: the share it was handed is left in the bounced light's alpha (the diffuse
-// light) and the direct light's (the specular), and what was not handed comes back as traced (the composite for the diffuse
-// light, the back end for the specular: PT-50, no light cut).
-//   pass.b.z: the mode. 0 clears the histogram's bins (one group): pass.b.y the histogram (UAV, uints 64 to 127: log2 of
-//   the diffuse light handed to NRD from -24 to +8, half an EV a bin, lit pixels only). 1 (RELAX) and 2 (REBLUR), the front
-//   end, which fills the histogram too: pass.a UAVs view depth, motion, normal and roughness, the diffuse input; pass.b.x
-//   float, storage units into NRD's; pass.b.w the specular input. 3 (RELAX) and 4 (REBLUR), the back end: pass.a.x the
-//   diffuse result (read, then written as linear light divided by the diffuse color, in NRD's units), pass.a.y the specular
-//   result, pass.a.z the reflections' own filter's result, into which the specular light is written for every pixel NRD
-//   took (in storage units, pass.b.x: NRD's into them), glass and water keeping their own.
+// SPDX-License-Identifier: MIT NVIDIA NRD's inputs and results, as NRD's README sets them up (PT-127). Since
+// that day NRD takes all the light a surface gives, split into its diffuse and its specular part at the
+// camera's surface and divided by their material factors (NRD_MaterialFactors), with real hit distances, the
+// shading normal and 2.5D motion. Until then (round 2 to 2026-10-11) RELAX took the bounced light alone, in
+// its directional form, against the triangle's normal with a hit distance of 1, and the tracer's own filters
+// took the direct light and the reflections: the tavern's wood grain and its small shadows were blurred away
+// and a gravel ground came out milky (runs 20261011-141211 and -150230). RELAX (NVIDIA: "designed for
+// RTXDI") or REBLUR, DIFFUSE_SPECULAR (nrd_denoiser.cpp; the hidden "NRD trial" picks REBLUR). The inputs,
+// for every pixel NRD takes (nrd_takes): the view depth along the camera's axis (positive); motion to the
+// previous frame (its texture coordinate minus this one's, and the view depth's change: pt_common
+// motion_depth_change, the point's own previous position, a moving thing's too); the shading normal (the
+// normal map's, the light was shaded with; hair's across its strand, facing the view, as NRD's hair tips
+// ask, and hair's material ID 1, NRD's strandMaterialID) with linear roughness; the diffuse light (the
+// direct and the bounced light and the caustics, under a leaf's own occlusion: the composite's sum) times
+// the diffuse color over NRD's diffuse factor, with the bounced light's hit distance (pt_gi_spatial:
+// ReSTIR's sample through the diffuse lobe's lens, else the pixel's own cosine ray's); the specular light
+// (the reflections and the lights' highlights) over NRD's specular factor, with the reflection's hit
+// distance (a miss: HIT_DISTANCE_MISS). REBLUR takes the distances normalized
+// (REBLUR_FrontEnd_GetNormHitDist with its default parameters, which nrd_denoiser.cpp leaves). A pixel whose
+// camera ray met a still pure mirror is handed as the surface the mirror shows (primary surface replacement,
+// pt_psr_record.hlsli: NRD README's own section on it), its light and guides from the pixel's record. Glass,
+// water and what is seen from inside it are no pixel of NRD's (its README: "not natively designed for
+// volumetrics or transparency"): a depth beyond the denoising range, which NRD leaves alone; they keep the
+// reflections' own filter (tracer.cpp). NRD's units put the diffuse light's median at a half (tracer.cpp,
+// from the histogram below). What is brighter in a channel than NRD takes (nrd_ceiling) is handed at it: the
+// share it was handed is left in the bounced light's alpha (the diffuse light) and the direct light's (the
+// specular), and what was not handed comes back as traced (the composite for the diffuse light, the back end
+// for the specular: PT-50, no light cut). pass.b.z: the mode. 0 clears the histogram's bins (one group):
+// pass.b.y the histogram (UAV, uints 64 to 127: log2 of the diffuse light handed to NRD from -24 to +8, half
+// an EV a bin, lit pixels only). 1 (RELAX) and 2 (REBLUR), the front end, which fills the histogram too:
+// pass.a UAVs view depth, motion, normal and roughness, the diffuse input; pass.b.x float, storage units
+// into NRD's; pass.b.w the specular input. 3 (RELAX) and 4 (REBLUR), the back end: pass.a.x the diffuse
+// result (read, then written as linear light divided by the diffuse color, in NRD's units), pass.a.y the
+// specular result, pass.a.z the reflections' own filter's result, into which the specular light is written
+// for every pixel NRD took (in storage units, pass.b.x: NRD's into them), glass and water keeping their own.
 #include "pt_common.hlsli"
 #include "NRD.hlsli"
 

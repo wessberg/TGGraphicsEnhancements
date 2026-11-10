@@ -684,9 +684,9 @@ cbuffer Mip : register(b0) { uint mip, width, height, offset; };
         expect(after.open==before.open-1 && after.freed==before.freed+1 && after.openBytes<before.openBytes && references==1,
                "a texture the game frees is let go of on the D3D12 side too");
     }
-    // PT-64 (the owner: "Don't do copies"): every size is shared. A 64x64 BC1 (2 KB) and a 128x128 one (8 KB) get a number and
-    // the flag as any texture does (until then they kept their 64x64 atlas tiles, since each takes a 64 KB page of its own
-    // while both devices hold it). What isn't shared: a render target, an array.
+    // PT-64: every size is shared. A 64x64 BC1 (2 KB) and a 128x128 one (8 KB) get a number and the flag
+    // as any texture does (until then they kept their 64x64 atlas tiles, since each takes a 64 KB page
+    // of its own while both devices hold it). What isn't shared: a render target, an array.
     {
         std::vector<uint8_t> bytes(512*512, 0x5A);
         D3D11_TEXTURE2D_DESC d{64, 64, 1, 1, DXGI_FORMAT_BC1_UNORM, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0};
@@ -2716,21 +2716,22 @@ int main(int argc, char** argv) {
         nrdMean(GetEnvironmentVariableA("TGPT_TEST_NRD_MEAN_BRIEF", nullptr, 0)>0);
         std::printf(failures ? "FAILED %d checks\n" : "NRD mean checks passed\n", failures); return failures ? 1 : 0;
     }
-    // PT-80: what stands between the tracer's samples and the picture leaves a mirror's picture as it is traced (the owner:
-    // "we need our tracer to be able to perfectly render the world in a mirror"; in game, 2026-10-08, a tavern's mirror kept
-    // 1.24 of the reference's detail with no denoiser and 0.09 with NRD). The floor a perfect mirror (roughness 0, a metal of
-    // reflectance 1, no diffuse color), the camera low over it, and a panel standing on it with a fine texture (a checker of
-    // 8-texel squares, then one of coarse cells), lit by six small lamps of two colors: what the mirror shows is lit by a
-    // lamp drawn by chance each frame, so its picture is noisy, as a room's is in a mirror in game. The game's defaults (1
-    // bounce, 1 ray a pixel, 4 spatial samples, histories 4 and 8), the camera still.
-    // Measured over the panel's middle as the mirror shows it: the picture with no denoiser twice (two means, other random
-    // numbers), with NRD, with the built-in denoiser, and as Ray Reconstruction is handed it: each the mean of 32 frames
-    // after 64, all alike (the room's light is still settling then, and pictures warmed differently differ by that, not by
-    // their filters). Detail kept: the picture's fine detail (each pixel less the mean of the 5x5 around it) times the two
-    // undenoised means' mean detail, over the product of the two means' (their noise cancels): 1 all of it, 0 a smear.
-    // Light: the region's mean against the undenoised means'. Flicker: a pixel's spread over the frames, over its mean.
-    // Then the same floor rougher (0.25, 0.5): a rough surface's reflection is a blur of what it reflects, which the filter
-    // may take the noise out of (printed: its flicker against the undenoised picture's). Alone: TGPT_TEST_MIRROR_FILTERS_ONLY=1.
+    // PT-80: what stands between the tracer's samples and the picture leaves a mirror's picture as it is
+    // traced. The floor a perfect mirror (roughness 0, a metal of reflectance 1, no diffuse color), the
+    // camera low over it, and a panel standing on it with a fine texture (a checker of 8-texel squares,
+    // then one of coarse cells), lit by six small lamps of two colors: what the mirror shows is lit by a
+    // lamp drawn by chance each frame, so its picture is noisy, as a room's is in a mirror in game. The
+    // game's defaults (1 bounce, 1 ray a pixel, 4 spatial samples, histories 4 and 8), the camera still.
+    // Measured over the panel's middle as the mirror shows it: the picture with no denoiser twice (two
+    // means, other random numbers), with NRD, with the built-in denoiser, and as Ray Reconstruction is
+    // handed it: each the mean of 32 frames after 64, all alike (the room's light is still settling
+    // then, and pictures warmed differently differ by that, not by their filters). Detail kept: the
+    // picture's fine detail (each pixel less the mean of the 5x5 around it) times the two undenoised
+    // means' mean detail, over the product of the two means' (their noise cancels): 1 all of it, 0 a
+    // smear. Light: the region's mean against the undenoised means'. Flicker: a pixel's spread over the
+    // frames, over its mean. Then the same floor rougher (0.25, 0.5): a rough surface's reflection is a
+    // blur of what it reflects, which the filter may take the noise out of (printed: its flicker against
+    // the undenoised picture's). Alone: TGPT_TEST_MIRROR_FILTERS_ONLY=1.
     auto mirrorFilters=[&]() {
         const auto keepFloor=objects[0]; const bool keepSun=sunOn, keepBumpy=bumpy;
         const uint32_t keep[5]={history, giHistory, bounces, spatialSamples, rays};
@@ -3299,15 +3300,16 @@ RWTexture2D<float4> t : register(u0);
             baseOnly, baseWork, traced, tracedWork);
         std::printf("      path tracing adds %.2f ms a frame when HDRP's work sits between the events\n", tracedWork-baseWork);
     }
-    // Round things traced as round (PT-04, the owner, 2026-10-06: "cloth, jars, and other things can look a little 'stepped'/
-    // low-poly ... around corners, shoulders, cloth folds"): a cylinder of 12 flat sides with smooth vertex normals, 1.2 m
-    // across, 3.5 m in front of a camera of its own, the room's lamp 0.9 m from its left side. Each check reads a profile
-    // across it: per column, the mean of the 41 rows at its middle over the last 16 frames (its faces are vertical, so their
-    // edges stay sharp while the noise averages out), from 6 columns inside its outline on either side (the face beside the
-    // outline is seen edge on). Its measure is a step: the largest jump between neighbouring columns beyond the profile's
-    // own slope there (the median jump of the 13 around it), since the light falls fastest near the outline.
-    // TGPT_OPTION_FACETED (the hidden "Smooth round surfaces" off) shades it as before: its steps must stand out there, or
-    // the check could not see them. The face edges lie at columns 538, 576, 639, 702 and 740.
+    // Round things traced as round (PT-04): a cylinder of 12 flat sides with smooth vertex normals, 1.2
+    // m across, 3.5 m in front of a camera of its own, the room's lamp 0.9 m from its left side. Each
+    // check reads a profile across it: per column, the mean of the 41 rows at its middle over the last
+    // 16 frames (its faces are vertical, so their edges stay sharp while the noise averages out), from 6
+    // columns inside its outline on either side (the face beside the outline is seen edge on). Its
+    // measure is a step: the largest jump between neighbouring columns beyond the profile's own slope
+    // there (the median jump of the 13 around it), since the light falls fastest near the outline.
+    // TGPT_OPTION_FACETED (the hidden "Smooth round surfaces" off) shades it as before: its steps must
+    // stand out there, or the check could not see them. The face edges lie at columns 538, 576, 639, 702
+    // and 740.
     {
         const int sides=12; const float radius=0.6f, height=1.6f;
         std::vector<Vertex> cyl; std::vector<uint16_t> cylIndices;
@@ -6095,14 +6097,15 @@ RWTexture2D<float4> t : register(u0);
                 expect(wallGain>0.1*greyLit, "the GBuffer3 of a surface shows where hair leaves it bare");
                 expect(hairGain<0.15*wallGain, "hair covering the pixel hides the GBuffer3 of the surface behind it (no pale veil over a crown)");
             }
-            // PT-53: hair stays where it is while the camera moves. The card of layer hair a quarter of the way from the camera
-            // to the wall HDRP draws (3 m and 12 m), the camera moved 10 cm sideways from one frame to the next (until
-            // 2026-10-08: between the traced frame and the one it was shown in; a frame's light is shown in that frame now,
-            // PT-84). HDRP has no hair (the plugin hides it), so its motion vectors there are the wall's: laid into the
-            // wall's texels (until 2026-10-07), the card moved with the wall, about 15 pixels off where it is (the owner saw the
-            // hair slide on the heads as the player moved sideways, without any denoiser). Each pixel's ray in the frame shown
-            // meets the card's plane at a full or an empty square of its checker: the red the composite shows must agree with
-            // it as well as with a still camera.
+            // PT-53: hair stays where it is while the camera moves. The card of layer hair a
+            // quarter of the way from the camera to the wall HDRP draws (3 m and 12 m), the
+            // camera moved 10 cm sideways from one frame to the next (until 2026-10-08: between
+            // the traced frame and the one it was shown in; a frame's light is shown in that
+            // frame now, PT-84). HDRP has no hair (the plugin hides it), so its motion vectors
+            // there are the wall's: laid into the wall's texels (until 2026-10-07), the card
+            // moved with the wall, about 15 pixels off where it is. Each pixel's ray in the
+            // frame shown meets the card's plane at a full or an empty square of its checker:
+            // the red the composite shows must agree with it as well as with a still camera.
             {
                 const V3 camTarget{0, 2.2f, 2};
                 const Camera still=make_camera(cam.position, camTarget, 60.f, float(W)/float(H));
@@ -6293,11 +6296,14 @@ RWTexture2D<float4> t : register(u0);
                     q.mesh=mesh; q.materialBase=uint32_t(ids.size()); q.mask=0xFF; q.flags=mesh==cardHandle ? TGPT_INSTANCE_ALPHA_TEST : 0u;
                     ids.push_back(material); list.push_back(q);
                 };
-                // A thick head of hair: sixteen red cards a centimetre apart before the wall HDRP draws, each texel 0.2 (below the
-                // depth prepass of 0.5: blended, never whole). The game blends all sixteen: 0.8^16, 0.03 of the wall shows. With a
-                // fixed eight cards and nothing after (until 2026-10-07), 0.8^8 = 0.17 of it showed through: the background seen
-                // through the top of a head of hair, as a veil (the owner's npc-day run 20261007-081218). The cards past the eighth
-                // stop the ray by chance (pt_hair layer_tail): over the stack's pixels, the wall's share averages to the game's.
+                // A thick head of hair: sixteen red cards a centimetre apart before the wall
+                // HDRP draws, each texel 0.2 (below the depth prepass of 0.5: blended, never
+                // whole). The game blends all sixteen: 0.8^16, 0.03 of the wall shows. With
+                // a fixed eight cards and nothing after (until 2026-10-07), 0.8^8 = 0.17 of
+                // it showed through: the background seen through the top of a head of hair,
+                // as a veil. The cards past the eighth stop the ray by chance (pt_hair
+                // layer_tail): over the stack's pixels, the wall's share averages to the
+                // game's.
                 {
                     const auto thinMap=cardTexture(64, [](UINT, UINT) { return (51u<<24)|0x00FFFFFFu; }, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
                     TGPT_HairColor thinHair=hairOf(thinMap, 0.5f);
@@ -6415,9 +6421,9 @@ RWTexture2D<float4> t : register(u0);
             objects.pop_back();
             expect(SetScene(instances.data(), uint32_t(instances.size()), indices.data(), uint32_t(indices.size()))==0, "scene without the layer card");
         }
-        // The tracer's own camera rays for every pixel (PT-59; the owner, 2026-10-07: "make sure WE trace the world, not the
-        // game"): each pixel's surface is what its own ray finds in the traced scene, and the drawn G-buffer is only what that
-        // hit is compared with: the yardstick (TGPT_VIEW_YARDSTICK, TGPT_GetYardstick).
+        // The tracer's own camera rays for every pixel (PT-59): each pixel's surface is what its own
+        // ray finds in the traced scene, and the drawn G-buffer is only what that hit is compared
+        // with: the yardstick (TGPT_VIEW_YARDSTICK, TGPT_GetYardstick).
         {
             const uint32_t raw=TGPT_OPTION_NO_DENOISER;
             ownRays=true;
@@ -7176,8 +7182,8 @@ RWTexture2D<float4> t : register(u0);
         if(available) expect(!(status.features&TGPT_FEATURE_NRD_ACTIVE), "where AMD Ray Regeneration runs, NRD stands aside");
     }
     ReadStatus(&status);
-    // Reflection Boost: the floor as a grey metal (smoothness 0.6) becomes nearly a mirror, reflecting the room's colored walls
-    // (a non-metal only gets glossier: its mirror share stays, the owner's ruling of 2026-10-06).
+    // Reflection Boost: the floor as a grey metal (smoothness 0.6) becomes nearly a mirror, reflecting
+    // the room's colored walls.
     {
         const auto keepFloorFinish=objects[0]; objects[0].f0=0.5f;
         auto floorColor=[&]() {
@@ -7221,14 +7227,7 @@ RWTexture2D<float4> t : register(u0);
         expect(SetLights(&light, 1)==0, "one light again");
         sunOn=keepSun; skyIntensity=keepSky;
     }
-    // PT-46: a mirror shows what it reflects as the camera sees it there (the owner: "we need our tracer to be able to perfectly
-    // render the world in a mirror"). The floor a perfect mirror (roughness 0, a metal of reflectance 1, no diffuse color), the
-    // camera low over it, looking down towards the red wall: the floor shows the wall. The reference: the wall seen directly
-    // from the camera's mirror image under the floor (the floor left out of the raster there; the traced scene is the same),
-    // whose picture is the mirror's upside down, pixel on pixel (a camera keeps its up, so the reflected view's is flipped).
-    // The room's warm lamp lights the wall, the sun and the sky too; Indirect Color 3 and Bounces 1, as the owner plays; none of
-    // the estimator's own changes (reuse, clamps, boiling filters, denoiser); 48 frames, the first 16 left out while the
-    // radiance cache fills. The wall's finish drawn as the tracer's material has it (roughness 0.7).
+    // PT-46: Secondary rays must reproduce camera-quality geometry and materials in mirrors.
     {
         const auto keepFloor=objects[0], keepWall=objects[2];
         const float keepIndirect=indirectColor; const uint32_t keepBounces=bounces;
@@ -7268,10 +7267,9 @@ RWTexture2D<float4> t : register(u0);
             q=from+d*t; segment=t;
             return q.y>0.3f && q.y<1.7f && q.z>-2.5f && q.z<1.5f;
         };
-        // At Indirect Color 1 (the bounced light as traced) and at the owner's 3. At 3 the camera's own pixel takes the
-        // color scale per noisy sample of its bounced light (pt_gi_spatial: a strongly colored sample is held back so that no
-        // channel goes negative, and with one ray a pixel and no reuse here every sample is one ray's), where the mirror's
-        // takes it on the radiance cache's mean: the mirror's color may come out a little stronger there, never weaker.
+        // Compare Indirect Color 1 and 3. The camera scales each noisy bounced-light sample; mirrors scale the
+        // cache mean. Per-sample nonnegative-channel handling can make the mirror more saturated, but it must
+        // not weaken the expected colour response.
         auto toFloat=[](const std::vector<double>& v) { return std::vector<float>(v.begin(), v.end()); };
         for(const float scale:{1.f, 3.f}) {
             indirectColor=scale;
@@ -7727,17 +7725,21 @@ RWTexture2D<float4> t : register(u0);
             std::printf("      a normal map tilted toward a lamp at the side: the panel's light %.4f, flat %.4f, tilted away %.4f; with the atlas (no normal maps) %.4f\n",
                         np.mean, nf.mean, nm.mean, na.mean);
             expect(np.mean>1.5*nf.mean && nm.mean<0.5*nf.mean && std::fabs(na.mean-nf.mean)<0.02*nf.mean, "the game's normal map tilts the shading at a hit, in the mesh's tangent frame");
-            // PT-46, mirrors not sharp (the owner: "these mirrors still doesn't look like full resolution, are they?"): a perfect
-            // mirror shows a texture as sharp as the camera sees it directly from the mirror's place. The same panel, floor and
-            // camera; the reference is the panel seen directly from the camera's mirror image under the floor (the floor left out
-            // of the traced scene there) along camera rays (the Materials view: what a camera ray reads of a material, over one
-            // pixel's footprint), whose picture is the mirror's upside down. Two textures (RGBA8, linear, every mip): a checker of
-            // 8-texel squares, each mip its box filter; and one whose every mip is a flat grey of its own ((k + 0.5) / 12 for mip
-            // k), which tells the mip a ray read, its fraction too (trilinear filtering blends the two nearest). What a mirror's
-            // pixel shows of a texture: its light with the texture less its light with a black panel, over its light with a white
-            // one less the black (the same frame indices: the same rays, the same lamp), so the lamp's falloff and the panel's own
-            // gloss drop out; seen directly, the Materials view's color with the texture over the white panel's. Fine detail: the
-            // spread of each pixel's value less the mean of the 5x5 pixels around it, over the panel's middle.
+            // PT-46, mirrors not sharp: a perfect mirror shows a texture as sharp as the camera
+            // sees it directly from the mirror's place. The same panel, floor and camera; the
+            // reference is the panel seen directly from the camera's mirror image under the
+            // floor (the floor left out of the traced scene there) along camera rays (the
+            // Materials view: what a camera ray reads of a material, over one pixel's
+            // footprint), whose picture is the mirror's upside down. Two textures (RGBA8,
+            // linear, every mip): a checker of 8-texel squares, each mip its box filter; and one
+            // whose every mip is a flat grey of its own ((k + 0.5) / 12 for mip k), which tells
+            // the mip a ray read, its fraction too (trilinear filtering blends the two nearest).
+            // What a mirror's pixel shows of a texture: its light with the texture less its
+            // light with a black panel, over its light with a white one less the black (the same
+            // frame indices: the same rays, the same lamp), so the lamp's falloff and the
+            // panel's own gloss drop out; seen directly, the Materials view's color with the
+            // texture over the white panel's. Fine detail: the spread of each pixel's value less
+            // the mean of the 5x5 pixels around it, over the panel's middle.
             {
                 const UINT size=1024, mips=11;
                 ComPtr<ID3D11Texture2D> fineChecker, mipCoded;
@@ -8621,10 +8623,11 @@ RWTexture2D<float4> t : register(u0);
             }
             expect(SetScene(instances.data(), uint32_t(instances.size()), indices.data(), uint32_t(indices.size()))==0, "the room again");
             si.materials[0]=si.materials[1]=0;
-            // Since the glass and eyes migration (2026-10-07) nothing HDRP draws forward keeps HDRP's shading while tracing:
-            // what the camera's ray finds there is lit by the tracer, a plain material as an eye is (the owner's ruling "not
-            // to keep shading of anything in HDRP when PT is on"). Until then the plain face kept HDRP's (dark here: the sun
-            // misses it), which this check still asked for (plain below 0.005) and so failed on the merged build (0.0806).
+            // Since the glass and eyes migration (2026-10-07) nothing HDRP draws forward keeps
+            // HDRP's shading while tracing: what the camera's ray finds there is lit by the
+            // tracer, a plain material as an eye is. Until then the plain face kept HDRP's (dark
+            // here: the sun misses it), which this check still asked for (plain below 0.005) and
+            // so failed on the merged build (0.0806).
             std::printf("      a character's forward face: a plain material %.4f (traced), an eye %.4f (traced), behind a lash card 4 cm in front %.4f\n", plain, eyeFace, behindLash);
             expect(plain>0.02 && eyeFace>0.02, "a character's face drawn forward is shaded by the tracer, not left to HDRP: an eye and a plain material alike");
             expect(behindLash>0.8*eyeFace, "hair well in front of what HDRP drew forward is passed: the eye behind a lash card is found");
@@ -8962,10 +8965,11 @@ RWTexture2D<float4> t : register(u0);
         // (What the floor reflects takes the boost itself, as the camera sees the walls with it, PT-46: a few percent.)
         expect(skin0>0 && std::fabs(skin1/skin0-1.0)<0.04, "Reflection Boost leaves skin's reflections as the game made them");
         std::printf("      reflected light summed over the floor, Reflection Boost at 1 against 0: as it is x%.2f\n", plain0>0 ? plain1/plain0 : 0.0);
-        // The boost's mirror share goes to metal (the owner: "we want metal to reflect more than stone and brick"), read where
-        // the rule is applied: the specular albedo Ray Reconstruction is handed at a floor pixel (d3d11.hlsl's guides, the
-        // same rule as pt_prepare's). The floor as a grey metal (a specular color of 0.5) and as a non-metal, boost 0 and 1.
-        // (Summing the reflected light over the floor measured the sun's highlight, which a smoother floor concentrates.)
+        // The boost's mirror share goes to metal, read where the rule is applied: the specular
+        // albedo Ray Reconstruction is handed at a floor pixel (d3d11.hlsl's guides, the same rule
+        // as pt_prepare's). The floor as a grey metal (a specular color of 0.5) and as a non-metal,
+        // boost 0 and 1. (Summing the reflected light over the floor measured the sun's highlight,
+        // which a smoother floor concentrates.)
         auto getGuidesForBoost=reinterpret_cast<decltype(&TGPT_GetGuides)>(GetProcAddress(pt, "TGPT_GetGuides"));
         const size_t at=skinPixels.empty() ? 0 : skinPixels[skinPixels.size()/2]/3;
         const UINT gx=UINT(at%W), gy=UINT(at/W);
@@ -9748,11 +9752,12 @@ RWTexture2D<float4> t : register(u0);
             // from behind a leaf, 0.60: the two sides see different parts of the room.)
             expect(pxAway.size()>2000 && lightFacing>0 && lightAway>0.5*lightFacing, "a blade whose normal faces away from the camera still gathers light");
         }
-        // 6. Grass's shadows (the owner, 2026-10-06: "We want grass shadows, but not those horrible looking ones"): a leaf or a
-        // blade (TGPT_MATERIAL_TRANSLUCENT) lets a light's shadow ray through as often as it is lit through (half), so its shadow
-        // is half one. A traced-only card in the sun, alpha-tested with the checkered leaf's texture, on a mesh of its own whose
-        // micromaps are baked for the translucent material first (they must leave its covered texels to the per-ray test): the
-        // floor in its shadow (where the opaque card's takes most of the sun) gets half the sun the card takes from it.
+        // 6. Grass's shadows: a leaf or a blade (TGPT_MATERIAL_TRANSLUCENT) lets a light's shadow
+        // ray through as often as it is lit through (half), so its shadow is half one. A traced-only
+        // card in the sun, alpha-tested with the checkered leaf's texture, on a mesh of its own
+        // whose micromaps are baked for the translucent material first (they must leave its covered
+        // texels to the per-ray test): the floor in its shadow (where the opaque card's takes most
+        // of the sun) gets half the sun the card takes from it.
         {
             const int grassHandle=register_mesh(cardMesh, 78);
             auto grass=materials[6]; grass.flags|=TGPT_MATERIAL_TRANSLUCENT;
@@ -9927,11 +9932,11 @@ RWTexture2D<float4> t : register(u0);
                         "in red (0.30 expected), green %.3f of red's share (0.107 expected)\n", n, share, greenOfRed);
             expect(n>2000 && share>0.24 && share<0.36 && greenOfRed>0.06 && greenOfRed<0.16, "the sky's light passes thin cloth to what lies under it, tinted by its color");
         }
-        // 11-13. Cloth the wind sways (PT-49, the owner: "reflections and shadows of moving objects, including cloth, must be
-        // accurately represented by our path tracer"). The game's Cloth_Wind moves its vertices in its vertex shader by the time
-        // (cloth_wind_reference, from its compiled code); the tracer moves its copy of the still mesh the same way every frame
-        // (TGPT_SetClothWind, pt_sway, its BLAS refitted). A sheet of 16 by 16 cells, its texture once across it, and a wind as
-        // the game's materials set it (speed 0.18, wind 0.77: the shader's defaults).
+        // 11-13. Cloth the wind sways (PT-49). The game's Cloth_Wind moves its vertices in its
+        // vertex shader by the time (cloth_wind_reference, from its compiled code); the tracer moves
+        // its copy of the still mesh the same way every frame (TGPT_SetClothWind, pt_sway, its BLAS
+        // refitted). A sheet of 16 by 16 cells, its texture once across it, and a wind as the game's
+        // materials set it (speed 0.18, wind 0.77: the shader's defaults).
         {
             const int cells=16;
             std::vector<Vertex> flat; std::vector<uint16_t> gridIndices;
@@ -10064,12 +10069,12 @@ RWTexture2D<float4> t : register(u0);
                             "a later pose's %.4f\n", n, n ? off/double(n) : 0.0, n ? offStill/double(n) : 0.0, n ? offLater/double(n) : 0.0);
                 expect(n>300 && offStill>0 && off<0.1*offStill && off<0.1*offLater, "a swaying cloth's shadow falls where its pose casts it, and moves with it");
             }
-            // 13. Seen from below under the open sky (PT-39, the owner: "when you looked up against the cloth I would have expected
-            // to see some red hues and subsurface scattering as the light transmits through it"): the same canopy, red thin cloth,
-            // drawn facing down in its swayed pose (it rises 0.3 to 0.7 m above where it hangs still), seen from 3 m below, the
-            // sun and the lamp off. Its pixels gather the sky's light from behind it as cloth (against the same canopy as a solid
-            // red sheet), about 0.3 of what a surface facing up there gets from the sky; traced still (the PT-39 case) the pixels
-            // miss it. In the picture that light is red.
+            // 13. Seen from below under the open sky (PT-39): the same canopy, red thin cloth,
+            // drawn facing down in its swayed pose (it rises 0.3 to 0.7 m above where it hangs
+            // still), seen from 3 m below, the sun and the lamp off. Its pixels gather the sky's
+            // light from behind it as cloth (against the same canopy as a solid red sheet),
+            // about 0.3 of what a surface facing up there gets from the sky; traced still (the
+            // PT-39 case) the pixels miss it. In the picture that light is red.
             {
                 const M4 roofDown=mul(translate_scale({-3.f, 3.f, 4.f}, {2, 1, 2}), rot_x(pi)), roofUp=translate_scale({-3.f, 4.5f, 4.f}, {2, 1, 2});
                 const Camera above=make_camera({-3.f, 5.9f, 1.2f}, {-3.f, 4.5f, 4.f}, 60.f, float(W)/float(H));
@@ -10115,14 +10120,14 @@ RWTexture2D<float4> t : register(u0);
             }
             expect(SetClothWind(0.f, nullptr, 0)==0, "no cloth wind");
         }
-        // 14-15. Grass, leaves and trunks in the game's wind (PT-63, the owner: "of course our shadows and reflections should
-        // move alongside the grass and leaves swaying in the wind. Otherwise what's the point of realtime ray tracing"). The
-        // game's vegetation shaders move their vertices by the wind's speed and direction, the time and a noise map
-        // (grass_wind_reference, leaves_wind_reference: from their compiled code); the tracer poses every such instance the
-        // same way every frame, the instances of one 16 m cell of the world as one group with one BLAS (TGPT_SetPlantWind,
-        // pt_sway steps 3 to 5). Five tufts of grass (three crossed cards a metre tall, turned and scaled each its own way,
-        // one of them in the next cell: two groups) and a small tree (a trunk and three leaf cards, two materials) stand on
-        // the floor in the sun, traced only.
+        // 14-15. Grass, leaves and trunks in the game's wind (PT-63). The game's vegetation shaders
+        // move their vertices by the wind's speed and direction, the time and a noise map
+        // (grass_wind_reference, leaves_wind_reference: from their compiled code); the tracer poses
+        // every such instance the same way every frame, the instances of one 16 m cell of the world
+        // as one group with one BLAS (TGPT_SetPlantWind, pt_sway steps 3 to 5). Five tufts of grass
+        // (three crossed cards a metre tall, turned and scaled each its own way, one of them in the
+        // next cell: two groups) and a small tree (a trunk and three leaf cards, two materials)
+        // stand on the floor in the sun, traced only.
         {
             expect(SetPlantWind!=nullptr && SetWindNoise!=nullptr, "the plant wind exports");
             auto rot_y=[&](float a) { M4 r=identity(); r.m[0][0]=std::cos(a); r.m[0][2]=std::sin(a); r.m[2][0]=-std::sin(a); r.m[2][2]=std::cos(a); return r; };

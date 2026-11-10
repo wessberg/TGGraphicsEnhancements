@@ -75,10 +75,10 @@ namespace TGPathTracing.Harness
         // a light with its glowing glass; "shade" puts its metal shade on, so no light of its own reaches what is above it;
         // "away" removes it. "" leaves it as it is.
         public string lantern = "";
-        // A light of the game's at another strength for the step (the owner, 2026-10-08, of the tavern's lantern: "try making
-        // it 10, 100, 1000, 5000, 10000 and show me"): every enabled Light within 15 m of the camera whose path holds lightName
-        // takes lightCandela (Light.intensity: candela for HDRP's point lights); 0 puts it back as the game has it. All are put
-        // back when the scenario ends; nothing is saved.
+        // A light of the game's at another strength for the step: every enabled Light within 15 m of
+        // the camera whose path holds lightName takes lightCandela (Light.intensity: candela for
+        // HDRP's point lights); 0 puts it back as the game has it. All are put back when the
+        // scenario ends; nothing is saved.
         public string lightName = "";
         public float lightCandela = 0f;
         // PT-53 (CameraSlide.cs): metres the camera swings to either side, as a player strafing, from the settings on to

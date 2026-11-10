@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: MIT
-// TG Path Tracing's rules for the things the game moves (src/TGPathTracing/MovingRules.cs; PT-71 item 4, the owner: "What
-// moves is traced as it moves"): what counts as a move, which entities the scan leaves to the frames, a thing's identity from
-// frame to frame and where it was the frame before, and the scan's instances the things placed stand in for. Each expectation
-// is worked out by hand from the game's code (docs/agents/moving.md section 1), not by calling the rule under test another way.
+// SPDX-License-Identifier: MIT TG Path Tracing's rules for the things the game moves (PT-71): what counts as
+// a move, which entities the scan leaves to the frames, a thing's identity from frame to frame and where it
+// was the frame before, and the scan's instances the things placed stand in for. Each expectation is worked
+// out by hand from the game's code (docs/agents/moving.md section 1), not by calling the rule under test
+// another way.
 using System;
 using System.Collections.Generic;
 using TGPathTracing;

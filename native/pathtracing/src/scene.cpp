@@ -108,10 +108,9 @@ struct RecordCpu {
 } record_cpu;
 struct RecordCpuFrame { ~RecordCpuFrame() { record_cpu.end(); } };
 const char* const kInstancesLoop="the instances' loop";
-// PT-98: these are counted "per frame" of 60 a second and go by the clock (GpuScene::by_clock, set_clock): a frame that
-// took 125 ms takes in 7.5 times as much, so the traced world arrives as soon at 8 frames a second as at 60 (the owner,
-// 2026-10-09, of a town filling in: "it took a LONG time before it kicked in"; the tracer ran at 5 to 10 frames a second,
-// and 48 builds a frame were 384 a second where 60 frames make 2,880).
+// PT-98: these are counted "per frame" of 60 a second and go by the clock (GpuScene::by_clock, set_clock): a
+// frame that took 125 ms takes in 7.5 times as much, so the traced world arrives as soon at 8 frames a
+// second as at 60.
 constexpr uint64_t kReadBudget=64ull<<20;         // bytes of mesh data copied to staging per frame
 // A budget that is memory in flight grows with the clock up to this many frames' worth and no further: the read-backs of
 // up to three frames are in memory at once (copied, then mapped two frames or kReadMapMs later: 256 MB a frame at most),
@@ -3343,15 +3342,9 @@ bool GpuScene::omm_possible(const Mesh& mesh, const uint32_t* materials) const {
     }
     return alphaTriangles && alphaTriangles<=0xFFFFFFFFull/omm_bytes(kOmmLevelMost);
 }
-// The level a mesh's micromaps are baked at: kOmmLevel, and kOmmLevelLeaves (6, round 20) where a cut-out submesh is a leaf's
-// or a blade of grass's (is_foliage), whose alpha's edges cross most of its pieces at level 4: the plants' pieces unknown
-// (the alpha test asked there) 59 % at level 4, 46 at 5, 35 at 6 in a town; the forest's tracer 82.8 -> 75.5 ms with the
-// world running, the town's 64.5 -> 62.2, the micromaps 32 -> 163 MB and 44 -> 200 (run 20261011-055446). FOR MEASURING
-// (TGPT_OMM_TRIAL_LEAVES_4, _5): level 4 as before, or 5. A mesh whose cut-outs at that level are more pieces than one
-// frame's bake may take (kOmmTrianglesPerFrame at level 4: 67 million pieces) is baked a level coarser, as often as it takes:
-// the bake of one mesh is one dispatch, and the first mesh of a frame always went whatever its size. 2026-10-11 the GPU hung
-// in the scene stage while the owner walked into new ground (TDR, 0x887A0006). A coarser level changes no pixel (an
-// unknown piece is the alpha test's, as without micromaps); it costs that mesh's rays a little.
+// Bake foliage micromaps at level 6. Town unknown coverage fell from 59% at level 4 to 35% at 6; forest tracer
+// time fell 82.8 to 75.5 ms, at 32 to 163 MB. Trials retain levels 4/5 for measurement. Keep the same
+// conservative coverage and handle per-frame bake work without dropping meshes.
 uint32_t GpuScene::omm_level(const uint32_t* materials, size_t count, uint64_t alphaTriangles) const {
     const uint32_t leaves=(ommTrial&TGPT_OMM_TRIAL_LEAVES_4) ? kOmmLevel : (ommTrial&TGPT_OMM_TRIAL_LEAVES_5) ? 5u : kOmmLevelLeaves;
     if(leaves==kOmmLevel) return kOmmLevel;

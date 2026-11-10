@@ -69,19 +69,21 @@ namespace TGPathTracing
         // Whether shadow-only meshes stand in for drawn geometry: only while Entities Graphics' entities can't be read.
         private static bool standIns = true;
         private static readonly HashSet<string> undrawnSeen = new HashSet<string>();
-        // Registering a mesh reads its native buffers, which waits for Unity's render thread: a few a frame at the game's
-        // own frame rate. By the clock, not by the frame (PT-98; the owner, 2026-10-09, of a guard's textures and a town
-        // square filling in: "it took a LONG time before it kicked in"): at the 8 frames a second the tracer ran at, 6 a
-        // frame were 45 meshes a second, and the square's 1,533 took over half a minute. So: MeshesPerFrame at least, and
-        // on until a share of the last frame's time is spent (MeshShare): a slow frame takes in what a second of fast ones
-        // would have, and the world is whole about as soon whatever the frame rate.
-        // The share is counted from the END of the frame's first mesh (the same day, the second look): the first call into
-        // Unity of a frame waits until the render thread has finished the frame it is drawing, which at 8 frames a second
-        // is most of a frame, so a clock started before it has spent its tenth before the second mesh, and the limit is
-        // still 6 a frame. The meshes after the first cost about a tenth of a millisecond each at most (run
-        // 20261009-154425: a town's first 1,190 were registered within 1.2 s of fast frames, in a tenth of each; the
-        // timeline's line gives the time: Arrival.Registered), so a tenth of the frame is about 1,000 meshes a second at
-        // any frame rate. While meshes wait a frame is up to a tenth longer; when none waits it costs nothing.
+        // Registering a mesh reads its native buffers, which waits for Unity's render thread: a few
+        // a frame at the game's own frame rate. By the clock, not by the frame (PT-98): at the 8
+        // frames a second the tracer ran at, 6 a frame were 45 meshes a second, and the square's
+        // 1,533 took over half a minute. So: MeshesPerFrame at least, and on until a share of the
+        // last frame's time is spent (MeshShare): a slow frame takes in what a second of fast ones
+        // would have, and the world is whole about as soon whatever the frame rate. The share is
+        // counted from the END of the frame's first mesh (the same day, the second look): the first
+        // call into Unity of a frame waits until the render thread has finished the frame it is
+        // drawing, which at 8 frames a second is most of a frame, so a clock started before it has
+        // spent its tenth before the second mesh, and the limit is still 6 a frame. The meshes after
+        // the first cost about a tenth of a millisecond each at most (run 20261009-154425: a town's
+        // first 1,190 were registered within 1.2 s of fast frames, in a tenth of each; the
+        // timeline's line gives the time: Arrival.Registered), so a tenth of the frame is about
+        // 1,000 meshes a second at any frame rate. While meshes wait a frame is up to a tenth
+        // longer; when none waits it costs nothing.
         private const int MeshesPerFrame = 6;
         private const float MeshShare = 0.1f;
         // A mesh's instances are listed by the first scan after it has a handle. While registered meshes wait for that
@@ -753,10 +755,11 @@ namespace TGPathTracing
             uint world = !eye && (textured || GlassFinish.IsCornea(m)) && !CharacterLeftOut(m) ? MaterialIndex(m) : Invisible;
             if (eye)
             {
-                // The eyes are the tracer's (the owner's rule: nothing HDRP-shaded while tracing), lit as a wet surface: their
-                // shader's color baked texel by texel (EyeTile: the sclera, the iris with its pupil and limbal ring, from the
-                // game's compiled eye shader). Traced from the sclera's texture alone they came out white. Seen by camera
-                // and reflected rays alike. The separate cornea mesh is another traced dielectric
+                // The eyes are the tracer's, lit as a wet surface: their shader's color
+                // baked texel by texel (EyeTile: the sclera, the iris with its pupil and
+                // limbal ring, from the game's compiled eye shader). Traced from the
+                // sclera's texture alone they came out white. Seen by camera and reflected
+                // rays alike. The separate cornea mesh is another traced dielectric
                 // interface; its HDRP colour passes are hidden (CharacterCapture).
                 int tile = textured ? EyeTile(m) : -1;
                 materialList.Add(new NativeMaterial { BaseR = tile >= 0 ? 1f : 0.8f, BaseG = tile >= 0 ? 1f : 0.8f, BaseB = tile >= 0 ? 1f : 0.8f, BaseA = 1f,
@@ -1654,11 +1657,11 @@ namespace TGPathTracing
             return variant;
         }
 
-        // ------------------------------------------------------------------ mesh renderers
-        // No distance leaves an object out (PT-63, the owner of the 250 m of the Scene Radius row that is gone: "Why? Do that"):
-        // what the game draws is traced, at the level it draws it, however far off. A statically batched renderer never moves:
-        // listed here. Any other a script may move, enable or disable between two scans (PT-71 item 4; the owner: "What moves is
-        // traced as it moves"): placed every frame where it is then (FollowRenderers), never listed.
+        // ------------------------------------------------------------------ mesh renderers No
+        // distance leaves an object out (PT-63): what the game draws is traced, at the level it
+        // draws it, however far off. A statically batched renderer never moves: listed here. Any
+        // other a script may move, enable or disable between two scans (PT-71): placed every frame
+        // where it is then (FollowRenderers), never listed.
         private static int CaptureRenderers(Vector3 camera, List<NativeInstance> instances, List<uint> indices)
         {
             // One LOD per group: the one Unity draws from this camera (WorldRules.GroupLevel), the others left out; none where

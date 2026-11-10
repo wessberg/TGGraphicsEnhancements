@@ -1,24 +1,21 @@
-// SPDX-License-Identifier: MIT
-// PT-98: how long the traced world takes to be whole, as a timeline the game writes itself (the owner, 2026-10-09: "I
-// frequently see stuff pop in over time ... so I'm never sure when I can trust the visuals"; of a guard's textures and a
-// town square filling in: "it took a LONG time before it kicked in").
-// From the moment tracing can capture (it was switched on, its passes were made, or a scene was loaded with it on) one
-// line a second says what is there and what is still to come, until the world is whole; then one line says how long it
-// took and which queue emptied last; then nothing, until the next start or until things have been arriving again for
-// StallSeconds (a walk into a new place). Counters only: what the scan, the registering and the texture watch count
-// anyway, and the native side's status. Nothing by pixel, nothing asked of Unity that the scan does not ask already.
-//
-// "Whole" is: no mesh waits to be registered (the plugin's queue) or built (the native side's); every registered mesh
-// has been through a scan (a scan lists a mesh's instances only once the mesh has a handle) and no listed instance
-// waits for its mesh; no character is being read back; no texture is kept back; no tile waits to be baked; and the
+// SPDX-License-Identifier: MIT PT-98: how long the traced world takes to be whole, as a timeline the game
+// writes itself. From the moment tracing can capture (it was switched on, its passes were made, or a scene
+// was loaded with it on) one line a second says what is there and what is still to come, until the world is
+// whole; then one line says how long it took and which queue emptied last; then nothing, until the next
+// start or until things have been arriving again for StallSeconds (a walk into a new place). Counters only:
+// what the scan, the registering and the texture watch count anyway, and the native side's status. Nothing
+// by pixel, nothing asked of Unity that the scan does not ask already. "Whole" is: no mesh waits to be
+// registered (the plugin's queue) or built (the native side's); every registered mesh has been through a
+// scan (a scan lists a mesh's instances only once the mesh has a handle) and no listed instance waits for
+// its mesh; no character is being read back; no texture is kept back; no tile waits to be baked; and the
 // game is loading no sharper level of a texture a traced material reads (a load that shows no progress for
-// LoadingStallSeconds is no longer waited for, and the line says so: the game's streaming must not hold the notice up
-// for ever). What the last scan met without a mesh, found new and followed of texture swaps is in the lines and does
-// not count by itself: a missing or new mesh is in the queue to register, a new material and a followed swap are done
-// when the scan ends. Opacity micromaps still to make and plants still to be grouped for the wind are in the lines
-// and do not count either: neither changes what a still picture shows (the alpha test serves until a micromap is
-// there; a plant stands still until its group is made).
-// Session's notice and the harness read the same state (ToCome, Whole, NoticeText).
+// LoadingStallSeconds is no longer waited for, and the line says so: the game's streaming must not hold the
+// notice up for ever). What the last scan met without a mesh, found new and followed of texture swaps is in
+// the lines and does not count by itself: a missing or new mesh is in the queue to register, a new material
+// and a followed swap are done when the scan ends. Opacity micromaps still to make and plants still to be
+// grouped for the wind are in the lines and do not count either: neither changes what a still picture shows
+// (the alpha test serves until a micromap is there; a plant stands still until its group is made). Session's
+// notice and the harness read the same state (ToCome, Whole, NoticeText).
 using System.Globalization;
 using UnityEngine;
 namespace TGPathTracing

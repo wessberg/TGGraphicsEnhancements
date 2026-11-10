@@ -1,16 +1,5 @@
-# Ends every offline GPU test (tgpt_gpu_test) the moment a game of the owner's opens, and goes on watching.
-#
-#   .\tools\harness\Stop-TestsBesideGame.ps1 [-UntilHour 9]      started in the background by the coordinator while
-#                                                                workers may run offline GPU tests
-#
-# The owner's rule since 2026-10-12 00:20: no offline GPU test while a game of theirs is open (a worker's test hung
-# the card beside Starfield, Windows reset the driver and the game went down). `Run-PtHarness.ps1 -GpuCheck` says no
-# BEFORE a test starts; it cannot end a test that is already running when the game opens. That night at 04:51 the
-# owner opened Starfield one and a half minutes after three workers' tests had started: one worker's script ended its
-# test at once, another's ran on beside the game for minutes. This script ends them all, whatever a worker's own
-# script does. A test ended here leaves no result: its runner starts it again when -GpuCheck allows.
-# The games are Run-PtHarness.ps1's own list ($ownerGames). It ends by itself at -UntilHour o'clock, or when a file
-# STOP-watch stands in artifacts/harness. Each stop is a line on its output and in artifacts/harness/tests-stopped.log.
+# Stop offline tgpt_gpu_test processes when any listed game opens, and continue watching. Run this watchdog
+# while workers may test: the pre-launch GPU gate cannot stop a test already running.
 [CmdletBinding()]
 param([int]$UntilHour = 9, [int]$Seconds = 2)
 $ErrorActionPreference = 'Continue'

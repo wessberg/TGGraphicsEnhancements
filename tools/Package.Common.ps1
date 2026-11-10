@@ -49,7 +49,7 @@ function Get-TgMod([string]$Name) {
               Managed=@(@{Relative='BepInEx/plugins/TGNeuralRendering/TGNeuralRendering.dll'; Assembly='TGNeuralRendering'}) + (Get-TgBridgeManaged $Name)
               Natives=@(@{Component=$Name; Relative='BepInEx/TGNeuralRendering/Native/TGNeuralRendering.Native.dll'},
                         @{Component='TGNeuralRenderingCommunity'; Relative='BepInEx/TGNeuralRendering/Native/TGNeuralRendering.nvngx.dll'}, (Get-TgBridgeNative $Name))
-              # NVIDIA's signed DLL, unmodified, from the public RTX Remix release (docs/DLSS5-RESEARCH.md; the owner, 2026-10-30).
+              # NVIDIA's signed DLL, unmodified, from the public RTX Remix release.
               Signed=@(@{Folder='Notices'; Signer=$null; Optional=@(); Files=@(); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')},
                        @{Folder='DLSS'; Signer='NVIDIA'; Optional=@(); Files=@('nvngx_dlssnr.dll'); Notices=@('LICENSE-NVIDIA-RTX-SDKs.txt')})
               Extension='src/TGNeuralRendering/graphics-bridge-extension.json'

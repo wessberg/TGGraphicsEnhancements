@@ -126,12 +126,13 @@ namespace TGPathTracing
                     if (Settings.CurrentMode != TracingMode.Off && HaveStatus && Status.Starting != 0)
                         Notices.Show("tgpt.compiling", "TG Path Tracing", "compiling shaders (" + Diagnostics.PassesDone + " of " + Diagnostics.PassesTotal + ")", 1f);
                     else Notices.Hide("tgpt.compiling");
-                    // After a load the traced world is built over seconds (meshes registered, built and placed, textures
-                    // opened and baked): until then things are missing from the picture (PT-98; the owner, 2026-10-09: "I
-                    // frequently see stuff pop in over time ... so I'm never sure when I can trust the visuals").
-                    // Arrival counts all of it (its file's head says what "whole" is): the notice says how many things are
-                    // still to come and goes when the world is whole. Said once it has lasted 2 s: a few meshes streaming
-                    // in while the player walks say nothing.
+                    // After a load the traced world is built over seconds (meshes
+                    // registered, built and placed, textures opened and baked): until
+                    // then things are missing from the picture (PT-98). Arrival counts
+                    // all of it (its file's head says what "whole" is): the notice says
+                    // how many things are still to come and goes when the world is
+                    // whole. Said once it has lasted 2 s: a few meshes streaming in
+                    // while the player walks say nothing.
                     if (HaveStatus && Status.Starting == 0 && Settings.CurrentMode != TracingMode.Off && Arrival.Running && Arrival.Seconds >= BuildingNoticeAfter)
                         Notices.Show("tgpt.building", "TG Path Tracing", Arrival.NoticeText, 1f);
                     else Notices.Hide("tgpt.building");

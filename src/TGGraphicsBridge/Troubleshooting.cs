@@ -401,8 +401,8 @@ namespace TGGraphicsBridge
             BridgeLog.Log.LogInfo(line);
             GraphicsBridge.LogNote(line);
         }
-        // The player's own settings, whichever mod's step ran last. The next step applies its owner's again.
-        // The mods whose restore failed the last time, for the report and its message; "" when all succeeded.
+        // Retain the player settings across diagnostic steps. Each step applies its mod settings, then restores
+        // the originals; report the mods whose restore failed, or an empty string when all succeeded.
         private static string restoreFailures = "";
         private static bool RestoreAll()
         {

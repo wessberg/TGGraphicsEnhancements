@@ -24,13 +24,9 @@ namespace tgpt {
 // everything else, 2 the plants' structures as built (not compacted), 4 the water's structures as built and its pools'
 // pages kept. Read where a frame's scene is recorded.
 constexpr uint32_t kMemory2BuildChunks=1, kMemory2Plants=2, kMemory2Water=4;
-// What a build WITHOUT the test's switch leaves as it was before (memory3, 2026-10-10: "cuts 2 and 3 wait"). The plants'
-// compaction passes its check (every pixel the same) but what a refit of a compacted structure costs a frame has not been
-// seen in the game; the water's cut compiles and has never been run with water. Take a name out of this sum to turn its
-// cut on in the game; the check sets the switch and so runs each cut whatever stands here.
-// 2026-10-11 ~13:30: both on (0). The owner's session had the textures held back near the video memory budget for a long
-// time, stutter and a GPU hang; the water's pools then held 848 MB of pages for 196 MB of blocks in use, the plants' posed
-// copies and structures 720 MB. To be seen in the game at once: the beach (water) and the forest (plants).
+// Plant compaction and the water memory cut are enabled here (mask 0 since 2026-10-11). Preserve their separate
+// validation boundaries: pixel equivalence does not establish refit cost, and a compiled water path is not a
+// water-scene test.
 constexpr uint32_t kMemory2Waiting=0;
 inline uint32_t memory2_off() {
     char text[16]{};
@@ -547,14 +543,7 @@ public:
     void memory(TGPT_Diagnostics&) const;
     // Of that, what the water's surface holds (its pieces' pages, indices, scratch, records and read-backs), in bytes.
     uint64_t water_memory() const;
-    // PT-87, the owner's question of 2026-10-09 ("We removed limits so that ... we trace infinitely out into the distance.
-    // isn't that the primary reason for our perf woes?"): what the traced world holds by its distance from the camera, for
-    // the log's "PT memory by distance" line. Nothing is cut by it: it only counts. A mesh is counted at its NEAREST
-    // instance (it would stay for that one whatever went beyond), an instance at its own place, a group of plants at its
-    // cell's middle, a piece of the water's surface at where the camera was nearest to it when it was last wanted, and a
-    // texture of the game's at the nearest instance with a material that reads it (textureBytes: share::open_bytes).
-    // The last place of each row: what no instance names (characters' meshes, textures only hair, decals or a material
-    // program read).
+    // PT-87: Track actual memory use and residency; do not limit scene content to meet a budget.
     struct DistanceBands {
         static constexpr int kBands=5;
         static constexpr double kEdges[kBands-1]={50.0, 150.0, 500.0, 1500.0}; // metres

@@ -1,12 +1,11 @@
-// SPDX-License-Identifier: MIT
-// The game's wind on its grass, leaves and trunks (PT-63, the owner: "of course our shadows and reflections should move
-// alongside the grass and leaves swaying in the wind. Otherwise what's the point of realtime ray tracing"). Three of the
-// game's shaders move their vertices in the wind (TG/Vegetation/Vegetation_Grass, Vegetation_Leaves and Vegetation_Trunk;
-// their maths, read from the compiled shaders, is in docs/agents/world.md 4.1). Each such material's values are read
-// here when the material is first traced, its noise map is read once from the game's own texture at its own size, and
-// every frame the wind the game set (its WindController's globals) goes to the tracer, which keeps every instance with
-// such a material in the pose HDRP draws it (TGPT_SetPlantWind, pt_sway.hlsl). Until 2026-10-07 they were traced standing
-// still, and rays were told not to trust them near their start (TGPT_MATERIAL_SWAYS).
+// SPDX-License-Identifier: MIT The game's wind on its grass, leaves and trunks (PT-63). Three of the game's
+// shaders move their vertices in the wind (TG/Vegetation/Vegetation_Grass, Vegetation_Leaves and
+// Vegetation_Trunk; their maths, read from the compiled shaders, is in docs/agents/world.md 4.1). Each such
+// material's values are read here when the material is first traced, its noise map is read once from the
+// game's own texture at its own size, and every frame the wind the game set (its WindController's globals)
+// goes to the tracer, which keeps every instance with such a material in the pose HDRP draws it
+// (TGPT_SetPlantWind, pt_sway.hlsl). Until 2026-10-07 they were traced standing still, and rays were told
+// not to trust them near their start (TGPT_MATERIAL_SWAYS).
 using System;
 using System.Collections.Generic;
 using UnityEngine;

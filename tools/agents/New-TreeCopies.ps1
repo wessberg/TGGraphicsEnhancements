@@ -36,10 +36,10 @@ Set-Location $repo
 $files = @(git ls-files --cached --others --exclude-standard) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $repo $_) -PathType Leaf) }
 # The SDK folders sit gitignored in the repo root (README "Building"): whatever is there under these names.
 $sdks = @(Get-ChildItem -LiteralPath $repo -Directory | Where-Object { $_.Name -match '-SDK-|^Streamline-|^RTXDI-Library-|^DXC-' } | ForEach-Object { $_.Name })
-# A copy's files are never older than a day by their write time. Windows' Storage Sense sweeps the temp folder of files
-# not written for some days whenever the disk is nearly full (the owner's PC: 98 %), and a copied file keeps its
-# source's time: on 2026-10-12 03:28 every copy and every base under %TEMP% lost each file last written before
-# 10-06 (138 files a tree; two workers' builds broke, a merge would have run against a base with holes). A day back,
+# A copy's files are never older than a day by their write time. Windows' Storage Sense sweeps the temp folder
+# of files not written for some days whenever the disk is nearly full, and a copied file keeps its source's
+# time: on 2026-10-12 03:28 every copy and every base under %TEMP% lost each file last written before 10-06
+# (138 files a tree; two workers' builds broke, a merge would have run against a base with holes). A day back,
 # not now: the compiled shader headers of a build made from the copy stay newer than their sources.
 $floor = (Get-Date).AddDays(-1)
 foreach ($name in @($BaseName) + $Names) {

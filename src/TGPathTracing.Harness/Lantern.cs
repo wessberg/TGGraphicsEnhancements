@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: MIT
-// PT-14's test rig: "I really really want to see caustics on cliffs or rock inside a cave from water, and I still haven't
-// seen it. How can we make this appear so I can verify it works?" (the owner, 2026-10-07). Light off water onto rock needs
-// real water, a light beside it and rock that faces it, and no save has the three in one view (the mineral cave's lake has
-// no lamp near it; its lamps stand in puddles that are no water). So the harness stands a lantern over the water: a real
-// light with the values of the game's own big torch and a glowing glass at it, which is what TG Path Tracing keeps a light
-// for (a light with nothing glowing at it is the game's fill). Open, it lights the rock itself and the water adds to it;
-// under its metal shade no light of its own reaches the rock above it, so what the rock shows there came off the water.
-// Only in harness runs, and in no release zip.
+// PT-14: Caustics must use traced physical surfaces and light transport.
 using System;
 using UnityEngine;
 using UnityEngine.Rendering;

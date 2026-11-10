@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: MIT
-// PT-46's yardstick: "we need our tracer to be able to perfectly render the world in a mirror" (the owner, 2026-10-06).
-// A perfect mirror is stood in the frozen world, and for the reference the camera is moved to its own mirror image:
-// from there, looking back through the mirror's frame with the mirror taken away, the screen shows directly what the
-// mirror shows by rays, with left and right swapped and pixel on pixel. tools/harness/mirror.py holds the two against
-// each other. Also the count behind PT-45: what a second copy of the scene's textures would cost in video memory.
+// PT-46 / PT-45: Secondary rays must reproduce camera-quality geometry and materials in mirrors.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -56,10 +52,10 @@ namespace TGPathTracing.Harness
             mesh.uv = new[] { new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0f) };
             mesh.triangles = new[] { 0, 1, 2, 0, 2, 3 };
             mesh.RecalculateBounds();
-            // No HideFlags.DontSave on the object (as Lantern.cs): Object.FindObjectsByType, which the tracer finds the scene's
-            // renderers with (SceneCapture), leaves such objects out, so rays passed the mirror and it showed what stood
-            // behind it (run 20261008-100208; the owner: "The mirrors do not work at all"). Nothing is saved during a run,
-            // and Remove destroys it.
+            // No HideFlags.DontSave on the object (as Lantern.cs): Object.FindObjectsByType,
+            // which the tracer finds the scene's renderers with (SceneCapture), leaves such
+            // objects out, so rays passed the mirror and it showed what stood behind it. Nothing
+            // is saved during a run, and Remove destroys it.
             mirror = new GameObject("TGPT harness mirror");
             mirror.transform.SetPositionAndRotation(centre, Quaternion.LookRotation(-normal, up));
             mirror.AddComponent<MeshFilter>().sharedMesh = mesh;

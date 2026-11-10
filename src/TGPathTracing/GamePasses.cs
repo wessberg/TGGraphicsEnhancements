@@ -7,18 +7,20 @@ using UnityEngine.Rendering.HighDefinition;
 
 namespace TGPathTracing
 {
-    // PT-112 (A), THE RULE since 2026-10-11 (the owner, 2026-10-10: "Let's prevent HDRP rendering, yes"; docs/rounds/round-19.md
-    // 11 and round-20.md): while the traced light is on screen HDRP draws no opaque object and no decal for the gameplay
-    // camera. Its opaque draw lists (its depth prepass, G-buffer, motion vectors, forward opaque; HDRenderPipeline.
-    // CreateOpaqueRendererListDesc, both overloads) are left with no layer, and its decals are left out of the camera's frame
-    // settings (FrameSettings.AggregateFrameSettings, worked out anew every frame: the first frame after tracing stops is the
-    // game's own again). The tracer writes the frame's own depth and motion into HDRP's depth buffer, motion vectors and depth
-    // pyramid at the composite (TGPT_FRAME_OWN_DEPTH), which HDRP's fog and transparents, the upscaler and post-processing
-    // read. HDRP still culls and prepares the frame as before: the frame setting OpaqueObjects woke the game's ECS uploads
-    // instead (800 ms frames, PROJECT-CONTEXT DEAD ENDS). Clean town run 20261011-011046: 87 to 90 ms a frame -> 81.
-    // HDRP draws as the game does only where its G-buffer is what is looked at: the Yardstick view, the old route (Own camera
-    // rays off), and the hidden "HDRP draws under the traced picture" (for tests: the harness's yardstick recipe).
-    // HDRP's fog and its transparent effects stay HDRP's until the tracer has them (PT-112 B and C).
+    // PT-112 (A), THE RULE since 2026-10-11: while the traced light is on screen HDRP draws no opaque
+    // object and no decal for the gameplay camera. Its opaque draw lists (its depth prepass, G-buffer,
+    // motion vectors, forward opaque; HDRenderPipeline. CreateOpaqueRendererListDesc, both overloads)
+    // are left with no layer, and its decals are left out of the camera's frame settings
+    // (FrameSettings.AggregateFrameSettings, worked out anew every frame: the first frame after tracing
+    // stops is the game's own again). The tracer writes the frame's own depth and motion into HDRP's
+    // depth buffer, motion vectors and depth pyramid at the composite (TGPT_FRAME_OWN_DEPTH), which
+    // HDRP's fog and transparents, the upscaler and post-processing read. HDRP still culls and prepares
+    // the frame as before: the frame setting OpaqueObjects woke the game's ECS uploads instead (800 ms
+    // frames, PROJECT-CONTEXT DEAD ENDS). Clean town run 20261011-011046: 87 to 90 ms a frame -> 81.
+    // HDRP draws as the game does only where its G-buffer is what is looked at: the Yardstick view, the
+    // old route (Own camera rays off), and the hidden "HDRP draws under the traced picture" (for tests:
+    // the harness's yardstick recipe). HDRP's fog and its transparent effects stay HDRP's until the
+    // tracer has them (PT-112 B and C).
     internal static class GamePasses
     {
         internal static bool Active; // the traced light replaces HDRP's on screen (HdrpPasses.SetIndirectOverride)
@@ -28,13 +30,13 @@ namespace TGPathTracing
         // The game's own volumetric fog and shadow maps settings for the gameplay camera, before they are left out here
         // (HdrpPasses.FillFog reads the fog's albedo by the game's setting, whatever HDRP draws).
         internal static bool GameVolumetrics = true, GameShadowMaps = true;
-        // PT-112, the rule since 2026-10-11 (the owner: "ambient occlusion, contact shadows, SSR, shadow maps, deferred
-        // lighting, subsurface scattering - NONE of these are relevant while Path Tracing is on. These must not render at
-        // all"): HDRP's lighting under the traced picture, left out of the gameplay camera's frame settings while the tracer
-        // draws it. Its screen-space lighting (read by nothing but HDRP's own lighting), its shadow maps and its volumetric
-        // fog grid (read only by what HDRP still draws over the traced picture, its transparent effects, until they are
-        // traced: they then take HDRP's plain fog and no shadow-map shadows). HDRP's deferred lighting is skipped too
-        // (BeforeDeferredLighting): with no opaque object drawn it lit nothing.
+        // PT-112, the rule since 2026-10-11: HDRP's lighting under the traced picture, left out of
+        // the gameplay camera's frame settings while the tracer draws it. Its screen-space lighting
+        // (read by nothing but HDRP's own lighting), its shadow maps and its volumetric fog grid
+        // (read only by what HDRP still draws over the traced picture, its transparent effects,
+        // until they are traced: they then take HDRP's plain fog and no shadow-map shadows). HDRP's
+        // deferred lighting is skipped too (BeforeDeferredLighting): with no opaque object drawn it
+        // lit nothing.
         private static readonly FrameSettingsField[] LeftOut = {
             FrameSettingsField.SSAO, FrameSettingsField.ContactShadows, FrameSettingsField.SSR, FrameSettingsField.TransparentSSR, FrameSettingsField.SSGI,
             FrameSettingsField.ScreenSpaceShadows, FrameSettingsField.SubsurfaceScattering, FrameSettingsField.Transmission,

@@ -51,9 +51,9 @@ def main():
         shutil.copyfile(ROOT / 'native/neural/src/diagnostics.hpp', folder / 'diagnostics.hpp')
         command = ['cl.exe', '/nologo', '/LD', '/MT', '/O2', '/EHsc', '/std:c++17', '/utf-8', '/DUNICODE', '/D_UNICODE',
                    '/D_WIN32_WINNT=0x0A00', '/I'+str(ROOT/'native/bridge/include'), '/I'+str(ROOT/'native/neural/include'),
-                   '/I'+str(ROOT/'DLSS-SDK-310.9.1/include'), str(folder/'extension.cpp'), '/link',
+                   '/I'+str(ROOT/'DLSS-SDK-310.9.16/include'), str(folder/'extension.cpp'), '/link',
                    '/OUT:'+str(target/'TGNeuralRendering.Native.dll'),
-                   str(ROOT/'DLSS-SDK-310.9.1/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib'),
+                   str(ROOT/'DLSS-SDK-310.9.16/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib'),
                    'd3d11.lib', 'd3d12.lib', 'd3dcompiler.lib', 'dxguid.lib', 'version.lib', 'bcrypt.lib',
                    'advapi32.lib', 'user32.lib', 'dxgi.lib', 'ole32.lib']
         build = subprocess.run(command, cwd=folder, capture_output=True, text=True)

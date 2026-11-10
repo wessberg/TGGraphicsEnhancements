@@ -362,7 +362,7 @@ is the documented fix (section 4, I); the tracer's own filters never see the pat
 - Harness: a glass sphere under the sun must put a bright spot at its focus and keep the total light through it.
 - Limits, as in Cycles: caustics in the glass's shadow only, one bent path per light sample.
 
-## 7. Open questions for the owner
+## 7. Open design questions
 
 1. The open world's lakes, rivers and sea never showed caustics from above, though their settings switch them on and
    they show when you dive. With Step 1 they show from above too, wherever the sun reaches the bed. All water, or

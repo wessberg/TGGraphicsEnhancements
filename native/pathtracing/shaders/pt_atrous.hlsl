@@ -1,50 +1,6 @@
 // SPDX-License-Identifier: MIT
-// One edge-aware a-trous wavelet iteration (SVGF's spatial stage, Schied et al. 2017): a 5x5 B3-spline
-// kernel spread by the step size, weighted down across surfaces, normals and, by the noise of the two
-// pixels, across luminance. The variance is filtered along so each iteration trusts the image a little more; alpha
-// carries its square root, the standard deviation (in half precision the variance of a hot spot overflowed).
-// Each pixel takes a mean over the neighbours it accepts, and the luminance weight looks at this pixel's own noise (a
-// 3x3 Gaussian of the variance): a calm pixel refuses a neighbour far brighter than its noise explains. That LOSES
-// LIGHT where light arrives as rare bright samples (PT-75: a candle-lit floor's direct light kept 0.75 of its mean, a
-// metal's reflections 0.68). For some hours on 2026-10-08 the pass kept light exactly instead (every weight the same
-// seen from either pixel, by both pixels' noise; a pixel kept what its neighbours did not take). In the game every
-// rare bright sample then became a soft round disc held by the history: the owner, 18:15: "actual orbs, like a
-// particle effect ... It almost looks like an overlay ... seemingly anywhere" (the tavern: 37 places a frame against
-// 3). A sample's light spread over 24 neighbours twice is the kernel's own stamp. So: do not make this pass keep
-// the light of rare bright samples again; make those samples less rare in the tracer (PT-85), and the loss goes
-// with them. The planes' and the normals' terms still take both pixels' values.
-// Specular signals also stay within similar roughness. A reflection is filtered by what it SHOWS (PT-80; the owner: "we
-// need our tracer to be able to perfectly render the world in a mirror"): pt_specular leaves each pixel the normal and
-// the reflectance of the surface its ray met (pack_seen), and its hit distance says where that surface is. On a surface
-// as smooth as a mirror (SEEN_PICTURE_ROUGHNESS) a neighbour counts only as far as it shows the same surface: its
-// normal, its plane, and its reflectance to within a few hundredths (SAME_REFLECTANCE), so an even wall in the mirror is
-// denoised and a texture's cells, a letter, an edge stay as traced (light is only ever exchanged between pixels that
-// show the same thing: nothing of the picture is taken apart and put together again). A pixel with no guide of what it
-// shows (a mirror in the mirror, water in it) is left to its history alone. Up to SEEN_BLUR_ROUGHNESS the two filters
-// blend: a rough surface's reflection is a blur of what it reflects, filtered across the surface as before. Before, the
-// reflections' filter took a mirror's picture for noise on a flat surface: its first iteration smeared it, and the
-// feedback smeared the history again every frame (in game a mirror kept 0.09 of the reference's detail with NRD against
-// 1.24 with no denoiser; the harness's mirror 0.22). The water's own path is filtered with water alone and, mirror-like,
-// by the first, finest iteration only, as it was.
-// The second iteration feeds the first one's result back into the temporal history (SVGF's feedback), which is read
-// at the pixel only: the first iteration is finished by then. Not a picture's: fed back, the little that crosses a
-// texture's faint detail each frame would add up over the history's 16 frames.
-// ON TRIAL (PT-95, PT-19; docs/agents/nrd-relief.md; pass.b.y, the plugin's hidden "Reflection relief trial"; INVALID or
-// 0: off, every weight as before). A guard's hammered iron helmet came out smooth bright metal with NRD, where the frame
-// with no denoiser had the game's relief (its face kept 0.59 of 10.51 of the detail): NRD takes the bounced diffuse
-// light alone, a metal has none, and its reflections go through this pass. On anything but a near mirror the normals'
-// term below is loose (a bump tilted 10 degrees counts 0.94 from a summed roughness of 0.8 up), and the feedback keeps
-// the history smooth: fed back every frame, the history holds the blurred picture, each frame's sample brings a
-// sixteenth of the relief back, and against that smooth history the brightness term sees nothing to stop at. The same
-// to two digits a minute after loading and at the run's end: it is where the filter settles, not a start-up. (Which of
-// the two it is, the loose normals or the feedback, is read from the code and not measured: the trial's bits are its test.)
-// Bit 4 (RELIEF_HISTORY): the first iteration is not fed back into the history, as on a mirror: a pixel's history is
-// its own samples' mean, the relief is in it, and the brightness term (which lets through what the noise explains)
-// stops at it. Bit 1 (RELIEF_LOBE): two pixels exchange a reflection only as far as their normals gather the same
-// light: by the lobe itself (lobe_held), at every roughness. Bit 2 (RELIEF_REFLECTANCE): and only as far as they
-// reflect alike (their specular colour, same_reflecting): a metal's base map stays in its reflection. Glass, water and
-// hair with its highlights keep their filter as it was (plain_reflector).
-//   pass.a: input, output, step size, 1 for a specular signal   pass.b: history to feed, or INVALID; y: the trial's bits
+// PT-75 / PT-85 / PT-80 / PT-95 / PT-19: Suppress rare bright-sample trails without hiding lighting or
+// material errors.
 #include "pt_common.hlsli"
 
 static const uint RELIEF_LOBE = 1u, RELIEF_REFLECTANCE = 2u, RELIEF_HISTORY = 4u;

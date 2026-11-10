@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Opt-in final-output diagnostic. The owner must have enabled ReShade and RenoDX.
+// Opt-in final-output capture requires ReShade and RenoDX to be enabled externally.
 using System;
 using System.Collections;
 using System.Collections.Generic;

@@ -223,8 +223,8 @@ namespace TGPathTracing.Harness
             volume.sharedProfile = profile;
             var grain = profile.Add<FilmGrain>();
             grain.intensity.Override(0f);
-            // Chromatic aberration splits colors toward the screen's edges, in both pictures: off too, so two pictures are
-            // easier to compare (the owner, 2026-10-06).
+            // Chromatic aberration splits colors toward the screen's edges, in both pictures:
+            // off too, so two pictures are easier to compare.
             var aberration = profile.Add<ChromaticAberration>();
             aberration.intensity.Override(0f);
         }
@@ -481,9 +481,7 @@ namespace TGPathTracing.Harness
             Banner = settling;
             if (!GameplayReady(out string takeFailure))
             { r.menuOpen = true; r.error = "the game is outside gameplay before the take: " + takeFailure; yield break; }
-            // (Also for a path tracing step that asks for it: frames grabbed while the camera moves are judged without
-            // the game's motion blur, the owner, 2026-10-12. The hook clears HDRP's own flag for the frame; nothing of
-            // Neural Rendering runs. A step that asks leaves `motionBlurActive` false in each of its frames.)
+
             if (step.neural.HasValue || step.disableMotionBlur || step.disableLensEffects)
             {
                 if (!Try("Observing motion blur", () => NeuralMotion.Configure(harmony, step.disableMotionBlur, step.disableLensEffects)))
@@ -529,20 +527,20 @@ namespace TGPathTracing.Harness
             {
                 waitedForPasses = true;
                 Banner = s.key + ", step " + step.name + ": the tracer's shader passes are being made (" + (Now - t0).ToString("0") + " s)";
-                // What the player sees during that wait, once, 5 s in: the game's own screen with its notices on it
-                // (PT-97: the owner saw a gray screen and no "compiling shaders" notice). Never a picture of the
-                // desktop: the owner works at this PC while a run goes.
+                // PT-97: Block unintended gameplay input while scripted capture controls the
+                // camera.
                 if (!pictured && Now - t0 > 5f) { pictured = true; Try("The waiting screen's picture", () => ScreenCapture.CaptureScreenshot(Path.Combine(dir, "waiting-for-passes.png"))); }
                 yield return new WaitForSecondsRealtime(0.5f);
             }
             if (waitedForPasses) Note("    waited " + (Now - t0).ToString("0") + " s for the tracer's passes to compile.");
-            // A running step lets the world go only now, with the passes made (the owner, 2026-10-11: "the time of day has also
-            // shifted to the middle of the night at the point of time where the PT shaders are compiled. That makes comparison
-            // with the vanilla frames flawed"): until then it was let go first, and a new build's minutes of pass making ran
-            // the game's clock from the afternoon into the night (run 20261011-223913: 16:35 to 21:38 in 381 s); the walk
-            // had also ended before the first traced frame. What is left: a running step itself moves the clock 25 to 45
-            // game minutes (five of them two hours). Setting the clock back at each step was tried and taken out the same
-            // hour: the game's own setter rolls the date on a day (run 20261011-235717), and with it maybe the weather.
+            // A running step lets the world go only now, with the passes made: until then it was
+            // let go first, and a new build's minutes of pass making ran the game's clock from
+            // the afternoon into the night (run 20261011-223913: 16:35 to 21:38 in 381 s); the
+            // walk had also ended before the first traced frame. What is left: a running step
+            // itself moves the clock 25 to 45 game minutes (five of them two hours). Setting the
+            // clock back at each step was tried and taken out the same hour: the game's own
+            // setter rolls the date on a day (run 20261011-235717), and with it maybe the
+            // weather.
             if ((step.live || step.perfSeconds > 0f) && HoldTime)
             {
                 HoldTime = false;

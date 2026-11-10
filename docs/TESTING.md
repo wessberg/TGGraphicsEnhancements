@@ -10,7 +10,7 @@ TG Neural Rendering: [build evidence and pending game checks](DLSS5-IMPLEMENTATI
 [A/B/C and placement tuning run](DLSS5-TUNING.md). Its GPU probe
 actually evaluates the supplied signed model; the existing PT offline test does not. `neural_plan.py` creates NR
 scene plans for the same in-game harness. NR acceptance requires real evaluation counts, neutral/Off restoration,
-moving scenes, unchanged HUD, shared FG/RR operation and the owner's appearance verdict. NR deployment/testing is
+moving scenes, unchanged HUD, shared FG/RR operation and the test setup's appearance verdict. NR deployment/testing is
 authorized while FoA and Starfield are closed; preserve the parallel PT build and respect the shared harness lock.
 Menu acceptance for NR-20/21: Video and FoA order is Neural Rendering, Placement, Strength, Local Tone,
 Advanced, then (Advanced On) Model, Passes, Detail, Automatic Mask, and (mask On) Skin Detail. Toggling Advanced
@@ -307,7 +307,7 @@ Start with both mods installed and every setting as the previous session left it
 
 ## TG Path Tracing (Mono)
 
-In the real game, by an agent: `.\tools\harness\Run-PtHarness.ps1` (`docs/PT-HARNESS.md`). It loads the owner's saves
+In the real game, by an agent: `.\tools\harness\Run-PtHarness.ps1` (`docs/PT-HARNESS.md`). It loads the test setup's saves
 by name and compares the game's own picture, the traced one with Ray Reconstruction and with NRD, and the game's again
 after tracing was turned off, frozen and with the world running, with frame rates. It only starts the game when no
 other program uses the GPU. Its analysis has checks of its own: `python tests/harness_analyze_test.py`; so has

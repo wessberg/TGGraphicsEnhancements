@@ -29,8 +29,8 @@ namespace TGGraphicsBridge
                 return false;
             }
         }
-        // BepInEx's own saving off for the rest of the session: every change is saved through Save instead.
-        // For a config file whose owner doesn't save its changes itself.
+        // Disable BepInEx automatic saving for the session and route changes through Save, including
+        // configuration users that do not save their own changes.
         public static void Take(ConfigFile file, string owner)
         {
             file.SaveOnConfigSet = false;
